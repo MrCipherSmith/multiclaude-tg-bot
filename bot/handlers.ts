@@ -458,9 +458,8 @@ async function handleMedia(
     return;
   }
 
-  if (route.mode === "standalone" && !process.env.ANTHROPIC_API_KEY) {
-    await ctx.reply("Standalone-режим недоступен (нет API-ключа).");
-    return;
+  if (route.mode === "standalone") {
+    // Standalone uses whatever provider is available (anthropic/openrouter/ollama)
   }
 
   // Standalone: save and note the file
@@ -661,15 +660,7 @@ async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  // Standalone mode: process with Claude
-  if (!process.env.ANTHROPIC_API_KEY) {
-    await ctx.reply(
-      "Standalone-режим недоступен (нет API-ключа).\n" +
-        "Подключи Claude CLI сессию и используй /switch для переключения.",
-    );
-    return;
-  }
-
+  // Standalone mode: process with available provider (anthropic/openrouter/ollama)
   const sessionId = route.sessionId;
 
   // Show typing indicator
