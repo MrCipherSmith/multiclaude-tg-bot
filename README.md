@@ -9,29 +9,45 @@ A Telegram bot with Claude AI integration, dual-layer memory (short-term + long-
   - Short-term: sliding window of recent messages per session (in-memory cache + PostgreSQL)
   - Long-term: semantic search via pgvector embeddings (powered by Ollama)
 - **Multi-Session MCP Server** — multiple Claude Code CLI instances connect via HTTP, each as a named session
+- **Channel Adapter** — stdio bridge that forwards Telegram messages into Claude Code as channel notifications
 - **Session Switching** — switch between CLI sessions and standalone mode from Telegram
+- **Session Adoption** — reconnecting CLIs reuse existing named sessions, preserving ID and memory
 - **Standalone Mode** — bot responds directly via Claude API (requires API key)
-- **CLI Mode** — forward Telegram messages to a connected Claude Code session
+- **CLI Mode** — forward Telegram messages to a connected Claude Code session via channel notifications
 
 ## Architecture
 
 ```
-┌──────────────┐
-│ Claude CLI 1 │──┐
-└──────────────┘  │  HTTP (MCP)
-                  ├────────────────┐
-┌──────────────┐  │                ▼
-│ Claude CLI 2 │──┘     ┌──────────────────────────┐     ┌────────────┐
-└──────────────┘        │   Bot (Bun daemon)       │────▶│ PostgreSQL │
-                        │                          │     │ + pgvector │
-┌──────────────┐        │  MCP over HTTP:          │     └────────────┘
-│ Telegram     │◀──────▶│   memory + telegram +    │           │
-│ User         │        │   session tools          │     ┌─────┴──────┐
-└──────────────┘        │                          │     │   Ollama   │
-                        │  Telegram polling        │     │  nomic-    │
-                        └──────────────────────────┘     │  embed-text│
-                                                         └────────────┘
+┌──────────────┐  stdio (channel)    ┌──────────────────┐
+│ Claude CLI 1 │◀═══════════════════▶│ channel.ts       │──┐
+│ (keryx)      │                     │ (polls queue)    │  │
+└──────────────┘  HTTP (MCP tools)   └──────────────────┘  │
+       │                                                   │
+       ├──────────────────────────┐                        │
+       ▼                         ▼                         ▼
+┌──────────────────────────────────┐     ┌────────────────────┐
+│   Bot (Bun daemon)               │────▶│ PostgreSQL         │
+│                                  │     │ + pgvector         │
+│  HTTP MCP: memory + session tools│     │                    │
+│  Telegram polling                │     │ tables:            │
+│  message_queue writer            │     │  sessions          │
+│                                  │     │  messages          │
+┌──────────────┐                   │     │  memories (vector) │
+│ Telegram     │◀─────────────────▶│     │  message_queue     │
+│ User         │                   │     └────────────────────┘
+└──────────────┘                   │            │
+                                   │     ┌──────┴─────────┐
+                                   │     │ Ollama         │
+                                   └─────│ nomic-embed-   │
+                                         │ text (768d)    │
+                                         └────────────────┘
 ```
+
+**How it works:**
+1. Telegram message arrives → bot puts it in `message_queue` (PostgreSQL)
+2. `channel.ts` (stdio adapter) polls the queue and sends `notifications/claude/channel` to Claude Code
+3. Claude Code processes the message and responds via MCP `reply` tool
+4. Reply goes back to Telegram
 
 ## Prerequisites
 
@@ -46,8 +62,8 @@ A Telegram bot with Claude AI integration, dual-layer memory (short-term + long-
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/claude-bot.git
-cd claude-bot
+git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git
+cd multiclaude-tg-bot
 bun install
 ```
 
@@ -77,7 +93,7 @@ cp .env.example .env
 #   ANTHROPIC_API_KEY   — (optional) for standalone mode
 ```
 
-### 5. Run
+### 5. Run the bot
 
 ```bash
 bun start
@@ -87,24 +103,35 @@ bun dev
 
 ### 6. Connect Claude Code CLI
 
-Add the MCP server globally:
+**Step 1:** Register the HTTP MCP server (memory & session tools):
 
 ```bash
 claude mcp add --transport http -s user claude-bot http://localhost:3847/mcp
 ```
 
-Or per-project via `.mcp.json`:
+**Step 2:** Register the stdio channel adapter (Telegram message forwarding):
 
-```json
-{
-  "mcpServers": {
-    "claude-bot": {
-      "type": "http",
-      "url": "http://localhost:3847/mcp"
-    }
+```bash
+claude mcp add-json -s user claude-bot-channel '{
+  "type": "stdio",
+  "command": "bun",
+  "args": ["/path/to/multiclaude-tg-bot/channel.ts"],
+  "env": {
+    "DATABASE_URL": "postgres://claude_bot:your_password@localhost:5432/claude_bot",
+    "OLLAMA_URL": "http://localhost:11434",
+    "TELEGRAM_BOT_TOKEN": "your_bot_token"
   }
-}
+}'
 ```
+
+**Step 3:** Launch Claude Code with the channel:
+
+```bash
+cd your-project
+claude --dangerously-load-development-channels server:claude-bot-channel
+```
+
+Now Telegram messages routed to this session will appear as prompts in Claude Code.
 
 ## Telegram Commands
 
@@ -127,7 +154,9 @@ Or per-project via `.mcp.json`:
 
 ## MCP Tools
 
-Available to Claude Code CLI when connected:
+### HTTP MCP Server (port 3847)
+
+Available to all Claude Code sessions:
 
 **Memory:**
 - `remember` — save to long-term memory with semantic embedding
@@ -135,15 +164,21 @@ Available to Claude Code CLI when connected:
 - `forget` — delete a memory
 - `list_memories` — list with filters
 
+**Sessions:**
+- `list_sessions` — list all sessions
+- `session_info` — session details
+- `set_session_name` — name the current session (auto-called from CLAUDE.md)
+
 **Telegram:**
 - `reply` — send message to a chat
 - `react` — set emoji reaction
 - `edit_message` — edit bot's message
 
-**Sessions:**
-- `list_sessions` — list all sessions
-- `session_info` — session details
-- `set_session_name` — name the current session
+### Channel Adapter (stdio)
+
+The channel adapter (`channel.ts`) provides:
+- `reply` — send message to Telegram (uses Bot API directly)
+- `remember`, `recall`, `forget`, `list_memories` — same memory tools via direct DB access
 
 ## Auto-Naming Sessions
 
@@ -157,26 +192,38 @@ When starting a session, call `set_session_name` with:
 - project_path: absolute path to the current working directory
 ```
 
+When a CLI reconnects and calls `set_session_name` with an existing name, the bot **adopts** the old session — preserving its ID, history, and memory associations.
+
+## Multi-Session Workflow
+
+1. Start the bot: `bun start` (in tmux or systemd)
+2. Launch Claude Code in each project with the channel adapter
+3. In Telegram, use `/sessions` to see all connected CLIs
+4. Use `/switch <id>` to route your Telegram messages to a specific CLI
+5. Messages you send are forwarded to that CLI as prompts
+6. Claude Code responds via the `reply` tool back to Telegram
+7. Switch between projects anytime — context is preserved per session
+
 ## Running in Production
 
 Use tmux or systemd to keep the bot running:
 
 ```bash
 # tmux
-tmux new-session -d -s bot -c /path/to/claude-bot 'bun main.ts'
+tmux new-session -d -s bot -c /path/to/multiclaude-tg-bot 'bun main.ts'
 
 # systemd (create /etc/systemd/system/claude-bot.service)
 [Unit]
 Description=Claude Telegram Bot
-After=network.target
+After=network.target postgresql.service
 
 [Service]
 Type=simple
 User=your_user
-WorkingDirectory=/path/to/claude-bot
+WorkingDirectory=/path/to/multiclaude-tg-bot
 ExecStart=/path/to/.bun/bin/bun main.ts
 Restart=always
-EnvironmentFile=/path/to/claude-bot/.env
+EnvironmentFile=/path/to/multiclaude-tg-bot/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -184,13 +231,13 @@ WantedBy=multi-user.target
 
 ## Tech Stack
 
-- **Runtime:** Bun
-- **Telegram:** grammY
-- **AI:** @anthropic-ai/sdk
-- **MCP:** @modelcontextprotocol/sdk (StreamableHTTPServerTransport)
-- **Database:** PostgreSQL + pgvector
-- **Embeddings:** Ollama (nomic-embed-text, 768 dims)
-- **PostgreSQL client:** postgres (porsager/postgres)
+- **Runtime:** [Bun](https://bun.sh)
+- **Telegram:** [grammY](https://grammy.dev)
+- **AI:** [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript)
+- **MCP:** [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) (StreamableHTTPServerTransport + StdioServerTransport)
+- **Database:** PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector)
+- **Embeddings:** [Ollama](https://ollama.ai) (nomic-embed-text, 768 dims)
+- **PostgreSQL client:** [postgres](https://github.com/porsager/postgres)
 
 ## License
 
