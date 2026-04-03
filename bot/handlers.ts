@@ -387,6 +387,9 @@ async function handleMedia(
   const chatId = String(ctx.chat!.id);
   const route = await routeMessage(chatId);
 
+  // Show typing indicator while downloading
+  await ctx.replyWithChatAction("typing");
+
   // Download file
   let filePath: string;
   try {
@@ -532,6 +535,9 @@ async function handleText(ctx: Context): Promise<void> {
   }
 
   if (route.mode === "cli") {
+    // Show typing indicator
+    await ctx.replyWithChatAction("typing");
+
     // Save message to short-term memory
     await addMessage({
       sessionId: route.sessionId,
@@ -569,6 +575,9 @@ async function handleText(ctx: Context): Promise<void> {
   }
 
   const sessionId = route.sessionId;
+
+  // Show typing indicator
+  await ctx.replyWithChatAction("typing");
 
   // Save user message
   await addMessage({
