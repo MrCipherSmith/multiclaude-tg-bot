@@ -1,0 +1,444 @@
+import type { Bot, Context } from "grammy";
+import { composePrompt } from "../claude/prompt.ts";
+import { addMessage, getContext, clearCache } from "../memory/short-term.ts";
+import { remember, recall, forget, listMemories } from "../memory/long-term.ts";
+import { streamToTelegram } from "./streaming.ts";
+import { routeMessage } from "../sessions/router.ts";
+import { sessionManager } from "../sessions/manager.ts";
+import { sendNotificationToSession } from "../mcp/bridge.ts";
+import { sql } from "../memory/db.ts";
+
+// Pending input: chatId -> handler that processes the next text message
+const pendingInput = new Map<string, (ctx: Context) => Promise<void>>();
+
+export function registerHandlers(bot: Bot): void {
+  // Session commands
+  bot.command("sessions", handleSessions);
+  bot.command("switch", handleSwitch);
+  bot.command("standalone", (ctx) => handleSwitchTo(ctx, 0));
+  bot.command("session", handleSessionInfo);
+  bot.command("rename", handleRename);
+  bot.command("start", handleStart);
+  bot.command("help", handleHelp);
+
+  // Memory commands
+  bot.command("remember", handleRemember);
+  bot.command("recall", handleRecall);
+  bot.command("memories", handleMemories);
+  bot.command("forget", handleForget);
+
+  // Utility commands
+  bot.command("clear", handleClear);
+  bot.command("cleanup", handleCleanup);
+  bot.command("status", handleStatus);
+
+  // Text messages → Claude
+  bot.on("message:text", handleText);
+}
+
+async function handleStart(ctx: Context): Promise<void> {
+  await ctx.reply(
+    "Привет! Я Claude-бот с памятью.\n\n" +
+      "Команды:\n" +
+      "/sessions — список сессий\n" +
+      "/switch <id> — переключить сессию\n" +
+      "/standalone — автономный режим\n" +
+      "/session — текущая сессия\n" +
+      "/remember <текст> — сохранить в память\n" +
+      "/recall <запрос> — поиск по памяти\n" +
+      "/memories — список воспоминаний\n" +
+      "/forget <id> — удалить воспоминание\n" +
+      "/clear — очистить контекст\n" +
+      "/status — статус бота\n" +
+      "/help — помощь",
+  );
+}
+
+async function handleHelp(ctx: Context): Promise<void> {
+  await ctx.reply(
+    "Я работаю в двух режимах:\n\n" +
+      "*Standalone* — отвечаю сам через Claude API\n" +
+      "*CLI\\-сессия* — пересылаю сообщения в Claude Code\n\n" +
+      "Память:\n" +
+      "• Кратковременная: последние 20 сообщений\n" +
+      "• Долгосрочная: семантический поиск по истории\n\n" +
+      "Сессии: /sessions, /switch, /session\n" +
+      "Память: /remember, /recall, /memories, /forget\n" +
+      "Утилиты: /clear, /status",
+    { parse_mode: "MarkdownV2" },
+  );
+}
+
+// === Session commands ===
+
+async function handleSessions(ctx: Context): Promise<void> {
+  const sessions = await sessionManager.list();
+  const chatId = String(ctx.chat!.id);
+  const activeId = await sessionManager.getActiveSession(chatId);
+
+  const lines = sessions.map((s) => {
+    const marker = s.id === activeId ? " ✓" : "";
+    const status =
+      s.id === 0
+        ? ""
+        : s.status === "active"
+          ? ` (active)`
+          : ` (disconnected)`;
+    const name = s.name ?? s.clientId;
+    return `${s.id}. ${name}${status}${marker}`;
+  });
+
+  await ctx.reply(
+    "Сессии:\n" + lines.join("\n") + "\n\n/switch <id> для переключения",
+  );
+}
+
+async function handleSwitch(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const parts = text.split(/\s+/);
+  const idStr = parts[1];
+
+  if (!idStr) {
+    const sessions = await sessionManager.list();
+    const chatId = String(ctx.chat!.id);
+    const activeId = await sessionManager.getActiveSession(chatId);
+    const lines = sessions.map((s) => {
+      const marker = s.id === activeId ? " ✓" : "";
+      const status = s.id === 0 ? "" : s.status === "active" ? " (active)" : " (disconnected)";
+      return `${s.id}. ${s.name ?? s.clientId}${status}${marker}`;
+    });
+    await ctx.reply("Введи ID сессии:\n\n" + lines.join("\n"));
+    pendingInput.set(chatId, async (replyCtx) => {
+      const id = Number(replyCtx.message?.text?.trim());
+      if (isNaN(id)) {
+        await replyCtx.reply("Некорректный ID.");
+        return;
+      }
+      await handleSwitchTo(replyCtx, id);
+    });
+    return;
+  }
+
+  const sessionId = Number(idStr);
+  await handleSwitchTo(ctx, sessionId);
+}
+
+async function handleSwitchTo(ctx: Context, sessionId: number): Promise<void> {
+  const session = await sessionManager.get(sessionId);
+
+  if (!session) {
+    await ctx.reply("Сессия не найдена.");
+    return;
+  }
+
+  const chatId = String(ctx.chat!.id);
+  await sessionManager.switchSession(chatId, sessionId);
+
+  if (sessionId === 0) {
+    await ctx.reply("Переключено на *standalone* режим\\.", {
+      parse_mode: "MarkdownV2",
+    });
+  } else {
+    const name = session.name ?? session.clientId;
+    await ctx.reply(`Переключено на сессию: ${name}`);
+  }
+}
+
+async function handleRename(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const match = text.match(/^\/rename\s+(\d+)\s+(.+)$/);
+
+  if (!match) {
+    await ctx.reply("Формат: /rename <id> <имя>\nПример: /rename 3 keryx");
+    return;
+  }
+
+  const sessionId = Number(match[1]);
+  const newName = match[2].trim();
+  const session = await sessionManager.get(sessionId);
+
+  if (!session) {
+    await ctx.reply("Сессия не найдена.");
+    return;
+  }
+
+  await sql`UPDATE sessions SET name = ${newName} WHERE id = ${sessionId}`;
+  await ctx.reply(`Сессия #${sessionId} переименована в "${newName}"`);
+}
+
+async function handleSessionInfo(ctx: Context): Promise<void> {
+  const chatId = String(ctx.chat!.id);
+  const activeId = await sessionManager.getActiveSession(chatId);
+  const session = await sessionManager.get(activeId);
+
+  if (!session) {
+    await ctx.reply("Текущая сессия: standalone (по умолчанию)");
+    return;
+  }
+
+  const ago = Math.round(
+    (Date.now() - new Date(session.lastActive).getTime()) / 1000,
+  );
+  const agoStr =
+    ago < 60
+      ? `${ago}s`
+      : ago < 3600
+        ? `${Math.floor(ago / 60)}m`
+        : `${Math.floor(ago / 3600)}h`;
+
+  const lines = [
+    `Сессия: ${session.name ?? session.clientId}`,
+    `ID: ${session.id}`,
+    `Статус: ${session.status}`,
+    session.projectPath ? `Путь: ${session.projectPath}` : null,
+    `Активность: ${agoStr} назад`,
+  ].filter(Boolean);
+
+  await ctx.reply(lines.join("\n"));
+}
+
+// === Memory commands ===
+
+async function handleRemember(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const content = text.replace(/^\/remember\s*/, "").trim();
+
+  if (!content) {
+    await ctx.reply("Что запомнить?");
+    const chatId = String(ctx.chat!.id);
+    pendingInput.set(chatId, async (replyCtx) => {
+      const input = replyCtx.message?.text?.trim();
+      if (!input) return;
+      const m = await remember({ source: "telegram", chatId: String(replyCtx.chat!.id), type: "note", content: input });
+      await replyCtx.reply(`Запомнил (#${m.id}): ${input.slice(0, 100)}${input.length > 100 ? "..." : ""}`);
+    });
+    return;
+  }
+
+  const m = await remember({
+    source: "telegram",
+    chatId: String(ctx.chat!.id),
+    type: "note",
+    content,
+  });
+
+  await ctx.reply(`Запомнил (#${m.id}): ${content.slice(0, 100)}${content.length > 100 ? "..." : ""}`);
+}
+
+async function handleRecall(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const query = text.replace(/^\/recall\s*/, "").trim();
+
+  if (!query) {
+    await ctx.reply("Что искать?");
+    const chatId = String(ctx.chat!.id);
+    pendingInput.set(chatId, async (replyCtx) => {
+      const input = replyCtx.message?.text?.trim();
+      if (!input) return;
+      const results = await recall(input, { limit: 5 });
+      if (results.length === 0) { await replyCtx.reply("Ничего не найдено."); return; }
+      const lines = results.map((r) => `#${r.id} [${r.type}] ${r.content.slice(0, 120)}${r.content.length > 120 ? "..." : ""}`);
+      await replyCtx.reply("Найдено:\n\n" + lines.join("\n\n"));
+    });
+    return;
+  }
+
+  const results = await recall(query, { limit: 5 });
+
+  if (results.length === 0) {
+    await ctx.reply("Ничего не найдено.");
+    return;
+  }
+
+  const lines = results.map((r) => {
+    const dist = (1 - Number(r.distance)).toFixed(0);
+    return `#${r.id} [${r.type}] ${r.content.slice(0, 120)}${r.content.length > 120 ? "..." : ""}`;
+  });
+
+  await ctx.reply("Найдено:\n\n" + lines.join("\n\n"));
+}
+
+async function handleMemories(ctx: Context): Promise<void> {
+  const mems = await listMemories({ limit: 10 });
+
+  if (mems.length === 0) {
+    await ctx.reply("Память пуста.");
+    return;
+  }
+
+  const lines = mems.map(
+    (m) => `#${m.id} [${m.type}] ${m.content.slice(0, 80)}${m.content.length > 80 ? "..." : ""}`,
+  );
+
+  await ctx.reply("Последние воспоминания:\n\n" + lines.join("\n"));
+}
+
+async function handleForget(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const idStr = text.replace(/^\/forget\s*/, "").trim();
+
+  if (!idStr || isNaN(Number(idStr))) {
+    await ctx.reply("Введи ID воспоминания:");
+    const chatId = String(ctx.chat!.id);
+    pendingInput.set(chatId, async (replyCtx) => {
+      const id = Number(replyCtx.message?.text?.trim());
+      if (isNaN(id)) { await replyCtx.reply("Некорректный ID."); return; }
+      const deleted = await forget(id);
+      await replyCtx.reply(deleted ? `Удалено #${id}` : `#${id} не найдено`);
+    });
+    return;
+  }
+
+  const deleted = await forget(Number(idStr));
+  await ctx.reply(deleted ? `Удалено #${idStr}` : `#${idStr} не найдено`);
+}
+
+// === Utility commands ===
+
+async function handleClear(ctx: Context): Promise<void> {
+  const chatId = String(ctx.chat!.id);
+  const sessionId = await sessionManager.getActiveSession(chatId);
+
+  clearCache(sessionId, chatId);
+  await sql`DELETE FROM messages WHERE session_id = ${sessionId} AND chat_id = ${chatId}`;
+
+  await ctx.reply("Контекст очищен.");
+}
+
+async function handleCleanup(ctx: Context): Promise<void> {
+  const count = await sessionManager.cleanup();
+  await ctx.reply(count > 0 ? `Удалено ${count} неактивных сессий.` : "Нечего чистить.");
+}
+
+async function handleStatus(ctx: Context): Promise<void> {
+  // DB check
+  let dbOk = false;
+  try {
+    await sql`SELECT 1`;
+    dbOk = true;
+  } catch {}
+
+  // Ollama check
+  let ollamaOk = false;
+  try {
+    const res = await fetch(`${process.env.OLLAMA_URL ?? "http://localhost:11434"}/api/tags`);
+    ollamaOk = res.ok;
+  } catch {}
+
+  // Counts
+  const [{ count: sessionCount }] = await sql`SELECT count(*) FROM sessions WHERE status = 'active'`;
+  const [{ count: memoryCount }] = await sql`SELECT count(*) FROM memories`;
+  const [{ count: messageCount }] = await sql`SELECT count(*) FROM messages`;
+
+  const apiKey = process.env.ANTHROPIC_API_KEY ? "настроен" : "не задан";
+
+  const lines = [
+    `PostgreSQL: ${dbOk ? "OK" : "ОШИБКА"}`,
+    `Ollama: ${ollamaOk ? "OK" : "ОШИБКА"}`,
+    `API ключ: ${apiKey}`,
+    `Активных сессий: ${sessionCount}`,
+    `Воспоминаний: ${memoryCount}`,
+    `Сообщений: ${messageCount}`,
+    `MCP порт: ${process.env.PORT ?? 3847}`,
+  ];
+
+  await ctx.reply("Статус:\n\n" + lines.join("\n"));
+}
+
+// === Text handler ===
+
+async function handleText(ctx: Context): Promise<void> {
+  const chatId = String(ctx.chat!.id);
+  const text = ctx.message?.text;
+  if (!text) return;
+
+  // Check for pending input (e.g. waiting for session ID after /switch)
+  const handler = pendingInput.get(chatId);
+  if (handler) {
+    pendingInput.delete(chatId);
+    await handler(ctx);
+    return;
+  }
+
+  const route = await routeMessage(chatId);
+
+  if (route.mode === "disconnected") {
+    await ctx.reply(
+      `Сессия "${route.sessionName}" отключена.\n/switch 0 для standalone или /sessions для списка.`,
+    );
+    return;
+  }
+
+  if (route.mode === "cli") {
+    // Save message to short-term memory
+    await addMessage({
+      sessionId: route.sessionId,
+      chatId,
+      role: "user",
+      content: text,
+      metadata: {
+        messageId: ctx.message?.message_id,
+        from: ctx.from?.username ?? ctx.from?.first_name,
+      },
+    });
+
+    // Forward to CLI session via MCP notification
+    const sent = await sendNotificationToSession(
+      route.clientId,
+      chatId,
+      ctx.from?.username ?? ctx.from?.first_name ?? "user",
+      text,
+      { messageId: ctx.message?.message_id },
+    );
+
+    if (!sent) {
+      await ctx.reply(
+        "Не удалось переслать в CLI-сессию. Возможно, соединение потеряно.\n/sessions для проверки.",
+      );
+    }
+    return;
+  }
+
+  // Standalone mode: process with Claude
+  if (!process.env.ANTHROPIC_API_KEY) {
+    await ctx.reply(
+      "Standalone-режим недоступен (нет API-ключа).\n" +
+        "Подключи Claude CLI сессию и используй /switch для переключения.",
+    );
+    return;
+  }
+
+  const sessionId = route.sessionId;
+
+  // Save user message
+  await addMessage({
+    sessionId,
+    chatId,
+    role: "user",
+    content: text,
+    metadata: {
+      messageId: ctx.message?.message_id,
+      from: ctx.from?.username ?? ctx.from?.first_name,
+    },
+  });
+
+  // Compose prompt with memory context
+  const { system, messages } = await composePrompt(sessionId, chatId, text);
+
+  // Stream response
+  const response = await streamToTelegram(bot, ctx.chat!.id, system, messages);
+
+  // Save assistant response
+  await addMessage({
+    sessionId,
+    chatId,
+    role: "assistant",
+    content: response,
+  });
+}
+
+// Bot reference set from bot.ts
+let bot: any;
+export function setBotRef(b: any): void {
+  bot = b;
+}
