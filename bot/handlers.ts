@@ -401,8 +401,31 @@ async function handleRemove(ctx: Context): Promise<void> {
 }
 
 async function handleCleanup(ctx: Context): Promise<void> {
-  const count = await sessionManager.cleanup();
-  await ctx.reply(count > 0 ? `Удалено ${count} неактивных сессий.` : "Нечего чистить.");
+  // Remove unnamed cli-* sessions
+  const unnamed = await sessionManager.cleanup();
+
+  // Remove disconnected named sessions
+  const disconnected = await sql`
+    DELETE FROM sessions WHERE id != 0 AND status = 'disconnected'
+    RETURNING id, name
+  `;
+
+  // Remove cli-* active sessions (orphaned from MCP init)
+  const orphaned = await sql`
+    DELETE FROM sessions WHERE name LIKE 'cli-%'
+    RETURNING id
+  `;
+
+  const total = unnamed + disconnected.length + orphaned.length;
+  if (total > 0) {
+    const parts: string[] = [];
+    if (unnamed > 0) parts.push(`${unnamed} unnamed`);
+    if (disconnected.length > 0) parts.push(`${disconnected.length} disconnected (${disconnected.map((r) => r.name).join(", ")})`);
+    if (orphaned.length > 0) parts.push(`${orphaned.length} orphaned`);
+    await ctx.reply(`Очищено: ${parts.join(", ")}`);
+  } else {
+    await ctx.reply("Нечего чистить.");
+  }
 }
 
 async function handleSummarize(ctx: Context): Promise<void> {
