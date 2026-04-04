@@ -1,0 +1,3 @@
+#!/bin/bash
+# Wrapper to run cli.ts from its own directory (avoids tsconfig warnings from project dirs)
+exec bun --cwd "$(dirname "$(readlink -f "$0")")" "$(dirname "$(readlink -f "$0")")/cli.ts" "$@"
