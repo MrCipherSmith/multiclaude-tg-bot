@@ -15,6 +15,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { startTypingRaw, type TypingHandle } from "./utils/typing.ts";
 import { markdownToTelegramHtml } from "./bot/format.ts";
+import { startTmuxMonitor, type TmuxMonitorHandle } from "./utils/tmux-monitor.ts";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -318,8 +319,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   switch (name) {
     case "reply": {
       const chatId = String(args!.chat_id);
-      // Stop typing indicator and remove status message
+      // Stop everything: typing, status, tmux monitor
       stopTypingForChat(chatId);
+      stopTmuxMonitorForChat(chatId);
       await deleteStatusMessage(chatId);
 
       const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -601,6 +603,31 @@ const activeTyping = new Map<string, TypingHandle>();
 
 const TYPING_TIMEOUT_MS = 30_000; // 30 seconds max
 
+// --- tmux monitor ---
+const activeTmuxMonitors = new Map<string, TmuxMonitorHandle>();
+
+async function startTmuxMonitorForChat(chatId: string): Promise<void> {
+  // Stop existing monitor for this chat
+  stopTmuxMonitorForChat(chatId);
+
+  const monitor = await startTmuxMonitor(projectName, (status) => {
+    updateStatus(chatId, status);
+  });
+
+  if (monitor) {
+    activeTmuxMonitors.set(chatId, monitor);
+    process.stderr.write(`[channel] tmux monitor started for ${projectName}\n`);
+  }
+}
+
+function stopTmuxMonitorForChat(chatId: string): void {
+  const monitor = activeTmuxMonitors.get(chatId);
+  if (monitor) {
+    monitor.stop();
+    activeTmuxMonitors.delete(chatId);
+  }
+}
+
 function startTypingForChat(chatId: string): void {
   // Don't start if already typing for this chat
   if (activeTyping.has(chatId)) return;
@@ -652,6 +679,9 @@ async function pollMessages() {
 
         // Send status message to Telegram
         await sendStatusMessage(row.chat_id, "Думаю...");
+
+        // Start tmux monitor for real-time progress
+        await startTmuxMonitorForChat(row.chat_id);
 
         await mcp.notification({
           method: "notifications/claude/channel",
