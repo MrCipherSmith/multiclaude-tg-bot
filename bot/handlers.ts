@@ -40,6 +40,8 @@ export function registerHandlers(bot: Bot): void {
   bot.command("status", handleStatus);
   bot.command("stats", handleStats);
   bot.command("logs", handleLogs);
+  bot.command("pending", handlePending);
+  bot.command("tools", handleTools);
 
   // Permission callback from inline keyboard
   bot.on("callback_query:data", handlePermissionCallback);
@@ -524,6 +526,67 @@ async function handleLogs(ctx: Context): Promise<void> {
   }
 }
 
+// === Pending & Tools commands ===
+
+async function handlePending(ctx: Context): Promise<void> {
+  const chatId = String(ctx.chat!.id);
+  const rows = await sql`
+    SELECT id, tool_name, description, created_at
+    FROM permission_requests
+    WHERE chat_id = ${chatId} AND response IS NULL
+    ORDER BY created_at DESC
+    LIMIT 10
+  `;
+
+  if (rows.length === 0) {
+    await ctx.reply("Нет ожидающих разрешений.");
+    return;
+  }
+
+  const lines = rows.map((r) => {
+    const ago = Math.round((Date.now() - new Date(r.created_at).getTime()) / 1000);
+    return `${r.tool_name}: ${r.description.slice(0, 80)} (${ago}s ago)`;
+  });
+
+  await ctx.reply(`Ожидающие разрешения (${rows.length}):\n\n` + lines.join("\n\n"));
+}
+
+async function handleTools(ctx: Context): Promise<void> {
+  const chatId = String(ctx.chat!.id);
+  const activeId = await sessionManager.getActiveSession(chatId);
+  const session = await sessionManager.get(activeId);
+
+  const httpTools = [
+    "remember — сохранить в долгосрочную память",
+    "recall — семантический поиск по памяти",
+    "forget — удалить воспоминание",
+    "list_memories — список воспоминаний",
+    "reply — ответить в чат",
+    "react — поставить реакцию",
+    "edit_message — редактировать сообщение",
+    "list_sessions — список сессий",
+    "session_info — информация о сессии",
+    "set_session_name — задать имя сессии",
+  ];
+
+  const channelTools = [
+    "reply — ответить в чат (HTML)",
+    "update_status — обновить статус в Telegram",
+    "remember, recall, forget, list_memories — память",
+  ];
+
+  const lines = [
+    `Сессия: ${session?.name ?? "standalone"}\n`,
+    "HTTP MCP (доступны всем сессиям):",
+    ...httpTools.map((t) => `  ${t}`),
+    "",
+    "Channel (доступны CLI-сессиям):",
+    ...channelTools.map((t) => `  ${t}`),
+  ];
+
+  await ctx.reply(lines.join("\n"));
+}
+
 // === Permission callback ===
 
 async function handlePermissionCallback(ctx: Context): Promise<void> {
@@ -531,23 +594,52 @@ async function handlePermissionCallback(ctx: Context): Promise<void> {
   if (!data?.startsWith("perm:")) return;
 
   const parts = data.split(":");
-  const action = parts[1]; // 'allow' or 'deny'
-  const requestId = parts.slice(2).join(":"); // request_id may contain colons
+  const action = parts[1]; // 'allow', 'always', or 'deny'
+  const requestId = parts.slice(2).join(":");
 
-  // Update DB with response
+  // For "always" — treat as allow + save auto-approve rule
+  const dbAction = action === "always" ? "allow" : action;
+
   const result = await sql`
-    UPDATE permission_requests SET response = ${action} WHERE id = ${requestId} RETURNING id
+    UPDATE permission_requests SET response = ${dbAction} WHERE id = ${requestId} RETURNING id, tool_name, session_id
   `;
 
   if (result.length > 0) {
-    const emoji = action === "allow" ? "✅" : "❌";
-    const label = action === "allow" ? "Разрешено" : "Запрещено";
-
-    // Keep original description, replace header with result
     const originalText = ctx.callbackQuery?.message?.text ?? "";
     const descPart = originalText.replace(/^🔐 Разрешить\?\n*/, "").trim();
-    await ctx.editMessageText(`${emoji} ${label}\n\n${descPart}`);
-    await ctx.answerCallbackQuery({ text: label });
+
+    if (action === "always") {
+      const toolName = result[0].tool_name;
+      // Add to auto-approve: find project path for this session
+      const sessionRows = await sql`SELECT project_path FROM sessions WHERE id = ${result[0].session_id}`;
+      const projectPath = sessionRows[0]?.project_path;
+      if (projectPath) {
+        try {
+          const settingsPath = `${projectPath}/.claude/settings.local.json`;
+          let settings: any = {};
+          try {
+            settings = JSON.parse(await Bun.file(settingsPath).text());
+          } catch {}
+          if (!settings.permissions) settings.permissions = {};
+          if (!settings.permissions.allow) settings.permissions.allow = [];
+          const pattern = `${toolName}(*)`;
+          if (!settings.permissions.allow.includes(pattern)) {
+            settings.permissions.allow.push(pattern);
+            await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+          }
+        } catch (err) {
+          console.error("[perm] failed to save auto-approve:", err);
+        }
+      }
+      await ctx.editMessageText(`✅ Всегда разрешено: ${toolName}\n\n${descPart}`);
+      await ctx.answerCallbackQuery({ text: `Всегда: ${toolName}` });
+    } else if (action === "allow") {
+      await ctx.editMessageText(`✅ Разрешено\n\n${descPart}`);
+      await ctx.answerCallbackQuery({ text: "Разрешено" });
+    } else {
+      await ctx.editMessageText(`❌ Запрещено\n\n${descPart}`);
+      await ctx.answerCallbackQuery({ text: "Запрещено" });
+    }
   } else {
     await ctx.answerCallbackQuery({ text: "Запрос устарел" });
   }

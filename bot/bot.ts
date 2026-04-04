@@ -31,6 +31,8 @@ export function createBot(): Bot {
     { command: "status", description: "Статус бота" },
     { command: "stats", description: "Статистика" },
     { command: "logs", description: "Логи сессии" },
+    { command: "pending", description: "Ожидающие разрешения" },
+    { command: "tools", description: "Доступные MCP инструменты" },
   ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
 
   // Error handler

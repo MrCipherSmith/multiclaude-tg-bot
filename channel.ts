@@ -152,7 +152,7 @@ mcp.setNotificationHandler(
       : `${tool_name}`;
     await updateStatus(chatId, shortDesc);
 
-    // Send inline keyboard to Telegram
+    // Send inline keyboard to Telegram (3 buttons: Allow / Always / Deny)
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -161,54 +161,76 @@ mcp.setNotificationHandler(
         text: `🔐 Разрешить?\n\n${desc}`,
         reply_markup: {
           inline_keyboard: [[
-            { text: "✅ Разрешить", callback_data: `perm:allow:${request_id}` },
-            { text: "❌ Запретить", callback_data: `perm:deny:${request_id}` },
+            { text: "✅ Да", callback_data: `perm:allow:${request_id}` },
+            { text: "✅ Всегда", callback_data: `perm:always:${request_id}` },
+            { text: "❌ Нет", callback_data: `perm:deny:${request_id}` },
           ]],
         },
       }),
     });
 
+    let telegramMsgId: number | null = null;
     if (res.ok) {
       const data = (await res.json()) as any;
-      const msgId = data.result?.message_id;
+      telegramMsgId = data.result?.message_id;
 
-      // Save to DB for the main bot to handle callback
       await sql`
         INSERT INTO permission_requests (id, session_id, chat_id, tool_name, description, message_id)
-        VALUES (${request_id}, ${sessionId}, ${chatId}, ${tool_name ?? "unknown"}, ${desc}, ${msgId})
+        VALUES (${request_id}, ${sessionId}, ${chatId}, ${tool_name ?? "unknown"}, ${desc}, ${telegramMsgId})
         ON CONFLICT (id) DO NOTHING
       `;
     }
 
-    // Poll for response
+    // Poll for response (from Telegram buttons)
     const startTime = Date.now();
-    const TIMEOUT = 120_000; // 2 minutes
+    const TIMEOUT = 120_000;
+    let resolved = false;
 
     while (Date.now() - startTime < TIMEOUT) {
+      // Check if Telegram user responded
       const rows = await sql`
         SELECT response FROM permission_requests WHERE id = ${request_id} AND response IS NOT NULL
       `;
       if (rows.length > 0) {
-        const behavior = rows[0].response; // 'allow' or 'deny'
+        const behavior = rows[0].response;
         await mcp.notification({
           method: "notifications/claude/channel/permission",
           params: { request_id, behavior },
         });
-        process.stderr.write(`[channel] permission ${request_id}: ${behavior}\n`);
-
-        // Cleanup
-        await sql`DELETE FROM permission_requests WHERE id = ${request_id}`;
-        return;
+        process.stderr.write(`[channel] permission ${request_id}: ${behavior} (telegram)\n`);
+        await updateStatus(chatId, "Выполняю...");
+        resolved = true;
+        break;
       }
+
+      // Check if permission was resolved in terminal (record deleted = CLI moved on)
+      const exists = await sql`SELECT 1 FROM permission_requests WHERE id = ${request_id}`;
+      if (exists.length === 0) {
+        // Record deleted by another path — resolved elsewhere
+        process.stderr.write(`[channel] permission ${request_id}: resolved externally\n`);
+        if (telegramMsgId) {
+          await editTelegramMessage(chatId, telegramMsgId, `⚡ Resolved in terminal\n\n${desc}`);
+        }
+        await updateStatus(chatId, "Выполняю...");
+        resolved = true;
+        break;
+      }
+
       await new Promise((r) => setTimeout(r, 500));
     }
 
-    // Timeout — deny
-    process.stderr.write(`[channel] permission ${request_id}: timeout, denying\n`);
-    await mcp.notification({
-      method: "notifications/claude/channel/permission",
-      params: { request_id, behavior: "deny" },
-    });
+    if (!resolved) {
+      // Timeout — deny
+      process.stderr.write(`[channel] permission ${request_id}: timeout, denying\n`);
+      await mcp.notification({
+        method: "notifications/claude/channel/permission",
+        params: { request_id, behavior: "deny" },
+      });
+      if (telegramMsgId) {
+        await editTelegramMessage(chatId, telegramMsgId, `⏰ Таймаут\n\n${desc}`);
+      }
+    }
+
     await sql`DELETE FROM permission_requests WHERE id = ${request_id}`;
   },
 );
@@ -410,6 +432,20 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
 function text(t: string) {
   return { content: [{ type: "text" as const, text: t }] };
+}
+
+// --- Telegram helpers ---
+
+async function editTelegramMessage(chatId: string, messageId: number, text: string): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: Number(chatId), message_id: messageId, text }),
+    });
+  } catch {}
 }
 
 // --- Status messages ---
