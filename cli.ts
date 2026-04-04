@@ -1,0 +1,497 @@
+#!/usr/bin/env bun
+/**
+ * Claude Bot CLI — setup wizard and management commands.
+ *
+ * Usage:
+ *   bun cli.ts setup          Interactive installation wizard
+ *   bun cli.ts start          Start bot (docker compose up)
+ *   bun cli.ts stop           Stop bot (docker compose down)
+ *   bun cli.ts restart        Rebuild and restart bot
+ *   bun cli.ts status         Show bot health and stats
+ *   bun cli.ts sessions       List active sessions
+ *   bun cli.ts logs           Show bot logs
+ *   bun cli.ts backup         Run database backup
+ *   bun cli.ts cleanup        Clean old sessions and data
+ *   bun cli.ts connect [dir]  Start CLI session for a project
+ *   bun cli.ts mcp-register   Register MCP servers in Claude Code
+ */
+
+import { existsSync } from "fs";
+import { resolve, basename } from "path";
+
+// --- ANSI colors ---
+const c = {
+  green: (s: string) => `\x1b[32m${s}\x1b[0m`,
+  red: (s: string) => `\x1b[31m${s}\x1b[0m`,
+  yellow: (s: string) => `\x1b[33m${s}\x1b[0m`,
+  cyan: (s: string) => `\x1b[36m${s}\x1b[0m`,
+  bold: (s: string) => `\x1b[1m${s}\x1b[0m`,
+  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
+};
+
+const BOT_DIR = import.meta.dir;
+
+// --- Helpers ---
+
+function ask(question: string, defaultValue = ""): string {
+  const suffix = defaultValue ? ` ${c.dim(`[${defaultValue}]`)}` : "";
+  process.stdout.write(`  ${question}${suffix}: `);
+  const answer = prompt("")?.trim() ?? "";
+  return answer || defaultValue;
+}
+
+function askChoice(question: string, options: string[]): number {
+  console.log(`\n  ${c.bold(question)}`);
+  options.forEach((opt, i) => console.log(`  ${c.cyan(`${i + 1}.`)} ${opt}`));
+  const answer = ask(">");
+  const idx = parseInt(answer) - 1;
+  if (idx >= 0 && idx < options.length) return idx;
+  return 0;
+}
+
+async function run(cmd: string[], opts?: { cwd?: string; silent?: boolean }): Promise<{ ok: boolean; output: string }> {
+  const proc = Bun.spawn(cmd, {
+    cwd: opts?.cwd ?? BOT_DIR,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const code = await proc.exited;
+  if (!opts?.silent && code !== 0 && stderr) {
+    console.error(c.red(`  Error: ${stderr.trim()}`));
+  }
+  return { ok: code === 0, output: stdout.trim() };
+}
+
+function step(msg: string) {
+  process.stdout.write(`  ${msg}...`);
+}
+
+function done() {
+  console.log(` ${c.green("done")}`);
+}
+
+function fail(msg?: string) {
+  console.log(` ${c.red(msg ?? "failed")}`);
+}
+
+// --- Setup wizard ---
+
+async function setup() {
+  console.log(`\n  ${c.bold("Claude Bot Setup")}`);
+  console.log(`  ${"─".repeat(40)}\n`);
+
+  // 1. Deployment type
+  const deployIdx = askChoice("Deployment type:", [
+    "Docker (recommended — PostgreSQL included)",
+    "Manual (PostgreSQL + Ollama already installed)",
+  ]);
+  const useDocker = deployIdx === 0;
+
+  // 2. Telegram
+  console.log();
+  const botToken = ask("Telegram Bot Token (from @BotFather)");
+  if (!botToken) {
+    console.log(c.red("\n  Bot token is required. Get one from @BotFather in Telegram."));
+    return;
+  }
+  const allowedUsers = ask("Your Telegram User ID");
+  if (!allowedUsers) {
+    console.log(c.red("\n  User ID is required. Send /start to @userinfobot to get yours."));
+    return;
+  }
+
+  // 3. LLM Provider
+  const providerIdx = askChoice("LLM Provider for standalone mode:", [
+    "Anthropic (best quality, requires API key)",
+    "OpenRouter (free models available)",
+    "Ollama (local, free)",
+  ]);
+
+  let anthropicKey = "";
+  let openrouterKey = "";
+  let openrouterModel = "qwen/qwen3-235b-a22b:free";
+  let ollamaModel = "qwen3:8b";
+
+  if (providerIdx === 0) {
+    anthropicKey = ask("Anthropic API Key");
+  } else if (providerIdx === 1) {
+    openrouterKey = ask("OpenRouter API Key");
+    openrouterModel = ask("OpenRouter Model", "qwen/qwen3-235b-a22b:free");
+  } else {
+    ollamaModel = ask("Ollama Chat Model", "qwen3:8b");
+  }
+
+  // 4. Voice transcription
+  console.log();
+  const groqKey = ask("Groq API Key for voice (Enter to skip, free at console.groq.com)");
+
+  // 5. Database password
+  const dbPassword = ask("PostgreSQL password", "claude_bot_secret");
+
+  // 6. Port
+  const port = ask("Bot port", "3847");
+
+  // Generate .env
+  console.log();
+  step("Creating .env");
+
+  const dbUrl = useDocker
+    ? `postgres://claude_bot:${dbPassword}@localhost:5433/claude_bot`
+    : `postgres://claude_bot:${dbPassword}@localhost:5432/claude_bot`;
+
+  const envLines = [
+    "# Telegram",
+    `TELEGRAM_BOT_TOKEN=${botToken}`,
+    `ALLOWED_USERS=${allowedUsers}`,
+    "",
+    "# LLM Provider",
+    `ANTHROPIC_API_KEY=${anthropicKey}`,
+    `CLAUDE_MODEL=claude-sonnet-4-20250514`,
+    `MAX_TOKENS=8192`,
+    `OPENROUTER_API_KEY=${openrouterKey}`,
+    `OPENROUTER_MODEL=${openrouterModel}`,
+    `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`,
+    `OLLAMA_CHAT_MODEL=${ollamaModel}`,
+    "",
+    "# PostgreSQL",
+    `DATABASE_URL=${dbUrl}`,
+    `POSTGRES_PASSWORD=${dbPassword}`,
+    "",
+    "# Ollama",
+    `OLLAMA_URL=http://localhost:11434`,
+    `EMBEDDING_MODEL=nomic-embed-text`,
+    "",
+    "# Voice transcription",
+    `GROQ_API_KEY=${groqKey}`,
+    `WHISPER_URL=http://localhost:9000`,
+    "",
+    "# Server",
+    `PORT=${port}`,
+    `SHORT_TERM_WINDOW=20`,
+    `IDLE_TIMEOUT_MS=900000`,
+  ];
+
+  await Bun.write(`${BOT_DIR}/.env`, envLines.join("\n") + "\n");
+  done();
+
+  // Install dependencies
+  step("Installing dependencies");
+  const install = await run(["bun", "install", "--frozen-lockfile"]);
+  install.ok ? done() : fail();
+
+  // Start services
+  if (useDocker) {
+    step("Starting Docker services");
+    const up = await run(["docker", "compose", "up", "-d"]);
+    up.ok ? done() : fail();
+
+    // Wait for DB
+    step("Waiting for database");
+    for (let i = 0; i < 30; i++) {
+      const check = await run(["docker", "compose", "exec", "-T", "postgres", "pg_isready", "-U", "claude_bot"], { silent: true });
+      if (check.ok) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    done();
+  } else {
+    console.log(`\n  ${c.yellow("Ensure PostgreSQL and Ollama are running before continuing.")}`);
+    ask("Press Enter when ready");
+  }
+
+  // Run migrations
+  step("Running database migrations");
+  if (useDocker) {
+    // Migrations run automatically on bot start, but verify
+    await new Promise((r) => setTimeout(r, 3000));
+    const health = await run(["curl", "-sf", `http://localhost:${port}/health`], { silent: true });
+    health.ok ? done() : fail("bot not responding yet, migrations may still be running");
+  } else {
+    const migrate = await run(["bun", "memory/db.ts"]);
+    migrate.ok ? done() : fail();
+  }
+
+  // Register MCP servers
+  step("Registering MCP servers in Claude Code");
+  await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "claude-bot-channel", "-s", "user"], { silent: true });
+
+  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${port}/mcp`]);
+
+  const channelConfig = JSON.stringify({
+    type: "stdio",
+    command: "bun",
+    args: [`${BOT_DIR}/channel.ts`],
+    env: {
+      DATABASE_URL: dbUrl,
+      OLLAMA_URL: "http://localhost:11434",
+      TELEGRAM_BOT_TOKEN: botToken,
+    },
+  });
+  await run(["claude", "mcp", "add-json", "-s", "user", "claude-bot-channel", channelConfig]);
+  done();
+
+  // Copy CLAUDE.md template
+  step("Setting up global CLAUDE.md");
+  const claudeMdPath = `${process.env.HOME}/.claude/CLAUDE.md`;
+  if (!existsSync(claudeMdPath)) {
+    const template = `# Global CLAUDE.md
+
+## MCP Integration
+
+When starting a session, call \`set_session_name\` with:
+- name: basename of the current working directory
+- project_path: absolute path to the current working directory
+
+## Telegram Status Updates
+
+When responding to Telegram channel messages (messages from \`notifications/claude/channel\`), call \`update_status\` before each major step to keep the user informed. Use the \`chat_id\` from the channel message metadata.
+
+Examples:
+- Before reading files: \`update_status(chat_id, "Reading files...")\`
+- Before running commands: \`update_status(chat_id, "Running git status...")\`
+- Before editing: \`update_status(chat_id, "Editing code...")\`
+
+Keep status messages short (under 50 chars). The status is automatically deleted when you call \`reply\`.
+`;
+    await Bun.write(claudeMdPath, template);
+    done();
+  } else {
+    console.log(` ${c.yellow("exists, skipping")}`);
+  }
+
+  // Summary
+  console.log(`\n  ${c.green(c.bold("Setup complete!"))}\n`);
+  console.log(`  Start a CLI session:`);
+  console.log(`    ${c.cyan("cd your-project")}`);
+  console.log(`    ${c.cyan("claude --dangerously-load-development-channels server:claude-bot-channel")}\n`);
+  console.log(`  Manage the bot:`);
+  console.log(`    ${c.cyan("bun cli.ts status")}    — health & stats`);
+  console.log(`    ${c.cyan("bun cli.ts sessions")}  — list sessions`);
+  console.log(`    ${c.cyan("bun cli.ts logs")}      — view logs`);
+  console.log(`    ${c.cyan("bun cli.ts connect .")} — connect current project\n`);
+}
+
+// --- Management commands ---
+
+async function start() {
+  step("Starting bot");
+  const result = await run(["docker", "compose", "up", "-d"]);
+  result.ok ? done() : fail();
+}
+
+async function stop() {
+  step("Stopping bot");
+  const result = await run(["docker", "compose", "down"]);
+  result.ok ? done() : fail();
+}
+
+async function restart() {
+  step("Rebuilding and restarting bot");
+  const result = await run(["docker", "compose", "up", "-d", "--build", "bot"]);
+  result.ok ? done() : fail();
+}
+
+async function status() {
+  const port = process.env.PORT ?? "3847";
+  const result = await run(["curl", "-sf", `http://localhost:${port}/health`], { silent: true });
+
+  if (!result.ok) {
+    console.log(`\n  ${c.red("Bot is not running")}`);
+    return;
+  }
+
+  const data = JSON.parse(result.output);
+  console.log(`\n  ${c.bold("Bot Status")}`);
+  console.log(`  ${"─".repeat(30)}`);
+  console.log(`  Status:   ${data.status === "ok" ? c.green("running") : c.red("error")}`);
+  console.log(`  Database: ${data.db === "connected" ? c.green("connected") : c.red("disconnected")}`);
+  console.log(`  Uptime:   ${formatUptime(data.uptime)}`);
+  console.log(`  Sessions: ${data.sessions}`);
+
+  // Docker status
+  const docker = await run(["docker", "compose", "ps", "--format", "table {{.Name}}\t{{.Status}}"], { silent: true });
+  if (docker.ok) {
+    console.log(`\n  ${c.bold("Docker")}`);
+    console.log(`  ${docker.output.split("\n").join("\n  ")}`);
+  }
+}
+
+async function sessions() {
+  const port = process.env.PORT ?? "3847";
+  const result = await run(["curl", "-sf", `http://localhost:${port}/health`], { silent: true });
+
+  if (!result.ok) {
+    console.log(`\n  ${c.red("Bot is not running")}`);
+    return;
+  }
+
+  // Query sessions via docker exec
+  const query = await run([
+    "docker", "compose", "exec", "-T", "postgres",
+    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "-c", "SELECT id, name, status, EXTRACT(EPOCH FROM (now() - last_active))::int as ago FROM sessions WHERE name NOT LIKE 'cli-%' ORDER BY id",
+  ], { silent: true });
+
+  if (!query.ok) {
+    console.log(`\n  ${c.red("Cannot query database")}`);
+    return;
+  }
+
+  console.log(`\n  ${c.bold("Sessions")}`);
+  console.log(`  ${"─".repeat(50)}`);
+
+  for (const line of query.output.split("\n")) {
+    if (!line.trim()) continue;
+    const [id, name, s, ago] = line.split("|");
+    const statusIcon = s === "active" ? c.green("active") : c.yellow("disconnected");
+    const agoStr = formatUptime(parseInt(ago));
+    console.log(`  ${c.cyan(`#${id}`)} ${name.padEnd(15)} ${statusIcon.padEnd(25)} ${c.dim(agoStr + " ago")}`);
+  }
+}
+
+async function logs() {
+  const proc = Bun.spawn(["docker", "compose", "logs", "bot", "-f", "--tail", "50"], {
+    cwd: BOT_DIR,
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  await proc.exited;
+}
+
+async function backup() {
+  step("Running database backup");
+  const result = await run(["bash", `${BOT_DIR}/scripts/backup-db.sh`]);
+  result.ok ? done() : fail();
+  if (result.output) console.log(`  ${result.output}`);
+}
+
+async function cleanup() {
+  const query = await run([
+    "docker", "compose", "exec", "-T", "postgres",
+    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "-c", `
+      DELETE FROM sessions WHERE name LIKE 'cli-%';
+      DELETE FROM message_queue WHERE delivered = true AND created_at < now() - interval '24 hours';
+      DELETE FROM request_logs WHERE created_at < now() - interval '7 days';
+      DELETE FROM api_request_stats WHERE created_at < now() - interval '30 days';
+      DELETE FROM permission_requests WHERE created_at < now() - interval '1 hour';
+    `,
+  ], { silent: true });
+
+  console.log(`\n  ${c.green("Cleanup complete")}`);
+}
+
+async function connect(dir?: string) {
+  const projectDir = resolve(dir ?? ".");
+  if (!existsSync(projectDir)) {
+    console.log(c.red(`  Directory not found: ${projectDir}`));
+    return;
+  }
+
+  console.log(`  Connecting ${c.cyan(basename(projectDir))} to Telegram bot...\n`);
+  const proc = Bun.spawn(
+    ["claude", "--dangerously-load-development-channels", "server:claude-bot-channel"],
+    { cwd: projectDir, stdout: "inherit", stderr: "inherit", stdin: "inherit" },
+  );
+  await proc.exited;
+}
+
+async function mcpRegister() {
+  const envPath = `${BOT_DIR}/.env`;
+  if (!existsSync(envPath)) {
+    console.log(c.red("  .env not found. Run 'bun cli.ts setup' first."));
+    return;
+  }
+
+  // Read values from .env
+  const env = Object.fromEntries(
+    (await Bun.file(envPath).text())
+      .split("\n")
+      .filter((l) => l && !l.startsWith("#"))
+      .map((l) => l.split("=").map((s) => s.trim()))
+      .filter((p) => p.length === 2),
+  );
+
+  const port = env.PORT ?? "3847";
+  const dbUrl = env.DATABASE_URL ?? "";
+  const ollamaUrl = env.OLLAMA_URL ?? "http://localhost:11434";
+  const botToken = env.TELEGRAM_BOT_TOKEN ?? "";
+
+  step("Removing old MCP registrations");
+  await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "claude-bot-channel", "-s", "user"], { silent: true });
+  done();
+
+  step("Registering HTTP MCP server");
+  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${port}/mcp`]);
+  done();
+
+  step("Registering stdio channel adapter");
+  const config = JSON.stringify({
+    type: "stdio",
+    command: "bun",
+    args: [`${BOT_DIR}/channel.ts`],
+    env: { DATABASE_URL: dbUrl, OLLAMA_URL: ollamaUrl, TELEGRAM_BOT_TOKEN: botToken },
+  });
+  await run(["claude", "mcp", "add-json", "-s", "user", "claude-bot-channel", config]);
+  done();
+
+  console.log(`\n  ${c.green("MCP servers registered.")}`);
+}
+
+// --- Utilities ---
+
+function formatUptime(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor((seconds % 86400) / 3600)}h`;
+}
+
+function help() {
+  console.log(`
+  ${c.bold("Claude Bot CLI")}
+
+  ${c.bold("Usage:")} bun cli.ts <command>
+
+  ${c.bold("Setup:")}
+    setup           Interactive installation wizard
+    mcp-register    Re-register MCP servers in Claude Code
+
+  ${c.bold("Manage:")}
+    start           Start bot (docker compose up)
+    stop            Stop bot (docker compose down)
+    restart         Rebuild and restart bot
+    status          Show bot health and stats
+    logs            Show bot logs (follow mode)
+
+  ${c.bold("Data:")}
+    sessions        List active sessions
+    backup          Run database backup
+    cleanup         Clean old sessions and data
+
+  ${c.bold("Connect:")}
+    connect [dir]   Start CLI session for a project (default: current dir)
+`);
+}
+
+// --- Main ---
+
+const command = process.argv[2];
+
+switch (command) {
+  case "setup":       await setup(); break;
+  case "start":       await start(); break;
+  case "stop":        await stop(); break;
+  case "restart":     await restart(); break;
+  case "status":      await status(); break;
+  case "sessions":    await sessions(); break;
+  case "logs":        await logs(); break;
+  case "backup":      await backup(); break;
+  case "cleanup":     await cleanup(); break;
+  case "connect":     await connect(process.argv[3]); break;
+  case "mcp-register": await mcpRegister(); break;
+  default:            help(); break;
+}

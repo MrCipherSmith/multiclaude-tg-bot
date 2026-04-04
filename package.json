@@ -5,7 +5,8 @@
   "scripts": {
     "start": "bun main.ts",
     "dev": "bun --watch main.ts",
-    "migrate": "bun memory/db.ts"
+    "migrate": "bun memory/db.ts",
+    "cli": "bun cli.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
