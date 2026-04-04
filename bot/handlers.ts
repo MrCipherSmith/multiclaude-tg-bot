@@ -164,7 +164,26 @@ async function handleSwitchTo(ctx: Context, sessionId: number): Promise<void> {
     });
   } else {
     const name = session.name ?? session.clientId;
-    await ctx.reply(`Переключено на сессию: ${name}`);
+    const statusIcon = session.status === "active" ? "🟢" : "🔴";
+
+    // Get short context summary
+    const recentMsgs = await sql`
+      SELECT role, LEFT(content, 150) as content FROM messages
+      WHERE session_id = ${sessionId} AND chat_id = ${chatId}
+      ORDER BY created_at DESC LIMIT 6
+    `;
+
+    let summary = "";
+    if (recentMsgs.length > 0) {
+      const preview = recentMsgs.reverse().map((m) => {
+        const icon = m.role === "user" ? "👤" : "🤖";
+        return `${icon} ${m.content.trim()}`;
+      }).join("\n");
+      summary = `\n\nПоследний контекст:\n${preview}`;
+    }
+
+    const path = session.projectPath ? `\n📁 ${session.projectPath}` : "";
+    await ctx.reply(`${statusIcon} Переключено на: ${name}${path}${summary}`);
   }
 }
 

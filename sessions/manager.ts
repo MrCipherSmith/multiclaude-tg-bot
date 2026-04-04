@@ -21,6 +21,29 @@ export class SessionManager {
     projectPath?: string,
     metadata?: Record<string, unknown>,
   ): Promise<Session> {
+    // Deduplicate: if a named session with same project_path already exists, adopt it
+    if (projectPath) {
+      const existing = await sql`
+        SELECT id, name, client_id FROM sessions
+        WHERE project_path = ${projectPath} AND id != 0 AND name NOT LIKE 'cli-%'
+        LIMIT 1
+      `;
+      if (existing.length > 0) {
+        const old = existing[0];
+        this.activeClients.delete(old.client_id);
+        const [row] = await sql`
+          UPDATE sessions
+          SET client_id = ${clientId}, status = 'active', last_active = now()
+          WHERE id = ${old.id}
+          RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active
+        `;
+        const session = this.rowToSession(row);
+        this.activeClients.set(clientId, session.id);
+        console.log(`[session] reused existing session #${session.id} (${session.name}) for ${projectPath}`);
+        return session;
+      }
+    }
+
     const [row] = await sql`
       INSERT INTO sessions (name, project_path, client_id, status, metadata)
       VALUES (
