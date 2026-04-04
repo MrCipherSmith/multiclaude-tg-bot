@@ -19,7 +19,7 @@ export const CONFIG = {
   VECTOR_DIMENSIONS: 768,
 
   // Server
-  PORT: Number(process.env.PORT ?? "3000"),
+  PORT: Number(process.env.PORT ?? "3847"),
   SHORT_TERM_WINDOW: Number(process.env.SHORT_TERM_WINDOW ?? "20"),
   IDLE_TIMEOUT_MS: Number(process.env.IDLE_TIMEOUT_MS ?? "900000"), // 15 min
 } as const;

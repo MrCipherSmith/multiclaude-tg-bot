@@ -13,8 +13,14 @@ A Telegram bot with Claude AI integration, dual-layer memory (short-term + long-
 - **Session Switching** — switch between CLI sessions and standalone mode from Telegram
 - **Session Adoption** — reconnecting CLIs reuse existing named sessions, preserving ID and memory
 - **Voice Messages** — transcription via Groq (whisper-large-v3) with local Whisper fallback
+- **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
+- **Markdown Rendering** — responses formatted with HTML in Telegram (bold, italic, code blocks, links)
 - **Statistics & Logging** — API usage, token tracking, transcription stats, per-session request logs (`/stats`, `/logs`)
-- **Standalone Mode** — bot responds directly via Claude API (requires API key)
+- **Live Status Updates** — real-time progress in Telegram while CLI processes messages ("Думаю... 5с", "Читаю: file.ts")
+- **Permission Forwarding** — CLI permission requests (Bash, Read, Edit) sent as inline buttons to Telegram
+- **Health Endpoint** — `GET /health` with DB status, uptime, active sessions
+- **Auto-Cleanup** — hourly cleanup of old queue messages, logs, and stats
+- **Standalone Mode** — bot responds directly via LLM API (Anthropic / OpenRouter / Ollama)
 - **CLI Mode** — forward Telegram messages to a connected Claude Code session via channel notifications
 
 ## Architecture
@@ -287,6 +293,7 @@ Now Telegram messages routed to this session will appear as prompts in Claude Co
 | `/memories` | List recent memories |
 | `/forget [id]` | Delete a memory |
 | `/clear` | Clear current session context |
+| `/summarize` | Force conversation summarization to long-term memory |
 | `/cleanup` | Remove stale sessions |
 | `/status` | Bot status (DB, Ollama, counts) |
 | `/stats` | Statistics: API usage, tokens, transcriptions, per session |
@@ -317,8 +324,17 @@ Available to all Claude Code sessions:
 ### Channel Adapter (stdio)
 
 The channel adapter (`channel.ts`) provides:
-- `reply` — send message to Telegram (uses Bot API directly)
+- `reply` — send message to Telegram (with Markdown→HTML rendering)
+- `update_status` — update the live status message in Telegram
 - `remember`, `recall`, `forget`, `list_memories` — same memory tools via direct DB access
+
+### Health Endpoint
+
+```
+GET http://localhost:3847/health
+```
+
+Returns JSON with database status, uptime, and active session count. Used by Docker healthcheck.
 
 ## Auto-Naming Sessions
 
@@ -349,13 +365,17 @@ When a CLI reconnects and calls `set_session_name` with an existing name, the bo
 Use tmux to keep CLI sessions running after you disconnect from SSH:
 
 ```bash
-# Start a named tmux session for each project
-tmux new-session -d -s myproject -c /path/to/myproject \
-  'claude --dangerously-load-development-channels server:claude-bot-channel'
+# Create a tmux session for each project
+tmux new-session -d -s myproject -c /path/to/myproject
+tmux send-keys -t myproject 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
 
-# Start another project in its own tmux session
-tmux new-session -d -s another -c /path/to/another-project \
-  'claude --dangerously-load-development-channels server:claude-bot-channel'
+# Another project
+tmux new-session -d -s another -c /path/to/another-project
+tmux send-keys -t another 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
+
+# General session (home directory, no specific project)
+tmux new-session -d -s general -c ~
+tmux send-keys -t general 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
 
 # List all tmux sessions
 tmux ls
@@ -364,6 +384,13 @@ tmux ls
 tmux attach -t myproject
 
 # Inside tmux: Ctrl+B, D to detach (session keeps running)
+```
+
+For auto-restart on crash, use the included wrapper script:
+
+```bash
+tmux new-session -d -s myproject -c /path/to/myproject
+tmux send-keys -t myproject '/path/to/multiclaude-tg-bot/scripts/run-cli.sh /path/to/myproject' Enter
 ```
 
 Each CLI session auto-registers in the bot and appears in `/sessions`. When Claude Code starts, it reads `CLAUDE.md` and calls `set_session_name` to name itself after the project directory.
@@ -443,6 +470,21 @@ sudo systemctl restart claude-bot   # restart
 sudo systemctl stop claude-bot      # stop
 sudo journalctl -u claude-bot -f    # view logs
 ```
+
+## Database Backup
+
+Daily backups with rotation (keeps last 7):
+
+```bash
+# Run manually
+./scripts/backup-db.sh
+
+# Set up daily cron (3 AM)
+crontab -e
+# Add: 0 3 * * * /path/to/multiclaude-tg-bot/scripts/backup-db.sh
+```
+
+Backups are saved to `~/backups/claude-bot/` as gzipped SQL dumps.
 
 ## Tech Stack
 
