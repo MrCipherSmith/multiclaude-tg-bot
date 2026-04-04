@@ -17,9 +17,21 @@ import { startTypingRaw, type TypingHandle } from "./utils/typing.ts";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  NotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import postgres from "postgres";
 import { basename } from "path";
+
+const PermissionRequestSchema = NotificationSchema.extend({
+  method: z.literal("notifications/claude/channel/permission_request"),
+  params: z.object({
+    request_id: z.string(),
+    tool_name: z.string().optional(),
+    input: z.any().optional(),
+    message: z.string().optional(),
+  }).passthrough(),
+});
 
 // Read config from env or defaults
 const DATABASE_URL = process.env.DATABASE_URL!;
@@ -91,7 +103,7 @@ const mcp = new Server(
 
 // Handle permission requests from Claude Code
 mcp.setNotificationHandler(
-  { method: "notifications/claude/channel/permission_request" } as any,
+  PermissionRequestSchema,
   async (params: any) => {
     const { request_id, tool_name, input, message } = params.params ?? params;
     if (!sessionId) return;
