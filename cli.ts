@@ -504,6 +504,22 @@ async function connect(dir?: string) {
     await run(["tmux", "send-keys", "-t", name,
       "claude --dangerously-load-development-channels server:claude-bot-channel", "Enter"]);
 
+    // Wait for channel confirmation prompt and auto-confirm
+    console.log(`  Waiting for Claude to start...`);
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const capture = await run(["tmux", "capture-pane", "-t", name, "-p"], { silent: true });
+      if (capture.output.includes("Enter to confirm")) {
+        await run(["tmux", "send-keys", "-t", name, "Enter"]);
+        console.log(`  ${c.green("Channel confirmed!")}`);
+        break;
+      }
+      if (capture.output.includes("Listening for channel")) {
+        console.log(`  ${c.green("Already listening!")}`);
+        break;
+      }
+    }
+
     console.log(`  ${c.green("Started!")} tmux session: ${c.cyan(name)}`);
     console.log(`  Attach: ${c.dim(`tmux attach -t ${name}`)}`);
     console.log(`  Detach: ${c.dim("Ctrl+B, D")}\n`);
