@@ -372,6 +372,8 @@ Now Telegram messages routed to this session will appear as prompts in Claude Co
 | `/logs [id]` | Request logs for current or specified session |
 | `/pending` | Show pending CLI permission requests |
 | `/tools` | List available MCP tools for current session |
+| `/skills` | List skills from knowledge base (requires `KNOWLEDGE_BASE`) |
+| `/rules` | List coding rules from knowledge base (requires `KNOWLEDGE_BASE`) |
 
 ## MCP Tools
 
@@ -605,6 +607,20 @@ crontab -e
 ```
 
 Backups are saved to `~/backups/claude-bot/` as gzipped SQL dumps.
+
+## Knowledge Base (optional)
+
+If you have a directory with an `AGENTS.md` file containing skills and rules catalogs, you can connect it to the bot for `/skills` and `/rules` commands.
+
+Add to `.env`:
+```
+KNOWLEDGE_BASE=/app/knowledge-base
+KNOWLEDGE_BASE_PATH=/path/to/your/knowledge-base
+```
+
+And uncomment the volume mount in `docker-compose.yml` or set `KNOWLEDGE_BASE_PATH` to your directory. The `AGENTS.md` file should follow the format with `## Skills Catalog` and `## Core Rule Catalog` sections.
+
+Without these variables, `/skills` and `/rules` commands are disabled.
 
 ## Tech Stack
 
