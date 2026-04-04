@@ -14,27 +14,34 @@ export function createBot(): Bot {
   registerHandlers(bot);
 
   // Set bot commands menu in Telegram
+  // Sorted by frequency of use: most common first
   bot.api.setMyCommands([
-    { command: "start", description: "Начать работу" },
-    { command: "help", description: "Справка" },
+    // Daily use
     { command: "sessions", description: "Список сессий" },
-    { command: "switch", description: "Переключить сессию" },
-    { command: "session", description: "Инфо о текущей сессии" },
-    { command: "rename", description: "Переименовать сессию" },
+    { command: "switch", description: "Переключить сессию (с контекстом)" },
+    { command: "session", description: "Текущая сессия" },
     { command: "standalone", description: "Автономный режим" },
+    { command: "pending", description: "Ожидающие разрешения CLI" },
+    // Memory
     { command: "remember", description: "Сохранить в память" },
     { command: "recall", description: "Поиск по памяти" },
     { command: "memories", description: "Список воспоминаний" },
     { command: "forget", description: "Удалить воспоминание" },
-    { command: "clear", description: "Очистить контекст сессии" },
-    { command: "summarize", description: "Суммаризировать диалог" },
-    { command: "status", description: "Статус бота" },
-    { command: "stats", description: "Статистика" },
+    // Monitoring
+    { command: "stats", description: "Статистика API, токены, транскрипции" },
     { command: "logs", description: "Логи сессии" },
-    { command: "pending", description: "Ожидающие разрешения" },
-    { command: "tools", description: "Доступные MCP инструменты" },
-    { command: "skills", description: "Список skills из goodai-base" },
-    { command: "rules", description: "Список rules из goodai-base" },
+    { command: "status", description: "Здоровье бота (DB, Ollama)" },
+    // Knowledge base
+    { command: "skills", description: "Skills из goodai-base" },
+    { command: "rules", description: "Правила из goodai-base" },
+    { command: "tools", description: "MCP инструменты" },
+    // Maintenance
+    { command: "clear", description: "Очистить контекст" },
+    { command: "summarize", description: "Суммаризировать диалог" },
+    { command: "rename", description: "Переименовать сессию" },
+    { command: "cleanup", description: "Очистить неактивные сессии" },
+    // Help
+    { command: "help", description: "Справка" },
   ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
 
   // Error handler
