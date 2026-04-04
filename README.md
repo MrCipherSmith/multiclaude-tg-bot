@@ -87,9 +87,12 @@ A Telegram bot with Claude AI integration, dual-layer memory (short-term + long-
 2. `channel.ts` polls queue → sends `notifications/claude/channel` to Claude CLI
 3. Bot sends `⏳ Думаю...` status message to Telegram (with live timer)
 4. Claude CLI processes: reads files, runs commands, analyzes images
-5. Permission requests (Bash/Edit) forwarded to Telegram as inline buttons
+5. Permission requests (Bash/Edit) forwarded to Telegram as inline buttons (Allow / Always / Deny)
 6. CLI responds via `reply` MCP tool → message sent to Telegram with HTML formatting
 7. Status message deleted, typing indicator stopped
+
+**Session switching while CLI is working:**
+When you `/switch` to another session while a CLI is still processing, the previous session continues in the background. Messages from background sessions are prefixed with `[session-name]` so you can distinguish which session sent the response.
 
 **Message flow (Standalone mode):**
 1. Telegram message → bot composes prompt (short-term context + long-term memory recall)
