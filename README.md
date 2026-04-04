@@ -114,17 +114,20 @@ The wizard will ask for your Telegram token, LLM provider, and other settings, t
 
 ```bash
 bun cli.ts status         # Bot health, uptime, docker status
-bun cli.ts sessions       # List active sessions
+bun cli.ts sessions       # List active sessions with activity time
 bun cli.ts logs           # Follow bot logs
 bun cli.ts start          # Start bot (docker compose up)
 bun cli.ts stop           # Stop bot
 bun cli.ts restart        # Rebuild and restart
 bun cli.ts backup         # Run database backup
-bun cli.ts cleanup        # Clean old sessions and data
+bun cli.ts prune          # Remove stale/duplicate sessions (interactive)
+bun cli.ts cleanup        # Clean old queue, logs, stats
 bun cli.ts connect [dir]  # Start CLI session for a project
 bun cli.ts remote         # Connect laptop to remote bot server
 bun cli.ts mcp-register   # Re-register MCP servers in Claude Code
 ```
+
+Sessions are automatically marked as `disconnected` after 1 hour of inactivity. Use `prune` to interactively review and remove stale or duplicate sessions.
 
 ## Manual Setup (Docker)
 
