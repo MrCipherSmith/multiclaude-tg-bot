@@ -123,6 +123,14 @@ mcp.setNotificationHandler(
 
     const desc = message ?? `${tool_name}(${JSON.stringify(input ?? {}).slice(0, 200)})`;
 
+    // Update status message with what CLI is doing
+    const shortDesc = tool_name === "Bash" ? `Выполняю: ${String(input?.command ?? "").slice(0, 60)}`
+      : tool_name === "Read" ? `Читаю: ${String(input?.file_path ?? "").split("/").pop()}`
+      : tool_name === "Edit" || tool_name === "Write" ? `Редактирую: ${String(input?.file_path ?? "").split("/").pop()}`
+      : tool_name === "Grep" ? `Ищу: ${String(input?.pattern ?? "").slice(0, 40)}`
+      : `${tool_name}`;
+    await updateStatus(chatId, shortDesc);
+
     // Send inline keyboard to Telegram
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
@@ -236,6 +244,18 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: "update_status",
+      description: "Update the status message shown to the user in Telegram while processing. Call this before major operations to keep the user informed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat_id: { type: "string", description: "Telegram chat ID" },
+          status: { type: "string", description: "Short status text, e.g. 'Analyzing code', 'Running tests'" },
+        },
+        required: ["chat_id", "status"],
+      },
+    },
+    {
       name: "list_memories",
       description: "List memories with optional filters",
       inputSchema: {
@@ -324,6 +344,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       return text(result.length > 0 ? `Deleted #${args!.id}` : `#${args!.id} not found`);
     }
 
+    case "update_status": {
+      const chatId = String(args!.chat_id);
+      await updateStatus(chatId, String(args!.status));
+      return text(`Status updated: ${args!.status}`);
+    }
+
     case "list_memories": {
       const rows = await sql`
         SELECT id, type, content FROM memories
@@ -346,30 +372,93 @@ function text(t: string) {
 }
 
 // --- Status messages ---
-// Track status message IDs per chat so we can delete them when CLI replies
-const statusMessages = new Map<string, number>();
+interface StatusState {
+  chatId: string;
+  messageId: number;
+  startedAt: number;
+  stage: string;
+  timer: ReturnType<typeof setInterval> | null;
+}
 
-async function sendStatusMessage(chatId: string, text: string): Promise<void> {
+const activeStatus = new Map<string, StatusState>();
+
+function formatElapsed(ms: number): string {
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec}с`;
+  return `${Math.floor(sec / 60)}м ${sec % 60}с`;
+}
+
+async function sendStatusMessage(chatId: string, stage: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
+
+  // If status already exists, just update the stage
+  const existing = activeStatus.get(chatId);
+  if (existing) {
+    existing.stage = stage;
+    await editStatusMessage(existing);
+    return;
+  }
 
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: Number(chatId), text: `⏳ ${text}` }),
+      body: JSON.stringify({ chat_id: Number(chatId), text: `⏳ ${stage}` }),
     });
-    if (res.ok) {
-      const data = (await res.json()) as any;
-      statusMessages.set(chatId, data.result?.message_id);
-    }
+    if (!res.ok) return;
+
+    const data = (await res.json()) as any;
+    const state: StatusState = {
+      chatId,
+      messageId: data.result?.message_id,
+      startedAt: Date.now(),
+      stage,
+      timer: null,
+    };
+
+    // Update elapsed time every 5 seconds
+    state.timer = setInterval(() => editStatusMessage(state), 5000);
+    activeStatus.set(chatId, state);
+  } catch {}
+}
+
+async function updateStatus(chatId: string, stage: string): Promise<void> {
+  const state = activeStatus.get(chatId);
+  if (!state) {
+    await sendStatusMessage(chatId, stage);
+    return;
+  }
+  state.stage = stage;
+  await editStatusMessage(state);
+}
+
+async function editStatusMessage(state: StatusState): Promise<void> {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+
+  const elapsed = formatElapsed(Date.now() - state.startedAt);
+  const text = `⏳ ${state.stage} (${elapsed})`;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: Number(state.chatId),
+        message_id: state.messageId,
+        text,
+      }),
+    });
   } catch {}
 }
 
 async function deleteStatusMessage(chatId: string): Promise<void> {
-  const msgId = statusMessages.get(chatId);
-  if (!msgId) return;
-  statusMessages.delete(chatId);
+  const state = activeStatus.get(chatId);
+  if (!state) return;
+
+  if (state.timer) clearInterval(state.timer);
+  activeStatus.delete(chatId);
 
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
@@ -378,7 +467,7 @@ async function deleteStatusMessage(chatId: string): Promise<void> {
     await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: Number(chatId), message_id: msgId }),
+      body: JSON.stringify({ chat_id: Number(state.chatId), message_id: state.messageId }),
     });
   } catch {}
 }
