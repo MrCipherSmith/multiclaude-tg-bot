@@ -42,6 +42,8 @@ export function registerHandlers(bot: Bot): void {
   bot.command("logs", handleLogs);
   bot.command("pending", handlePending);
   bot.command("tools", handleTools);
+  bot.command("skills", handleSkills);
+  bot.command("rules", handleRules);
 
   // Permission callback from inline keyboard
   bot.on("callback_query:data", handlePermissionCallback);
@@ -74,6 +76,10 @@ async function handleStart(ctx: Context): Promise<void> {
       "/status — статус бота\n" +
       "/stats — статистика\n" +
       "/logs [id] — логи сессии\n" +
+      "/pending — ожидающие разрешения\n" +
+      "/tools — MCP инструменты\n" +
+      "/skills — skills из goodai-base\n" +
+      "/rules — правила из goodai-base\n" +
       "/help — помощь",
   );
 }
@@ -604,6 +610,72 @@ async function handleTools(ctx: Context): Promise<void> {
   ];
 
   await ctx.reply(lines.join("\n"));
+}
+
+// === Skills & Rules commands ===
+
+const GOODAI_BASE = process.env.GOODAI_BASE ?? `${process.env.HOME}/goodai-base`;
+
+async function handleSkills(ctx: Context): Promise<void> {
+  try {
+    const agents = await Bun.file(`${GOODAI_BASE}/AGENTS.md`).text();
+
+    // Extract skills from Skills Catalog section
+    const skillsMatch = agents.match(/## 🎨 Skills Catalog[\s\S]*?(?=\n---|\n## [^#])/);
+    if (!skillsMatch) {
+      await ctx.reply("Skills catalog not found.");
+      return;
+    }
+
+    const lines: string[] = ["Skills Catalog\n"];
+
+    // Parse skill entries: **`skills/name`** description
+    const skillRegex = /\*\*`skills\/([\w-]+)`\*\*\s*(?:⭐[^*]*)?\n-\s*\*\*Purpose\*\*:\s*(.+)/g;
+    let match;
+    while ((match = skillRegex.exec(skillsMatch[0])) !== null) {
+      lines.push(`  ${match[1]} — ${match[2]}`);
+    }
+
+    if (lines.length === 1) {
+      await ctx.reply("No skills found in catalog.");
+      return;
+    }
+
+    await ctx.reply(lines.join("\n"));
+  } catch {
+    await ctx.reply(`goodai-base не найден (${GOODAI_BASE})`);
+  }
+}
+
+async function handleRules(ctx: Context): Promise<void> {
+  try {
+    const agents = await Bun.file(`${GOODAI_BASE}/AGENTS.md`).text();
+
+    // Extract rules from Core Rule Catalog section
+    const rulesMatch = agents.match(/## 📖 Core Rule Catalog[\s\S]*?(?=\n---|\n## [^#])/);
+    if (!rulesMatch) {
+      await ctx.reply("Rules catalog not found.");
+      return;
+    }
+
+    const lines: string[] = ["Core Rules\n"];
+
+    // Parse rule entries: - `core/name.mdc`: description
+    const ruleRegex = /-\s*`core\/([\w-]+)\.mdc`:\s*(.+)/g;
+    let match;
+    while ((match = ruleRegex.exec(rulesMatch[0])) !== null) {
+      lines.push(`  ${match[1]} — ${match[2]}`);
+    }
+
+    if (lines.length === 1) {
+      await ctx.reply("No rules found in catalog.");
+      return;
+    }
+
+    await ctx.reply(lines.join("\n"));
+  } catch {
+    await ctx.reply(`goodai-base не найден (${GOODAI_BASE})`);
+  }
 }
 
 // === Permission callback ===

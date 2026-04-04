@@ -33,6 +33,8 @@ export function createBot(): Bot {
     { command: "logs", description: "Логи сессии" },
     { command: "pending", description: "Ожидающие разрешения" },
     { command: "tools", description: "Доступные MCP инструменты" },
+    { command: "skills", description: "Список skills из goodai-base" },
+    { command: "rules", description: "Список rules из goodai-base" },
   ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
 
   // Error handler
