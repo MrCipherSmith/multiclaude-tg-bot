@@ -27,7 +27,7 @@ A Telegram bot with Claude AI integration, dual-layer memory (short-term + long-
 
 ```
                           ┌─────────────────────────────────────────────────┐
-                          │              Host (tmux sessions)               │
+                          │      Host / Laptop / Any terminal              │
                           │                                                 │
   ┌─────────────┐ stdio   │  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
   │ channel.ts  │◀═══════▶│  │ Claude CLI│  │ Claude CLI│  │ Claude CLI│  │
@@ -400,40 +400,46 @@ When a CLI reconnects and calls `set_session_name` with an existing name, the bo
 6. Claude Code responds via the `reply` tool back to Telegram
 7. Switch between projects anytime — context is preserved per session
 
-### Persistent CLI Sessions (survive SSH disconnect)
+### Connecting CLI Sessions
 
-Use tmux to keep CLI sessions running after you disconnect from SSH:
+Any Claude Code instance can connect — from a local laptop terminal, VS Code, SSH session, or a server tmux session. The only requirements are the registered MCP servers (`claude-bot` and `claude-bot-channel`) and network access to the bot.
+
+**From any terminal (laptop, desktop, SSH):**
+
+```bash
+cd /path/to/your-project
+claude --dangerously-load-development-channels server:claude-bot-channel
+```
+
+The session appears in Telegram `/sessions` immediately. When you close the terminal, the session disconnects but its data (messages, memory) is preserved. Reconnecting from the same project auto-adopts the old session.
+
+### Persistent CLI Sessions (server, survives SSH disconnect)
+
+Use tmux on a server to keep CLI sessions running permanently:
 
 ```bash
 # Create a tmux session for each project
 tmux new-session -d -s myproject -c /path/to/myproject
 tmux send-keys -t myproject 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
 
-# Another project
-tmux new-session -d -s another -c /path/to/another-project
-tmux send-keys -t another 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
-
-# General session (home directory, no specific project)
+# General session (no specific project)
 tmux new-session -d -s general -c ~
 tmux send-keys -t general 'claude --dangerously-load-development-channels server:claude-bot-channel' Enter
 
-# List all tmux sessions
+# List / attach / detach
 tmux ls
-
-# Attach to a session (to view/interact)
-tmux attach -t myproject
-
-# Inside tmux: Ctrl+B, D to detach (session keeps running)
+tmux attach -t myproject      # view session
+# Ctrl+B, D                   # detach (session keeps running)
 ```
 
-For auto-restart on crash, use the included wrapper script:
+For auto-restart on crash:
 
 ```bash
 tmux new-session -d -s myproject -c /path/to/myproject
 tmux send-keys -t myproject '/path/to/multiclaude-tg-bot/scripts/run-cli.sh /path/to/myproject' Enter
 ```
 
-Each CLI session auto-registers in the bot and appears in `/sessions`. When Claude Code starts, it reads `CLAUDE.md` and calls `set_session_name` to name itself after the project directory.
+Each CLI session auto-names itself from the working directory via `CLAUDE.md` → `set_session_name`.
 
 **Note:** If a CLI session disconnects and reconnects with the same project name, the bot adopts the old session — preserving its ID, history, and memory.
 
