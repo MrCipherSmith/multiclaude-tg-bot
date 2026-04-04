@@ -392,40 +392,55 @@ async function handleRemove(ctx: Context): Promise<void> {
     return;
   }
 
+  // Delete all related data in correct order (FK constraints)
+  await sql`DELETE FROM chat_sessions WHERE active_session_id = ${sessionId}`;
+  await sql`DELETE FROM permission_requests WHERE session_id = ${sessionId}`;
+  await sql`DELETE FROM memories WHERE session_id = ${sessionId}`;
   await sql`DELETE FROM messages WHERE session_id = ${sessionId}`;
   await sql`DELETE FROM message_queue WHERE session_id = ${sessionId}`;
   await sql`DELETE FROM request_logs WHERE session_id = ${sessionId}`;
+  await sql`DELETE FROM api_request_stats WHERE session_id = ${sessionId}`;
+  await sql`DELETE FROM transcription_stats WHERE session_id = ${sessionId}`;
   await sql`DELETE FROM sessions WHERE id = ${sessionId}`;
 
   await ctx.reply(`Удалена сессия #${sessionId} (${session.name ?? "unnamed"}) со всеми данными.`);
 }
 
+async function cleanupSession(id: number): Promise<void> {
+  await sql`DELETE FROM chat_sessions WHERE active_session_id = ${id}`;
+  await sql`DELETE FROM permission_requests WHERE session_id = ${id}`;
+  await sql`DELETE FROM memories WHERE session_id = ${id}`;
+  await sql`DELETE FROM messages WHERE session_id = ${id}`;
+  await sql`DELETE FROM message_queue WHERE session_id = ${id}`;
+  await sql`DELETE FROM request_logs WHERE session_id = ${id}`;
+  await sql`DELETE FROM api_request_stats WHERE session_id = ${id}`;
+  await sql`DELETE FROM transcription_stats WHERE session_id = ${id}`;
+  await sql`DELETE FROM sessions WHERE id = ${id}`;
+}
+
 async function handleCleanup(ctx: Context): Promise<void> {
-  // Remove unnamed cli-* sessions
-  const unnamed = await sessionManager.cleanup();
-
-  // Remove disconnected named sessions
-  const disconnected = await sql`
-    DELETE FROM sessions WHERE id != 0 AND status = 'disconnected'
-    RETURNING id, name
+  // Find sessions to remove
+  const toRemove = await sql`
+    SELECT id, name, status FROM sessions
+    WHERE id != 0 AND (name LIKE 'cli-%' OR status = 'disconnected')
   `;
 
-  // Remove cli-* active sessions (orphaned from MCP init)
-  const orphaned = await sql`
-    DELETE FROM sessions WHERE name LIKE 'cli-%'
-    RETURNING id
-  `;
-
-  const total = unnamed + disconnected.length + orphaned.length;
-  if (total > 0) {
-    const parts: string[] = [];
-    if (unnamed > 0) parts.push(`${unnamed} unnamed`);
-    if (disconnected.length > 0) parts.push(`${disconnected.length} disconnected (${disconnected.map((r) => r.name).join(", ")})`);
-    if (orphaned.length > 0) parts.push(`${orphaned.length} orphaned`);
-    await ctx.reply(`Очищено: ${parts.join(", ")}`);
-  } else {
+  if (toRemove.length === 0) {
     await ctx.reply("Нечего чистить.");
+    return;
   }
+
+  for (const row of toRemove) {
+    await cleanupSession(row.id);
+  }
+
+  const names = toRemove.filter((r) => !r.name.startsWith("cli-")).map((r) => r.name);
+  const cliCount = toRemove.filter((r) => r.name.startsWith("cli-")).length;
+  const parts: string[] = [];
+  if (names.length > 0) parts.push(names.join(", "));
+  if (cliCount > 0) parts.push(`${cliCount} unnamed`);
+
+  await ctx.reply(`Очищено ${toRemove.length}: ${parts.join(", ")}`);
 }
 
 async function handleSummarize(ctx: Context): Promise<void> {
