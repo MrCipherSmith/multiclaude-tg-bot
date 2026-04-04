@@ -7,3 +7,4 @@ dist/
 bun.lock
 *.log
 .claude/
+downloads

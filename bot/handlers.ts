@@ -7,7 +7,7 @@ import { streamToTelegram } from "./streaming.ts";
 import { routeMessage } from "../sessions/router.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { sendNotificationToSession } from "../mcp/bridge.ts";
-import { downloadFile } from "../utils/files.ts";
+import { downloadFile, toHostPath } from "../utils/files.ts";
 import { startTyping, type TypingHandle } from "../utils/typing.ts";
 import { transcribe } from "../utils/transcribe.ts";
 import { touchIdleTimer, checkOverflow, forceSummarize } from "../memory/summarizer.ts";
@@ -567,9 +567,10 @@ async function handleMedia(
     return;
   }
 
+  const hostPath = toHostPath(filePath);
   const text = caption
-    ? `${description}: ${caption}\n[file: ${filePath}]`
-    : `${description}\n[file: ${filePath}]`;
+    ? `${description}: ${caption}\n[file: ${hostPath}]`
+    : `${description}\n[file: ${hostPath}]`;
 
   if (route.mode === "cli") {
     await addMessage({

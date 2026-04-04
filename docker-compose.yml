@@ -9,10 +9,12 @@ services:
       # Override for Docker-internal networking
       DATABASE_URL: postgres://claude_bot:${POSTGRES_PASSWORD:-claude_bot_secret}@postgres:5432/claude_bot
       OLLAMA_URL: http://host.docker.internal:11434
+      DOWNLOADS_DIR: /app/downloads
+      HOST_DOWNLOADS_DIR: /home/altsay/bots/claude-bot/downloads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - downloads:/app/downloads
+      - /home/altsay/bots/claude-bot/downloads:/app/downloads
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:${PORT:-3847}/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 15s
@@ -61,7 +63,6 @@ services:
 
 volumes:
   pgdata:
-  downloads:
 
 networks:
   claude-bot:
