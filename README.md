@@ -365,8 +365,9 @@ Now Telegram messages routed to this session will appear as prompts in Claude Co
 | `/memories` | List recent memories |
 | `/forget [id]` | Delete a memory |
 | `/clear` | Clear current session context |
+| `/remove <id>` | Delete a session and all its data |
 | `/summarize` | Force conversation summarization to long-term memory |
-| `/cleanup` | Remove stale sessions |
+| `/cleanup` | Remove disconnected, unnamed, and orphaned sessions |
 | `/status` | Bot status (DB, Ollama, counts) |
 | `/stats` | Statistics: API usage, tokens, transcriptions, per session |
 | `/logs [id]` | Request logs for current or specified session |
