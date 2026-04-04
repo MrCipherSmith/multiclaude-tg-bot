@@ -499,11 +499,29 @@ async function sendStatusMessage(chatId: string, stage: string): Promise<string 
 
   const prefix = await getSessionPrefix(chatId);
 
-  // If status already exists, just update the stage
+  // If status already exists, check if it needs to be re-sent (pushed up by other messages)
   const existing = activeStatus.get(chatId);
   if (existing) {
-    existing.stage = `${prefix}${stage}`;
-    return editStatusMessage(existing);
+    // If stage changed significantly, delete old and send new (stays at bottom)
+    if (existing.stage !== `${prefix}${stage}`) {
+      // Delete old status silently
+      try {
+        await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: Number(chatId), message_id: existing.messageId }),
+        });
+      } catch {}
+
+      // Clear timer but keep startedAt for elapsed time
+      if (existing.timer) clearInterval(existing.timer);
+      activeStatus.delete(chatId);
+
+      // Fall through to create new message at bottom
+    } else {
+      // Same stage — just update elapsed time in place
+      return editStatusMessage(existing);
+    }
   }
 
   try {
@@ -519,11 +537,13 @@ async function sendStatusMessage(chatId: string, stage: string): Promise<string 
     }
 
     const data = (await res.json()) as any;
+    // Preserve original startedAt if re-creating (status was moved to bottom)
+    const prevStartedAt = existing?.startedAt;
     const state: StatusState = {
       chatId,
       messageId: data.result?.message_id,
-      startedAt: Date.now(),
-      stage,
+      startedAt: prevStartedAt ?? Date.now(),
+      stage: `${prefix}${stage}`,
       timer: null,
     };
 
