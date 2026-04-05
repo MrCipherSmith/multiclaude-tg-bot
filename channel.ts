@@ -102,6 +102,10 @@ async function markDisconnected(): Promise<void> {
       WHERE id = ${sessionId}
     `;
     process.stderr.write(`[channel] session #${sessionId} marked disconnected\n`);
+    if (hasPollingLock) {
+      await releasePollingLock();
+      process.stderr.write(`[channel] released polling lock\n`);
+    }
   } catch (err) {
     process.stderr.write(`[channel] failed to mark disconnected: ${err}\n`);
   }
@@ -697,6 +701,18 @@ function stopTypingForChat(chatId: string): void {
 
 // --- Message queue poller ---
 let polling = true;
+let hasPollingLock = false;
+
+async function acquirePollingLock(): Promise<boolean> {
+  if (sessionId === null) return false;
+  const result = await sql`SELECT pg_try_advisory_lock(${sessionId}) as locked`;
+  return result[0].locked;
+}
+
+async function releasePollingLock(): Promise<void> {
+  if (sessionId === null) return;
+  await sql`SELECT pg_advisory_unlock(${sessionId})`.catch(() => {});
+}
 
 async function pollMessages() {
   while (polling) {
@@ -704,6 +720,18 @@ async function pollMessages() {
       if (sessionId === null) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
         continue;
+      }
+
+      // Try to acquire polling lock — only one channel.ts per session can poll
+      if (!hasPollingLock) {
+        hasPollingLock = await acquirePollingLock();
+        if (hasPollingLock) {
+          process.stderr.write(`[channel] acquired polling lock for session #${sessionId}\n`);
+        } else {
+          // Another channel.ts is polling this session — wait and retry
+          await new Promise((r) => setTimeout(r, 5000));
+          continue;
+        }
       }
 
       const rows = await sql`
