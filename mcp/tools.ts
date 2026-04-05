@@ -175,20 +175,40 @@ export async function executeTool(
   switch (name) {
     // Memory tools
     case "remember": {
+      // Resolve project_path from session
+      let projectPath: string | null = null;
+      if (clientId) {
+        const sid = sessionManager.getSessionIdByClient(clientId);
+        if (sid !== undefined) {
+          const sess = await sessionManager.get(sid);
+          projectPath = sess?.projectPath ?? null;
+        }
+      }
       const m = await remember({
         content: args.content as string,
         type: (args.type as Memory["type"]) ?? "note",
         tags: (args.tags as string[]) ?? [],
         source: (args.source as Memory["source"]) ?? "cli",
+        projectPath,
       });
       return text(`Saved memory #${m.id}: "${m.content.slice(0, 80)}..."`);
     }
 
     case "recall": {
+      // Resolve project_path from session
+      let projectPath: string | null = null;
+      if (clientId) {
+        const sid = sessionManager.getSessionIdByClient(clientId);
+        if (sid !== undefined) {
+          const sess = await sessionManager.get(sid);
+          projectPath = sess?.projectPath ?? null;
+        }
+      }
       const results = await recall(args.query as string, {
         limit: (args.limit as number) ?? 5,
         type: args.type as string | undefined,
         tags: args.tags as string[] | undefined,
+        projectPath,
       });
       if (results.length === 0) return text("No relevant memories found.");
       const formatted = results
@@ -207,11 +227,21 @@ export async function executeTool(
     }
 
     case "list_memories": {
+      // Resolve project_path from session
+      let projectPath: string | null = null;
+      if (clientId) {
+        const sid = sessionManager.getSessionIdByClient(clientId);
+        if (sid !== undefined) {
+          const sess = await sessionManager.get(sid);
+          projectPath = sess?.projectPath ?? null;
+        }
+      }
       const mems = await listMemories({
         type: args.type as string | undefined,
         tags: args.tags as string[] | undefined,
         limit: (args.limit as number) ?? 20,
         offset: (args.offset as number) ?? 0,
+        projectPath,
       });
       if (mems.length === 0) return text("No memories found.");
       const formatted = mems

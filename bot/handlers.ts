@@ -269,36 +269,40 @@ async function handleRemember(ctx: Context): Promise<void> {
     pendingInput.set(chatId, async (replyCtx) => {
       const input = replyCtx.message?.text?.trim();
       if (!input) return;
-      const m = await remember({ source: "telegram", sessionId: activeSessionId, chatId, type: "note", content: input });
       const session = await sessionManager.get(activeSessionId);
+      const m = await remember({ source: "telegram", sessionId: activeSessionId, projectPath: session?.projectPath, chatId, type: "note", content: input });
       await replyCtx.reply(`Запомнил (#${m.id}, ${session?.name ?? "global"}): ${input.slice(0, 100)}${input.length > 100 ? "..." : ""}`);
     });
     return;
   }
 
+  const session = await sessionManager.get(activeSessionId);
   const m = await remember({
     source: "telegram",
     sessionId: activeSessionId,
+    projectPath: session?.projectPath,
     chatId,
     type: "note",
     content,
   });
 
-  const session = await sessionManager.get(activeSessionId);
   await ctx.reply(`Запомнил (#${m.id}, ${session?.name ?? "global"}): ${content.slice(0, 100)}${content.length > 100 ? "..." : ""}`);
 }
 
 async function handleRecall(ctx: Context): Promise<void> {
   const text = ctx.message?.text ?? "";
   const query = text.replace(/^\/recall\s*/, "").trim();
+  const chatId = String(ctx.chat!.id);
+  const activeSessionId = await sessionManager.getActiveSession(chatId);
+  const session = await sessionManager.get(activeSessionId);
+  const projectPath = session?.projectPath ?? null;
 
   if (!query) {
     await ctx.reply("Что искать?");
-    const chatId = String(ctx.chat!.id);
     pendingInput.set(chatId, async (replyCtx) => {
       const input = replyCtx.message?.text?.trim();
       if (!input) return;
-      const results = await recall(input, { limit: 5 });
+      const results = await recall(input, { limit: 5, projectPath });
       if (results.length === 0) { await replyCtx.reply("Ничего не найдено."); return; }
       const lines = results.map((r) => `#${r.id} [${r.type}] ${r.content.slice(0, 120)}${r.content.length > 120 ? "..." : ""}`);
       await replyCtx.reply("Найдено:\n\n" + lines.join("\n\n"));
@@ -306,7 +310,7 @@ async function handleRecall(ctx: Context): Promise<void> {
     return;
   }
 
-  const results = await recall(query, { limit: 5 });
+  const results = await recall(query, { limit: 5, projectPath });
 
   if (results.length === 0) {
     await ctx.reply("Ничего не найдено.");
@@ -324,7 +328,9 @@ async function handleRecall(ctx: Context): Promise<void> {
 async function handleMemories(ctx: Context): Promise<void> {
   const chatId = String(ctx.chat!.id);
   const activeSessionId = await sessionManager.getActiveSession(chatId);
-  const mems = await listMemories({ sessionId: activeSessionId, limit: 10 });
+  const session = await sessionManager.get(activeSessionId);
+  const projectPath = session?.projectPath ?? null;
+  const mems = await listMemories({ projectPath, limit: 10 });
 
   if (mems.length === 0) {
     // Also check global memories
@@ -340,7 +346,6 @@ async function handleMemories(ctx: Context): Promise<void> {
     return;
   }
 
-  const session = await sessionManager.get(activeSessionId);
   const lines = mems.map(
     (m) => `#${m.id} [${m.type}] ${m.content.slice(0, 80)}${m.content.length > 80 ? "..." : ""}`,
   );
@@ -455,9 +460,10 @@ async function handleCleanup(ctx: Context): Promise<void> {
 async function handleSummarize(ctx: Context): Promise<void> {
   const chatId = String(ctx.chat!.id);
   const sessionId = await sessionManager.getActiveSession(chatId);
+  const session = await sessionManager.get(sessionId);
 
   await ctx.reply("Суммаризирую...");
-  const summary = await forceSummarize(sessionId, chatId);
+  const summary = await forceSummarize(sessionId, chatId, session?.projectPath);
 
   if (summary) {
     await ctx.reply(`Сохранено в долгосрочную память:\n\n${summary}`);
@@ -943,6 +949,7 @@ async function handleMedia(
   if (route.mode === "cli") {
     await addMessage({
       sessionId: route.sessionId,
+      projectPath: route.projectPath,
       chatId,
       role: "user",
       content: text,
@@ -969,6 +976,7 @@ async function handleMedia(
   // Save text description to DB (no base64)
   await addMessage({
     sessionId,
+    projectPath: route.projectPath,
     chatId,
     role: "user",
     content: text,
@@ -997,7 +1005,7 @@ async function handleMedia(
       const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
       appendLog(sessionId, chatId, "reply", `image reply sent ${response.length} chars`);
 
-      await addMessage({ sessionId, chatId, role: "assistant", content: response });
+      await addMessage({ sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
       return;
     } catch (err: any) {
       appendLog(sessionId, chatId, "llm", `image analysis failed: ${err?.message}`, "error");
@@ -1071,6 +1079,7 @@ async function handleVoice(ctx: Context): Promise<void> {
     if (route.mode === "cli") {
       await addMessage({
         sessionId: route.sessionId,
+        projectPath: route.projectPath,
         chatId,
         role: "user",
         content,
@@ -1085,10 +1094,11 @@ async function handleVoice(ctx: Context): Promise<void> {
         )
       `;
       appendLog(route.sessionId, chatId, "queue", "voice message queued for CLI");
-      touchIdleTimer(route.sessionId, chatId);
+      touchIdleTimer(route.sessionId, chatId, route.projectPath);
     } else if (route.mode === "standalone") {
       await addMessage({
         sessionId: route.sessionId,
+        projectPath: route.projectPath,
         chatId,
         role: "user",
         content,
@@ -1098,8 +1108,8 @@ async function handleVoice(ctx: Context): Promise<void> {
       appendLog(route.sessionId, chatId, "llm", "streaming voice response...");
       const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId: route.sessionId, chatId, operation: "chat" });
       appendLog(route.sessionId, chatId, "reply", `voice reply sent ${response.length} chars`);
-      await addMessage({ sessionId: route.sessionId, chatId, role: "assistant", content: response });
-      touchIdleTimer(route.sessionId, chatId);
+      await addMessage({ sessionId: route.sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
+      touchIdleTimer(route.sessionId, chatId, route.projectPath);
     } else {
       appendLog(route.sessionId, chatId, "voice", `no handler for mode=${route.mode}`, "warn");
     }
@@ -1188,6 +1198,7 @@ async function handleText(ctx: Context): Promise<void> {
     // Save message to short-term memory
     await addMessage({
       sessionId: route.sessionId,
+      projectPath: route.projectPath,
       chatId,
       role: "user",
       content: text,
@@ -1209,7 +1220,7 @@ async function handleText(ctx: Context): Promise<void> {
       )
     `;
     appendLog(route.sessionId, chatId, "queue", "message queued for CLI");
-    touchIdleTimer(route.sessionId, chatId);
+    touchIdleTimer(route.sessionId, chatId, route.projectPath);
     return;
   }
 
@@ -1224,6 +1235,7 @@ async function handleText(ctx: Context): Promise<void> {
   // Save user message
   await addMessage({
     sessionId,
+    projectPath: route.projectPath,
     chatId,
     role: "user",
     content: text,
@@ -1245,6 +1257,7 @@ async function handleText(ctx: Context): Promise<void> {
     // Save assistant response
     await addMessage({
       sessionId,
+      projectPath: route.projectPath,
       chatId,
       role: "assistant",
       content: response,
@@ -1255,8 +1268,8 @@ async function handleText(ctx: Context): Promise<void> {
   }
 
   // Touch idle timer and check overflow
-  touchIdleTimer(sessionId, chatId);
-  await checkOverflow(sessionId, chatId);
+  touchIdleTimer(sessionId, chatId, route.projectPath);
+  await checkOverflow(sessionId, chatId, route.projectPath);
 }
 
 // Bot reference set from bot.ts

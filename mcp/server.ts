@@ -9,6 +9,7 @@ import { registerMcpSession, unregisterMcpSession } from "./bridge.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { sql } from "../memory/db.ts";
+import { summarizeOnDisconnect } from "../memory/summarizer.ts";
 import { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
 
@@ -160,6 +161,34 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
       } catch (err: any) {
         res.writeHead(503, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ status: "error", db: "disconnected", error: err?.message }));
+      }
+      return;
+    }
+
+    // API: trigger summarization for a session
+    if (url.pathname === "/api/summarize" && req.method === "POST") {
+      try {
+        const body = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          req.on("data", (chunk) => (data += chunk));
+          req.on("end", () => resolve(data));
+          req.on("error", reject);
+        });
+        const { session_id, project_path } = JSON.parse(body);
+        if (!session_id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "session_id required" }));
+          return;
+        }
+        // Run summarization in background
+        summarizeOnDisconnect(session_id, project_path).catch((err) =>
+          console.error("[api] summarize failed:", err)
+        );
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err?.message }));
       }
       return;
     }

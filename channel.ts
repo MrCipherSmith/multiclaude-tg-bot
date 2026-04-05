@@ -55,6 +55,7 @@ function escapeHtml(s: string): string {
 
 // Detect project name from cwd
 const projectName = basename(process.cwd());
+const projectPath = process.cwd();
 let sessionId: number | null = null;
 
 // --- Embedding helper ---
@@ -117,9 +118,37 @@ async function resolveSession(): Promise<number> {
   return sessionId;
 }
 
+// --- Idle timer for summarization ---
+const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS ?? 900_000); // 15 min
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function touchIdleTimer(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(async () => {
+    idleTimer = null;
+    await triggerSummarize();
+  }, IDLE_TIMEOUT_MS);
+}
+
+async function triggerSummarize(): Promise<void> {
+  if (sessionId === null) return;
+  try {
+    process.stderr.write(`[channel] triggering summarization for session #${sessionId}\n`);
+    await fetch(`${BOT_API_URL}/api/summarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: sessionId, project_path: projectPath }),
+    });
+  } catch (err) {
+    process.stderr.write(`[channel] summarize request failed: ${err}\n`);
+  }
+}
+
 // --- Graceful disconnect ---
 async function markDisconnected(): Promise<void> {
   if (sessionId === null) return;
+  // Summarize before disconnect so context is preserved
+  await triggerSummarize();
   try {
     await sql`
       UPDATE sessions SET status = 'disconnected', last_active = now()
@@ -535,10 +564,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       // Save assistant response to short-term memory
       if (sessionId) {
         await sql`
-          INSERT INTO messages (session_id, chat_id, role, content)
-          VALUES (${sessionId}, ${String(args!.chat_id)}, 'assistant', ${String(args!.text)})
+          INSERT INTO messages (session_id, project_path, chat_id, role, content)
+          VALUES (${sessionId}, ${projectPath}, ${String(args!.chat_id)}, 'assistant', ${String(args!.text)})
         `;
       }
+      touchIdleTimer();
       return text(`Sent to chat ${args!.chat_id}`);
     }
 
@@ -547,8 +577,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const embedding = await embed(content);
       const embeddingStr = `[${embedding.join(",")}]`;
       const [row] = await sql`
-        INSERT INTO memories (source, session_id, type, content, tags, embedding)
-        VALUES ('cli', ${sessionId}, ${String(args!.type ?? "note")}, ${content}, ${(args!.tags as string[]) ?? []}, ${embeddingStr}::vector)
+        INSERT INTO memories (source, session_id, project_path, type, content, tags, embedding)
+        VALUES ('cli', ${sessionId}, ${projectPath}, ${String(args!.type ?? "note")}, ${content}, ${(args!.tags as string[]) ?? []}, ${embeddingStr}::vector)
         RETURNING id
       `;
       return text(`Saved memory #${row.id}`);
@@ -561,7 +591,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const rows = await sql`
         SELECT id, type, content, embedding <=> ${embStr}::vector AS distance
         FROM memories
-        WHERE session_id = ${sessionId} OR session_id IS NULL
+        WHERE project_path = ${projectPath} OR project_path IS NULL
         ORDER BY embedding <=> ${embStr}::vector
         LIMIT ${limit}
       `;
@@ -618,7 +648,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     case "list_memories": {
       const rows = await sql`
         SELECT id, type, content FROM memories
-        WHERE (session_id = ${sessionId} OR session_id IS NULL)
+        WHERE (project_path = ${projectPath} OR project_path IS NULL)
           ${args!.type ? sql`AND type = ${String(args!.type)}` : sql``}
         ORDER BY created_at DESC
         LIMIT ${Number(args!.limit ?? 20)}
@@ -925,6 +955,7 @@ async function pollMessages() {
           },
         });
         process.stderr.write(`[channel] delivered message from ${row.from_user}: ${row.content.slice(0, 50)}\n`);
+        touchIdleTimer();
       }
     } catch (err) {
       process.stderr.write(`[channel] poll error: ${err}\n`);
@@ -952,6 +983,7 @@ async function main() {
     if (shuttingDown) return;
     shuttingDown = true;
     polling = false;
+    if (idleTimer) clearTimeout(idleTimer);
     await markDisconnected();
     await sql.end();
     process.exit(0);

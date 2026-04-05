@@ -91,6 +91,25 @@ export async function migrate() {
     ON memories USING hnsw (embedding vector_cosine_ops)
   `;
 
+  // --- Incremental migrations ---
+
+  // Add project_path to memories (long-term memory scoped by project, not session)
+  await sql`
+    ALTER TABLE memories ADD COLUMN IF NOT EXISTS project_path TEXT
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_memories_project_path ON memories(project_path)
+  `;
+
+  // Add project_path to messages (allows cross-session history per project)
+  await sql`
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS project_path TEXT
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_messages_project_path
+    ON messages(project_path, chat_id, created_at)
+  `;
+
   // Message queue for stdio channel adapters
   await sql`
     CREATE TABLE IF NOT EXISTS message_queue (
