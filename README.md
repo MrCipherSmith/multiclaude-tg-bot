@@ -588,6 +588,11 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 - [ ] Multi-user support with separate session namespaces
 - [ ] Inline mode — respond in any Telegram chat via @bot
 
+## Guides
+
+- [Cloudflare Tunnel Setup](guides/cloudflare-tunnel-setup.md) — domain purchase, tunnel configuration, and webhook activation
+- [Usage Patterns](examples/usage-patterns.md) — status updates, sub-agent progress trees, file diffs, memory integration
+
 ## Contributing
 
 Contributions are welcome! Please:
