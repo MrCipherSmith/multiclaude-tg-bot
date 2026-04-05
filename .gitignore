@@ -8,3 +8,4 @@ bun.lock
 *.log
 .claude/
 downloads
+tmux-projects.json

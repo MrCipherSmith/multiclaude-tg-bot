@@ -9,12 +9,13 @@
 
 Connect multiple Claude Code CLI instances to a single Telegram bot. Switch between projects, send voice messages, approve CLI permissions, and see what Claude is doing — all from your phone.
 
-## Quick Start in 30 Seconds
+## Quick Start
 
 ```bash
-git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git
-cd multiclaude-tg-bot && bun install && bun cli.ts setup
+curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
 ```
+
+The installer checks prerequisites, clones the repo, installs dependencies, sets up the `claude-bot` CLI, and launches the setup wizard.
 
 Then connect any project:
 ```bash
@@ -145,16 +146,148 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 **Session switching while CLI is working:**
 Background sessions prefix messages with `[session-name]` so you can distinguish sources.
 
-## Quick Start
+## Installation
+
+### One-Line Install
 
 ```bash
-git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git
-cd multiclaude-tg-bot
-bun install
-bun cli.ts setup
+curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
 ```
 
-The interactive wizard configures everything: Telegram token, LLM provider, Docker services, MCP registration, CLAUDE.md.
+This will check prerequisites, clone the repo to `~/bots/claude-bot`, install dependencies, set up the `claude-bot` CLI globally, and launch the setup wizard.
+
+Custom install directory:
+```bash
+CLAUDE_BOT_DIR=~/my-bot curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
+```
+
+### Manual Install
+
+```bash
+git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git ~/bots/claude-bot
+cd ~/bots/claude-bot
+bun install
+ln -sf ~/bots/claude-bot/cli.ts ~/.local/bin/claude-bot
+claude-bot setup
+```
+
+### Prerequisites
+
+| Dependency | Required | Install |
+|---|---|---|
+| **Bun** | Yes | `curl -fsSL https://bun.sh/install \| bash` |
+| **Docker** | Yes | [docs.docker.com/engine/install](https://docs.docker.com/engine/install/) |
+| **Git** | Yes | `apt install git` / `brew install git` |
+| **Claude Code** | For CLI sessions | `npm install -g @anthropic-ai/claude-code` |
+| **Ollama** | For embeddings | [ollama.com/download](https://ollama.com/download) |
+
+<details>
+<summary><strong>Ubuntu / Debian</strong></summary>
+
+```bash
+# Bun
+curl -fsSL https://bun.sh/install | bash
+
+# Docker
+sudo apt update && sudo apt install -y docker.io docker-compose-plugin
+sudo usermod -aG docker $USER && newgrp docker
+
+# Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nomic-embed-text
+
+# Claude Code (optional)
+npm install -g @anthropic-ai/claude-code
+```
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+```bash
+# Bun
+curl -fsSL https://bun.sh/install | bash
+
+# Docker
+brew install --cask docker   # Docker Desktop
+
+# Ollama
+brew install ollama
+ollama pull nomic-embed-text
+
+# Claude Code (optional)
+npm install -g @anthropic-ai/claude-code
+```
+
+</details>
+
+<details>
+<summary><strong>Arch Linux</strong></summary>
+
+```bash
+sudo pacman -S bun docker docker-compose git
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER && newgrp docker
+
+# Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull nomic-embed-text
+```
+
+</details>
+
+### Setup Wizard
+
+Run `claude-bot setup` (or the installer runs it automatically). The wizard asks:
+
+```
+Deployment type:
+❯ 1. Docker (recommended — PostgreSQL included)
+  2. Manual (PostgreSQL + Ollama already installed)
+```
+
+Choose **Docker** unless you already have PostgreSQL running.
+
+```
+Telegram Bot Token (from @BotFather): 7123456789:AAF...
+```
+
+Create a bot via [@BotFather](https://t.me/BotFather) in Telegram: `/newbot` → pick a name → copy the token.
+
+```
+Your Telegram User ID: 123456789
+```
+
+Get your ID from [@userinfobot](https://t.me/userinfobot): send `/start` → it replies with your numeric ID.
+
+```
+LLM Provider for standalone mode:
+❯ 1. Anthropic (best quality, requires API key)
+  2. OpenRouter (free models available)
+  3. Ollama (local, free)
+```
+
+This is for **standalone mode** (when no CLI session is active). Choose **OpenRouter** for free or **Ollama** for fully local.
+
+```
+Groq API Key for voice (Enter to skip, free at console.groq.com):
+```
+
+Optional. Enables fast voice transcription (~200ms). Get a free key at [console.groq.com](https://console.groq.com). Skip if you don't need voice messages.
+
+```
+PostgreSQL password [claude_bot_secret]:
+Bot port [3847]:
+```
+
+Press Enter to accept defaults. The wizard then:
+1. Creates `.env` with all settings
+2. Installs dependencies
+3. Starts Docker containers (PostgreSQL + bot)
+4. Runs database migrations
+5. Registers MCP servers in Claude Code
+6. Sets up global `CLAUDE.md`
 
 ### Connect a Project
 
@@ -165,25 +298,53 @@ claude-bot connect . --tmux
 
 The session appears in Telegram `/sessions`. Send messages, voice, photos — Claude CLI processes them.
 
-### CLI Commands
+> **Tip:** Use `--tmux` (or `-t`) for full Telegram progress monitoring. Without it, you won't see real-time status updates.
+
+### Multi-Project Setup
+
+Manage multiple projects with built-in tmux orchestration:
 
 ```bash
-claude-bot status             # Bot health, uptime, docker status
-claude-bot sessions           # List active sessions
-claude-bot logs               # Follow bot logs
-claude-bot start / stop       # Docker compose up/down
-claude-bot restart            # Rebuild and restart
-claude-bot backup             # Database backup
-claude-bot prune              # Remove stale sessions (interactive)
-claude-bot cleanup            # Clean old queue, logs, stats
-claude-bot connect [dir] -t   # Start CLI in tmux (recommended)
-claude-bot remote             # Connect laptop to remote server
-claude-bot mcp-register       # Re-register MCP servers
+claude-bot add ~/project-a        # Add projects
+claude-bot add ~/project-b
+claude-bot ps                     # List configured projects
+claude-bot up                     # Start all in tmux
+claude-bot up -a                  # Start + attach
+claude-bot down                   # Stop all + clean DB
+claude-bot remove project-b       # Remove from config
 ```
 
-Install the `claude-bot` command:
-```bash
-ln -sf /path/to/multiclaude-tg-bot/claude-bot ~/.local/bin/claude-bot
+Inside tmux: `Ctrl+B, N/P` — next/prev project, `Ctrl+B, W` — list all.
+
+### CLI Commands
+
+```
+Setup:
+  claude-bot setup              Interactive installation wizard
+  claude-bot remote             Connect laptop to remote server
+  claude-bot mcp-register       Re-register MCP servers
+
+Manage:
+  claude-bot start / stop       Docker compose up/down
+  claude-bot restart            Rebuild and restart bot
+  claude-bot status             Bot health, uptime, docker status
+  claude-bot logs               Follow bot logs
+
+Data:
+  claude-bot sessions           List active sessions
+  claude-bot prune              Remove stale sessions (interactive)
+  claude-bot backup             Database backup
+  claude-bot cleanup            Clean old queue, logs, stats
+
+Tmux:
+  claude-bot up [-a]            Start all projects in tmux
+  claude-bot down               Stop all tmux sessions + clean DB
+  claude-bot ps                 List configured projects
+  claude-bot add [dir]          Add project to config
+  claude-bot remove <name>      Remove project from config
+
+Connect:
+  claude-bot connect [dir] -t   Start single CLI session in tmux
 ```
 
 ## Telegram Commands

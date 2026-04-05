@@ -476,6 +476,152 @@ async function prune() {
   console.log(`\n  ${c.green(`Removed ${staleIds.length} sessions.`)}`);
 }
 
+// --- Tmux management ---
+
+const TMUX_SESSION = "claude";
+const TMUX_PROJECTS_FILE = `${BOT_DIR}/tmux-projects.json`;
+
+async function loadProjects(): Promise<{ name: string; path: string }[]> {
+  if (existsSync(TMUX_PROJECTS_FILE)) {
+    return JSON.parse(await Bun.file(TMUX_PROJECTS_FILE).text());
+  }
+  return [];
+}
+
+async function saveProjects(projects: { name: string; path: string }[]) {
+  await Bun.write(TMUX_PROJECTS_FILE, JSON.stringify(projects, null, 2) + "\n");
+}
+
+async function tmuxStart() {
+  const exists = await run(["tmux", "has-session", "-t", TMUX_SESSION], { silent: true });
+  if (exists.ok) {
+    console.log(`\n  ${c.yellow(`Session '${TMUX_SESSION}' already running.`)}`);
+    console.log(`  Attach: ${c.cyan(`tmux attach -t ${TMUX_SESSION}`)}`);
+    return;
+  }
+
+  let projects = await loadProjects();
+
+  if (projects.length === 0) {
+    console.log(`\n  ${c.yellow("No projects configured.")}`);
+    console.log(`  Add projects first:\n`);
+    console.log(`    ${c.cyan("claude-bot add /path/to/project")}`);
+    console.log(`    ${c.cyan("claude-bot add .")} ${c.dim("(current directory)")}\n`);
+    return;
+  }
+
+  console.log(`\n  ${c.bold("Starting tmux session")} ${c.cyan(TMUX_SESSION)}\n`);
+
+  let first = true;
+  for (const p of projects) {
+    if (!existsSync(p.path)) {
+      console.log(`  ${c.yellow("SKIP")} ${p.name} — ${p.path} not found`);
+      continue;
+    }
+
+    if (first) {
+      await run(["tmux", "new-session", "-d", "-s", TMUX_SESSION, "-n", p.name, "-c", p.path]);
+      first = false;
+    } else {
+      await run(["tmux", "new-window", "-t", TMUX_SESSION, "-n", p.name, "-c", p.path]);
+    }
+
+    await run(["tmux", "send-keys", "-t", `${TMUX_SESSION}:${p.name}`,
+      `${BOT_DIR}/scripts/run-cli.sh ${p.path}`, "Enter"]);
+    console.log(`  ${c.green("✓")} ${p.name} (${p.path})`);
+  }
+
+  console.log(`\n  ${c.green("Done!")} Attach: ${c.cyan(`tmux attach -t ${TMUX_SESSION}`)}`);
+  console.log(`  Navigate: ${c.dim("Ctrl+B,N (next) / Ctrl+B,P (prev) / Ctrl+B,W (list)")}`);
+
+  if (process.argv.includes("--attach") || process.argv.includes("-a")) {
+    const proc = Bun.spawn(["tmux", "attach", "-t", TMUX_SESSION], {
+      stdout: "inherit", stderr: "inherit", stdin: "inherit",
+    });
+    await proc.exited;
+  }
+}
+
+async function tmuxStop() {
+  step("Killing tmux sessions");
+  await run(["tmux", "kill-server"], { silent: true });
+  done();
+
+  step("Cleaning DB sessions");
+  await run([
+    "docker", "compose", "exec", "-T", "postgres",
+    "psql", "-U", "claude_bot", "-d", "claude_bot", "-c",
+    "UPDATE sessions SET status = 'disconnected' WHERE id != 0 AND status = 'active'; DELETE FROM sessions WHERE name LIKE 'cli-%';",
+  ], { silent: true });
+  done();
+
+  console.log(`\n  ${c.green("All sessions stopped and DB cleaned.")}`);
+  console.log(`  Restart: ${c.cyan("claude-bot up")}`);
+}
+
+async function tmuxAdd(dir?: string) {
+  const projectDir = resolve(dir ?? ".");
+  if (!existsSync(projectDir)) {
+    console.log(c.red(`  Directory not found: ${projectDir}`));
+    return;
+  }
+
+  const name = basename(projectDir);
+  const projects = await loadProjects();
+
+  if (projects.some(p => p.path === projectDir)) {
+    console.log(`  ${c.yellow(name)} already in project list.`);
+    return;
+  }
+
+  projects.push({ name, path: projectDir });
+  await saveProjects(projects);
+  console.log(`  ${c.green("Added:")} ${name} (${projectDir})`);
+  console.log(`  ${c.dim("Restart tmux to apply: claude-bot down && claude-bot up")}`);
+}
+
+async function tmuxRemove(name?: string) {
+  if (!name) {
+    console.log(c.red("  Usage: claude-bot remove <project-name>"));
+    return;
+  }
+
+  const projects = await loadProjects();
+  const filtered = projects.filter(p => p.name !== name);
+
+  if (filtered.length === projects.length) {
+    console.log(`  ${c.yellow(name)} not found in project list.`);
+    return;
+  }
+
+  await saveProjects(filtered);
+  console.log(`  ${c.green("Removed:")} ${name}`);
+}
+
+async function tmuxList() {
+  const projects = await loadProjects();
+  console.log(`\n  ${c.bold("Projects")}`);
+  console.log(`  ${"─".repeat(50)}`);
+
+  // Check tmux status
+  const tmuxRunning = (await run(["tmux", "has-session", "-t", TMUX_SESSION], { silent: true })).ok;
+
+  for (const p of projects) {
+    const exists = existsSync(p.path);
+    let tmuxStatus = "";
+    if (tmuxRunning) {
+      const capture = await run(["tmux", "capture-pane", "-t", `${TMUX_SESSION}:${p.name}`, "-p"], { silent: true });
+      tmuxStatus = capture.ok ? c.green(" [running]") : c.dim(" [no window]");
+    }
+    const dirStatus = exists ? "" : c.red(" (dir missing)");
+    console.log(`  ${exists ? c.green("●") : c.red("●")} ${c.cyan(p.name)} — ${p.path}${dirStatus}${tmuxStatus}`);
+  }
+
+  if (!tmuxRunning) {
+    console.log(`\n  ${c.dim(`tmux not running. Start: claude-bot up`)}`);
+  }
+}
+
 async function connect(dir?: string) {
   const projectDir = resolve(dir ?? ".");
   if (!existsSync(projectDir)) {
@@ -709,9 +855,16 @@ function help() {
     backup          Run database backup
     cleanup         Clean old queue, logs, stats
 
+  ${c.bold("Tmux:")}
+    up [-a]         Start all projects in tmux (-a to attach)
+    down            Stop all tmux sessions + clean DB
+    ps              List configured projects and status
+    add [dir]       Add project to tmux config
+    remove <name>   Remove project from tmux config
+
   ${c.bold("Connect:")}
-    connect [dir]        Start CLI session (default: current dir)
-    connect [dir] --tmux Start in tmux (full Telegram progress monitoring)
+    connect [dir]        Start single CLI session (default: current dir)
+    connect [dir] --tmux Start in standalone tmux (not managed)
 `);
 }
 
@@ -733,5 +886,10 @@ switch (command) {
   case "cleanup":     await cleanup(); break;
   case "connect":     await connect(process.argv[3]); break;
   case "mcp-register": await mcpRegister(); break;
+  case "up":          await tmuxStart(); break;
+  case "down":        await tmuxStop(); break;
+  case "ps":          await tmuxList(); break;
+  case "add":         await tmuxAdd(process.argv[3]); break;
+  case "remove":      await tmuxRemove(process.argv[3]); break;
   default:            help(); break;
 }
