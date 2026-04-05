@@ -66,6 +66,7 @@ async function embed(text: string): Promise<number[]> {
 }
 
 // --- Session management ---
+const channelSource = process.env.CHANNEL_SOURCE ?? "cli"; // "tmux" from run-cli.sh, "cli" otherwise
 let sessionName = projectName;
 
 async function resolveSession(): Promise<number> {
@@ -84,21 +85,37 @@ async function resolveSession(): Promise<number> {
         UPDATE sessions SET status = 'active', last_active = now()
         WHERE id = ${sessionId}
       `;
-      process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName})\n`);
+      process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName}) [${channelSource}]\n`);
       return sessionId;
     }
 
-    // Lock taken — find next available name
-    const countResult = await sql`
-      SELECT count(*) as n FROM sessions WHERE name LIKE ${projectName + '-%'} AND id != 0
+    // Lock taken — create session with source prefix
+    sessionName = `${projectName} · ${channelSource}`;
+    // Check if this source-named session already exists
+    const existingSource = await sql`
+      SELECT id FROM sessions WHERE name = ${sessionName} AND id != 0 LIMIT 1
     `;
-    const n = Number(countResult[0].n) + 2;
-    sessionName = `${projectName}-${n}`;
+    if (existingSource.length > 0) {
+      const sourceLock = await sql`SELECT pg_try_advisory_lock(${existingSource[0].id}) as locked`;
+      if (sourceLock[0].locked) {
+        sessionId = existingSource[0].id;
+        hasPollingLock = true;
+        await sql`
+          UPDATE sessions SET status = 'active', last_active = now()
+          WHERE id = ${sessionId}
+        `;
+        process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName}) [${channelSource}]\n`);
+        return sessionId;
+      }
+      // Even source-named is taken — add counter
+      const n = Date.now() % 10000;
+      sessionName = `${projectName} · ${channelSource}-${n}`;
+    }
     process.stderr.write(`[channel] session "${projectName}" is busy, creating "${sessionName}"\n`);
   }
 
   // Create new session
-  const clientId = `channel-${sessionName}-${Date.now()}`;
+  const clientId = `channel-${projectName}-${channelSource}-${Date.now()}`;
   const [row] = await sql`
     INSERT INTO sessions (name, project_path, client_id, status)
     VALUES (${sessionName}, ${process.cwd()}, ${clientId}, 'active')

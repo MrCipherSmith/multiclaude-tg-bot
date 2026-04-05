@@ -17,7 +17,7 @@ echo "[run-cli] Log: $LOG_FILE"
 while true; do
   echo "[run-cli] Starting claude at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
 
-  claude --dangerously-load-development-channels server:claude-bot-channel
+  CHANNEL_SOURCE=tmux claude --dangerously-load-development-channels server:claude-bot-channel
   EXIT_CODE=$?
 
   echo "[run-cli] Exited with code $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
