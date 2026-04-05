@@ -16,6 +16,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { startTypingRaw, type TypingHandle } from "./utils/typing.ts";
 import { markdownToTelegramHtml } from "./bot/format.ts";
 import { startTmuxMonitor, type TmuxMonitorHandle } from "./utils/tmux-monitor.ts";
+import { startOutputMonitor, getOutputFilePath, type OutputMonitorHandle } from "./utils/output-monitor.ts";
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -538,7 +539,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const chatId = String(args!.chat_id);
       // Stop everything: typing, status, tmux monitor
       stopTypingForChat(chatId);
-      stopTmuxMonitorForChat(chatId);
+      stopProgressMonitorForChat(chatId);
       await deleteStatusMessage(chatId);
 
       const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -892,28 +893,36 @@ const activeTyping = new Map<string, TypingHandle>();
 
 const TYPING_TIMEOUT_MS = 30_000; // 30 seconds max
 
-// --- tmux monitor ---
-const activeTmuxMonitors = new Map<string, TmuxMonitorHandle>();
+// --- progress monitor (tmux → output file fallback) ---
+const activeMonitors = new Map<string, TmuxMonitorHandle | OutputMonitorHandle>();
 
-async function startTmuxMonitorForChat(chatId: string): Promise<void> {
-  // Stop existing monitor for this chat
-  stopTmuxMonitorForChat(chatId);
+async function startProgressMonitorForChat(chatId: string): Promise<void> {
+  stopProgressMonitorForChat(chatId);
 
-  const monitor = await startTmuxMonitor(projectName, (status) => {
-    updateStatus(chatId, status);
-  });
+  const onStatus = (status: string) => updateStatus(chatId, status);
 
+  // Try tmux first, fall back to output file monitor
+  let monitor = await startTmuxMonitor(projectName, onStatus);
   if (monitor) {
-    activeTmuxMonitors.set(chatId, monitor);
+    activeMonitors.set(chatId, monitor);
     process.stderr.write(`[channel] tmux monitor started for ${projectName}\n`);
+    return;
+  }
+
+  // Fallback: output file (written by run-cli.sh via `script`)
+  const outputFile = getOutputFilePath(projectName);
+  monitor = await startOutputMonitor(outputFile, onStatus);
+  if (monitor) {
+    activeMonitors.set(chatId, monitor);
+    process.stderr.write(`[channel] output monitor started: ${outputFile}\n`);
   }
 }
 
-function stopTmuxMonitorForChat(chatId: string): void {
-  const monitor = activeTmuxMonitors.get(chatId);
+function stopProgressMonitorForChat(chatId: string): void {
+  const monitor = activeMonitors.get(chatId);
   if (monitor) {
     monitor.stop();
-    activeTmuxMonitors.delete(chatId);
+    activeMonitors.delete(chatId);
   }
 }
 
@@ -982,7 +991,7 @@ async function pollMessages() {
         await sendStatusMessage(row.chat_id, "Думаю...");
 
         // Start tmux monitor for real-time progress
-        await startTmuxMonitorForChat(row.chat_id);
+        await startProgressMonitorForChat(row.chat_id);
 
         await mcp.notification({
           method: "notifications/claude/channel",
