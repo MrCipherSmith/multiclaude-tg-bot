@@ -44,7 +44,8 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Multi-Session MCP Server** — multiple Claude Code CLI instances connect via HTTP, each as a named session
 - **Session Switching** — `/switch` between CLI sessions and standalone mode, with context summary and last messages
 - **One Session Per Project** — reconnecting CLIs reuse existing sessions, preserving ID and memory
-- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications, with session lock retry and graceful shutdown on stdin close
+- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications, with session lock retry, advisory locking, and graceful shutdown on stdin close
+- **Auto-Named Sessions** — CLI sessions automatically named after the project directory, with source labels (tmux/cli)
 
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / OpenRouter / Ollama)
@@ -405,7 +406,7 @@ Tmux:
   claude-bot up [-a] [-s]       Start all projects in tmux (-s split panes)
   claude-bot down               Stop all tmux sessions + clean DB
   claude-bot ps                 List configured projects
-  claude-bot add [dir]          Add project to config
+  claude-bot add [dir] [--name]  Add project to config (custom name)
   claude-bot remove <name>      Remove project from config
 
 Connect:
