@@ -356,9 +356,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       // If not active, prefix with session name so user knows the source
       let replyText = String(args!.text);
-      if (!isActive && sessionId) {
+      const isBackground = !isActive && sessionId;
+      if (isBackground) {
         const sessionName = projectName || `#${sessionId}`;
-        replyText = `[${sessionName}]\n${replyText}`;
+        replyText = `📌 **${sessionName}**\n\n${replyText}\n\n_/switch ${sessionId} — переключиться_`;
         process.stderr.write(`[channel] reply from background session ${sessionName}\n`);
       }
 
@@ -505,7 +506,7 @@ async function getSessionPrefix(chatId: string): Promise<string> {
     SELECT active_session_id FROM chat_sessions WHERE chat_id = ${chatId}
   `;
   const isActive = activeCheck.length === 0 || activeCheck[0].active_session_id === sessionId;
-  return isActive ? "" : `[${projectName}] `;
+  return isActive ? "" : `📌 ${projectName} · `;
 }
 
 async function sendStatusMessage(chatId: string, stage: string): Promise<string | null> {
@@ -538,7 +539,8 @@ async function sendStatusMessage(chatId: string, stage: string): Promise<string 
       // Fall through to create new message at bottom
     } else {
       // Same stage — just update elapsed time in place
-      return editStatusMessage(existing);
+      await editStatusMessage(existing);
+      return null;
     }
   }
 
