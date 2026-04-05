@@ -165,16 +165,21 @@ mcp.setNotificationHandler(
     try {
       input = JSON.parse(previewStr);
     } catch {
-      // Truncated JSON — extract file_path and other fields with regex
+      // Truncated JSON — extract fields with regex
       const fileMatch = previewStr.match(/"file_path"\s*:\s*"([^"]+)"/);
       const cmdMatch = previewStr.match(/"command"\s*:\s*"([^"]+)"/);
       const patternMatch = previewStr.match(/"pattern"\s*:\s*"([^"]+)"/);
       if (fileMatch) input.file_path = fileMatch[1];
       if (cmdMatch) input.command = cmdMatch[1];
       if (patternMatch) input.pattern = patternMatch[1];
-      if (Object.keys(input).length === 0 && previewStr.length > 2) {
-        input._raw = previewStr;
-      }
+      // Extract old_string/new_string — they sit between known JSON keys
+      const oldMatch = previewStr.match(/"old_string"\s*:\s*"([\s\S]*?)(?:","new_string"|"$)/);
+      const newMatch = previewStr.match(/"new_string"\s*:\s*"([\s\S]*?)(?:","replace_all"|","file_path"|"$|\s*\}?\s*$)/);
+      if (oldMatch) input.old_string = oldMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      if (newMatch) input.new_string = newMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      // Extract content for Write
+      const contentMatch = previewStr.match(/"content"\s*:\s*"([\s\S]*?)(?:"$|\s*\}?\s*$)/);
+      if (contentMatch) input.content = contentMatch[1].replace(/\\n/g, "\n").replace(/\\"/g, '"');
     }
 
     process.stderr.write(`[channel] permission: ${tool_name} input=${JSON.stringify(input).slice(0, 200)} raw_keys=${Object.keys(params).join(",")}\n`);
@@ -244,13 +249,8 @@ mcp.setNotificationHandler(
         previewContent = String(input.content).slice(0, 3000);
       } else if (tool_name === "Bash" && input.command && input.command.length > 80) {
         previewContent = input.command.slice(0, 3000);
-      } else {
-        // Show raw input_preview — even if truncated, it gives context
-        const cleanPreview = previewStr.replace(/^\{/, "").replace(/\}$/, "").trim();
-        if (cleanPreview.length > 20) {
-          previewContent = cleanPreview.slice(0, 3000);
-        }
       }
+      // No raw JSON fallback — only show structured previews
     }
 
     // Update status message with what CLI is doing
@@ -286,16 +286,17 @@ mcp.setNotificationHandler(
 
     // Send inline keyboard to Telegram (3 buttons: Allow / Always / Deny)
     // If preview was already sent as separate message, don't duplicate diff in permission message
-    const msgText = (descDiff && !previewContent)
-      ? `🔐 Разрешить?\n\n${escapeHtml(descMain)}\n\n<pre>${escapeHtml(descDiff)}</pre>`
-      : `🔐 Разрешить?\n\n${descMain}`;
+    const showDiffInline = descDiff && !previewContent;
+    const msgText = showDiffInline
+      ? `🔐 Разрешить?\n\n${escapeHtml(descMain)}\n\n<pre><code class="language-diff">${escapeHtml(descDiff)}</code></pre>`
+      : `🔐 Разрешить?\n\n${escapeHtml(descMain)}`;
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: Number(chatId),
         text: msgText,
-        ...(descDiff ? { parse_mode: "HTML" } : {}),
+        parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
             { text: "✅ Да", callback_data: `perm:allow:${request_id}` },
