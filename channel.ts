@@ -66,30 +66,49 @@ async function embed(text: string): Promise<number[]> {
 }
 
 // --- Session management ---
+let sessionName = projectName;
+
 async function resolveSession(): Promise<number> {
   // Try to find existing named session for this project
   const existing = await sql`
     SELECT id FROM sessions WHERE name = ${projectName} AND id != 0 LIMIT 1
   `;
   if (existing.length > 0) {
-    sessionId = existing[0].id;
-    await sql`
-      UPDATE sessions SET status = 'active', last_active = now()
-      WHERE id = ${sessionId}
+    // Try to lock — if another channel.ts already has it, create a new session
+    const lockResult = await sql`SELECT pg_try_advisory_lock(${existing[0].id}) as locked`;
+    if (lockResult[0].locked) {
+      // Got the lock — attach to existing session
+      sessionId = existing[0].id;
+      hasPollingLock = true;
+      await sql`
+        UPDATE sessions SET status = 'active', last_active = now()
+        WHERE id = ${sessionId}
+      `;
+      process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName})\n`);
+      return sessionId;
+    }
+
+    // Lock taken — find next available name
+    const countResult = await sql`
+      SELECT count(*) as n FROM sessions WHERE name LIKE ${projectName + '-%'} AND id != 0
     `;
-    process.stderr.write(`[channel] attached to session #${sessionId} (${projectName})\n`);
-    return sessionId;
+    const n = Number(countResult[0].n) + 2;
+    sessionName = `${projectName}-${n}`;
+    process.stderr.write(`[channel] session "${projectName}" is busy, creating "${sessionName}"\n`);
   }
 
   // Create new session
+  const clientId = `channel-${sessionName}-${Date.now()}`;
   const [row] = await sql`
     INSERT INTO sessions (name, project_path, client_id, status)
-    VALUES (${projectName}, ${process.cwd()}, ${"channel-" + projectName}, 'active')
-    ON CONFLICT (client_id) DO UPDATE SET status = 'active', last_active = now()
+    VALUES (${sessionName}, ${process.cwd()}, ${clientId}, 'active')
     RETURNING id
   `;
   sessionId = row.id;
-  process.stderr.write(`[channel] created session #${sessionId} (${projectName})\n`);
+  hasPollingLock = true;
+  // Lock own session
+  await sql`SELECT pg_advisory_lock(${sessionId})`;
+  process.stderr.write(`[channel] created session #${sessionId} (${sessionName})\n`);
   return sessionId;
 }
 
@@ -362,9 +381,9 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       let replyText = String(args!.text);
       const isBackground = !isActive && sessionId;
       if (isBackground) {
-        const sessionName = projectName || `#${sessionId}`;
-        replyText = `📌 **${sessionName}**\n\n${replyText}\n\n_/switch ${sessionId} — переключиться_`;
-        process.stderr.write(`[channel] reply from background session ${sessionName}\n`);
+        const bgName = sessionName || `#${sessionId}`;
+        replyText = `📌 **${bgName}**\n\n${replyText}\n\n_/switch ${sessionId} — переключиться_`;
+        process.stderr.write(`[channel] reply from background session ${bgName}\n`);
       }
 
       process.stderr.write(`[channel] sending reply to ${chatId}: ${replyText.slice(0, 50)}...\n`);
@@ -517,7 +536,7 @@ async function getSessionPrefix(chatId: string): Promise<string> {
     SELECT active_session_id FROM chat_sessions WHERE chat_id = ${chatId}
   `;
   const isActive = activeCheck.length === 0 || activeCheck[0].active_session_id === sessionId;
-  return isActive ? "" : `📌 ${projectName} · `;
+  return isActive ? "" : `📌 ${sessionName} · `;
 }
 
 async function sendStatusMessage(chatId: string, stage: string): Promise<string | null> {
@@ -720,18 +739,6 @@ async function pollMessages() {
       if (sessionId === null) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
         continue;
-      }
-
-      // Try to acquire polling lock — only one channel.ts per session can poll
-      if (!hasPollingLock) {
-        hasPollingLock = await acquirePollingLock();
-        if (hasPollingLock) {
-          process.stderr.write(`[channel] acquired polling lock for session #${sessionId}\n`);
-        } else {
-          // Another channel.ts is polling this session — wait and retry
-          await new Promise((r) => setTimeout(r, 5000));
-          continue;
-        }
       }
 
       const rows = await sql`
