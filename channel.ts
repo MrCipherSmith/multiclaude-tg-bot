@@ -819,11 +819,6 @@ async function sendStatusMessage(chatId: string, stage: string): Promise<string 
 
     // Update elapsed time every 5 seconds
     state.timer = setInterval(() => {
-      // Auto-cleanup after 2 minutes
-      if (Date.now() - state.startedAt > 120_000) {
-        deleteStatusMessage(chatId);
-        return;
-      }
       editStatusMessage(state);
     }, 5000);
     activeStatus.set(chatId, state);

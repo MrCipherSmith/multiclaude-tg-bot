@@ -26,7 +26,7 @@ async function tmuxSessionExists(sessionName: string): Promise<boolean> {
 }
 
 /** Capture last N lines from tmux pane */
-async function captureTmux(sessionName: string, lines = 25): Promise<string> {
+async function captureTmux(sessionName: string, lines = 40): Promise<string> {
   try {
     const proc = Bun.spawn(
       ["tmux", "capture-pane", "-t", sessionName, "-p", "-S", `-${lines}`],
@@ -111,6 +111,22 @@ function parseLine(line: string): string | null {
   // "+N more tool uses"
   if (trimmed.match(/^\+\d+ more tool uses/)) return `  ${trimmed}`;
 
+  // Sub-agent lines: "Running N agents…" or "Running agent…"
+  if (trimmed.match(/^Running \d+ agents?/)) return `🔄 ${trimmed}`;
+
+  // Agent tree: ├─ Name · N tool uses · Nk tokens
+  const agentTreeMatch = trimmed.match(/^[├└│][\s─]+(.+)/);
+  if (agentTreeMatch) {
+    const content = agentTreeMatch[1];
+    // Sub-agent status: ⎿ Done / Update: file.ts
+    if (content.match(/^⎿\s+/)) {
+      const sub = content.replace(/^⎿\s+/, "");
+      return `  │ ⎿ ${sub.slice(0, 55)}`;
+    }
+    // Agent name with stats
+    return `  ${trimmed.slice(0, 65)}`;
+  }
+
   // Tip line
   if (trimmed.startsWith("Tip:")) return null;
 
@@ -127,8 +143,8 @@ function parseStatus(output: string): string | null {
     const result = parseLine(lines[i]);
     if (result) {
       parsed.unshift(result);
-      // Collect up to 6 lines of context
-      if (parsed.length >= 6) break;
+      // Collect up to 12 lines (enough for agent tree with sub-agents)
+      if (parsed.length >= 12) break;
     }
     // Stop at prompt line (previous command boundary)
     if (lines[i].trim().startsWith("❯") && parsed.length > 0) break;

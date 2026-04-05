@@ -9,7 +9,7 @@
 import { existsSync } from "fs";
 
 const POLL_INTERVAL_MS = 2000;
-const TAIL_LINES = 25;
+const TAIL_LINES = 40;
 
 export interface OutputMonitorHandle {
   stop: () => void;
@@ -83,6 +83,20 @@ function parseLine(line: string): string | null {
   }
 
   if (trimmed.match(/^\+\d+ more tool uses/)) return `  ${trimmed}`;
+
+  // Sub-agent lines
+  if (trimmed.match(/^Running \d+ agents?/)) return `🔄 ${trimmed}`;
+
+  const agentTreeMatch = trimmed.match(/^[├└│][\s─]+(.+)/);
+  if (agentTreeMatch) {
+    const content = agentTreeMatch[1];
+    if (content.match(/^⎿\s+/)) {
+      const sub = content.replace(/^⎿\s+/, "");
+      return `  │ ⎿ ${sub.slice(0, 55)}`;
+    }
+    return `  ${trimmed.slice(0, 65)}`;
+  }
+
   if (trimmed.startsWith("Tip:")) return null;
 
   return null;
@@ -96,7 +110,7 @@ function parseStatus(output: string): string | null {
     const result = parseLine(lines[i]);
     if (result) {
       parsed.unshift(result);
-      if (parsed.length >= 6) break;
+      if (parsed.length >= 12) break;
     }
     if (stripAnsi(lines[i]).trim().startsWith("❯") && parsed.length > 0) break;
   }
