@@ -79,18 +79,25 @@ async function resolveSession(): Promise<number> {
     SELECT id FROM sessions WHERE name = ${sessionName} AND id != 0 LIMIT 1
   `;
   if (existing.length > 0) {
-    const lockResult = await sql`SELECT pg_try_advisory_lock(${existing[0].id}) as locked`;
-    if (lockResult[0].locked) {
-      sessionId = existing[0].id;
-      hasPollingLock = true;
-      await sql`
-        UPDATE sessions SET status = 'active', last_active = now()
-        WHERE id = ${sessionId}
-      `;
-      process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName})\n`);
-      return sessionId;
+    // Retry lock a few times — previous session's pg connection may still be closing
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const lockResult = await sql`SELECT pg_try_advisory_lock(${existing[0].id}) as locked`;
+      if (lockResult[0].locked) {
+        sessionId = existing[0].id;
+        hasPollingLock = true;
+        await sql`
+          UPDATE sessions SET status = 'active', last_active = now()
+          WHERE id = ${sessionId}
+        `;
+        process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName})\n`);
+        return sessionId;
+      }
+      if (attempt < 4) {
+        process.stderr.write(`[channel] session "${sessionName}" locked, retrying (${attempt + 1}/5)...\n`);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
-    // Same source already running — add counter to avoid conflict
+    // Same source still running after retries — create a separate session
     const n = Date.now() % 10000;
     sessionName = `${projectName} · ${channelSource}-${n}`;
     process.stderr.write(`[channel] session "${projectName} · ${channelSource}" is busy, creating "${sessionName}"\n`);
@@ -258,12 +265,15 @@ mcp.setNotificationHandler(
     let previewMsgId: number | null = null;
     if (previewContent) {
       try {
+        const lang = tool_name === "Edit" ? "diff" : "";
+        const filePath = String(input?.file_path ?? input?.command ?? "").split("/").slice(-2).join("/");
+        const header = filePath ? `${filePath}:\n` : "";
         const previewRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             chat_id: Number(chatId),
-            text: `<pre>${escapeHtml(previewContent)}</pre>`,
+            text: `${escapeHtml(header)}<pre><code class="language-${lang}">${escapeHtml(previewContent)}</code></pre>`,
             parse_mode: "HTML",
           }),
         });
@@ -275,7 +285,8 @@ mcp.setNotificationHandler(
     }
 
     // Send inline keyboard to Telegram (3 buttons: Allow / Always / Deny)
-    const msgText = descDiff
+    // If preview was already sent as separate message, don't duplicate diff in permission message
+    const msgText = (descDiff && !previewContent)
       ? `🔐 Разрешить?\n\n${escapeHtml(descMain)}\n\n<pre>${escapeHtml(descDiff)}</pre>`
       : `🔐 Разрешить?\n\n${descMain}`;
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -934,19 +945,20 @@ async function main() {
   // Start polling
   pollMessages();
 
-  // Graceful shutdown
-  process.on("SIGINT", async () => {
+  // Graceful shutdown (guard against multiple calls)
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     polling = false;
     await markDisconnected();
     await sql.end();
     process.exit(0);
-  });
-  process.on("SIGTERM", async () => {
-    polling = false;
-    await markDisconnected();
-    await sql.end();
-    process.exit(0);
-  });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+  process.stdin.on("close", shutdown);
+  process.stdin.on("end", shutdown);
 }
 
 main().catch(async (err) => {

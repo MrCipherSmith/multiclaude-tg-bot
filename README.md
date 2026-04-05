@@ -44,7 +44,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Multi-Session MCP Server** — multiple Claude Code CLI instances connect via HTTP, each as a named session
 - **Session Switching** — `/switch` between CLI sessions and standalone mode, with context summary and last messages
 - **One Session Per Project** — reconnecting CLIs reuse existing sessions, preserving ID and memory
-- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications
+- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications, with session lock retry and graceful shutdown on stdin close
 
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / OpenRouter / Ollama)
@@ -60,12 +60,12 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 ### Telegram UX
 - **Markdown Rendering** — responses formatted with HTML (bold, italic, code blocks with syntax highlighting, links)
 - **Live Status Updates** — real-time progress from CLI via tmux monitoring ("Explore: Find files", "Bash: git status")
-- **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), synced with terminal
+- **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), with input preview (file path + syntax-highlighted diff), synced with terminal
 - **Statistics & Logging** — `/stats` for API usage and tokens, `/logs` for per-session request logs
 
 ### Operations
 - **Health Endpoint** — `GET /health` with DB status, uptime, active sessions
-- **Auto-Cleanup** — hourly cleanup of old queue messages, logs, and stats
+- **Auto-Cleanup** — hourly cleanup of old queue messages, logs, stats, and all disconnected sessions
 - **CLI Tool** — interactive setup wizard, session management, backup, monitoring
 - **Docker-First** — bot + PostgreSQL in Docker Compose, Ollama on host
 
@@ -134,7 +134,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 1. Telegram message → bot saves to `messages` + inserts into `message_queue`
 2. `channel.ts` polls queue → sends channel notification to Claude CLI
 3. Status message appears in Telegram with live timer and tmux progress
-4. Permission requests forwarded as inline buttons (Allow / Always / Deny)
+4. Permission requests forwarded as inline buttons with input preview (file path + syntax-highlighted diff)
 5. CLI responds via `reply` → HTML-formatted message in Telegram
 
 **Standalone mode:**

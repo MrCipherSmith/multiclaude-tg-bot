@@ -16,8 +16,8 @@ function startCleanupTimer() {
       const perms = await sql`DELETE FROM permission_requests WHERE created_at < now() - interval '1 hour'`;
       // Mark stale "active" sessions that have no live transport (10 min threshold)
       const stale = await sessionManager.markStale(600);
-      // Delete unnamed cli-* sessions that are disconnected
-      const cliJunk = await sql`DELETE FROM sessions WHERE name LIKE 'cli-%' AND status = 'disconnected'`;
+      // Delete all disconnected sessions (except standalone #0)
+      const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
       // Always reset sequence to avoid ID gaps
       await sessionManager.resetSequence();
       const total = mq.count + logs.count + stats.count + perms.count + cliJunk.count + stale;

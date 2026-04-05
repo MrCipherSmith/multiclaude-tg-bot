@@ -131,11 +131,11 @@ export class SessionManager {
     const rows = await sql`
       SELECT id, name FROM sessions WHERE client_id = ${clientId}
     `;
-    if (rows.length > 0 && rows[0].name?.startsWith("cli-")) {
-      // Unnamed session — just delete and reset sequence
+    if (rows.length > 0 && (rows[0].name?.startsWith("cli-") || rows[0].name?.endsWith(" · cli"))) {
+      // CLI session — just delete and reset sequence
       await sql`DELETE FROM sessions WHERE client_id = ${clientId}`;
       await this.resetSequence();
-      console.log(`[session] removed unnamed session: ${clientId}`);
+      console.log(`[session] removed cli session: ${clientId}`);
     } else {
       // Named session — keep but mark disconnected
       await sql`
@@ -152,7 +152,6 @@ export class SessionManager {
       DELETE FROM sessions
       WHERE id != 0
         AND status = 'disconnected'
-        AND name LIKE 'cli-%'
       RETURNING id
     `;
     return result.length;
