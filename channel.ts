@@ -366,6 +366,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       process.stderr.write(`[channel] sending reply to ${chatId}: ${replyText.slice(0, 50)}...\n`);
       const htmlText = markdownToTelegramHtml(replyText);
 
+      // Inline button for background sessions
+      const replyMarkup = isBackground
+        ? { inline_keyboard: [[{ text: "↩️ Переключиться и ответить", callback_data: `switch:${sessionId}` }]] }
+        : undefined;
+
       // Try HTML first, fallback to plain text
       let res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
@@ -374,6 +379,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
           chat_id: Number(args!.chat_id),
           text: htmlText,
           parse_mode: "HTML",
+          ...(replyMarkup && { reply_markup: replyMarkup }),
         }),
       });
 
@@ -387,6 +393,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
             body: JSON.stringify({
               chat_id: Number(args!.chat_id),
               text: replyText,
+              ...(replyMarkup && { reply_markup: replyMarkup }),
             }),
           });
         }

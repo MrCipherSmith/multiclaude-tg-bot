@@ -46,8 +46,8 @@ export function registerHandlers(bot: Bot): void {
   bot.command("skills", handleSkills);
   bot.command("rules", handleRules);
 
-  // Permission callback from inline keyboard
-  bot.on("callback_query:data", handlePermissionCallback);
+  // Inline keyboard callbacks (permissions, session switch)
+  bot.on("callback_query:data", handleCallbackQuery);
 
   // Media handlers
   bot.on("message:photo", handlePhoto);
@@ -787,6 +787,48 @@ async function handleRules(ctx: Context): Promise<void> {
   } catch {
     await ctx.reply(`Не удалось прочитать базу знаний (${KNOWLEDGE_BASE})`);
   }
+}
+
+// === Callback query dispatcher ===
+
+async function handleCallbackQuery(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  if (!data) return;
+
+  if (data.startsWith("perm:")) return handlePermissionCallback(ctx);
+  if (data.startsWith("switch:")) return handleSwitchCallback(ctx);
+
+  await ctx.answerCallbackQuery({ text: "Unknown action" });
+}
+
+// === Switch session callback ===
+
+async function handleSwitchCallback(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data;
+  const targetId = Number(data?.split(":")[1]);
+  const chatId = String(ctx.chat?.id);
+
+  if (isNaN(targetId)) {
+    await ctx.answerCallbackQuery({ text: "Invalid session" });
+    return;
+  }
+
+  const session = await sessionManager.get(targetId);
+  if (!session) {
+    await ctx.answerCallbackQuery({ text: "Сессия не найдена" });
+    return;
+  }
+
+  await sessionManager.switchSession(chatId, targetId);
+  appendLog(targetId, chatId, "switch", `switched via inline button`);
+
+  // Remove the button from the message
+  try {
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
+  } catch {}
+
+  await ctx.answerCallbackQuery({ text: `Переключено на ${session.name}` });
+  await ctx.reply(`Переключено на ${session.name}. Пиши сообщение — оно пойдёт туда.`);
 }
 
 // === Permission callback ===
