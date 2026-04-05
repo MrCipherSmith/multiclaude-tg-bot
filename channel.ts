@@ -195,7 +195,6 @@ mcp.setNotificationHandler(
     else if (tool_name === "Read" && input.file_path) detail = input.file_path;
     else if ((tool_name === "Edit" || tool_name === "Write") && input.file_path) {
       detail = input.file_path;
-      // input_preview is truncated to ~200 chars, so old_string/new_string/content are rarely available
       if (input.old_string != null && input.new_string != null) {
         const oldLines = String(input.old_string).split("\n").map((l: string) => `- ${l}`);
         const newLines = String(input.new_string).split("\n").map((l: string) => `+ ${l}`);
@@ -206,7 +205,7 @@ mcp.setNotificationHandler(
     } else if (tool_name === "Grep" && input.pattern) detail = `grep "${input.pattern}"`;
     else if (input._raw) detail = input._raw;
     else detail = JSON.stringify(input).slice(0, 200);
-    // Append description from Claude Code if detail is just a file path (no diff available)
+    // Always show description from Claude Code
     if (description && detail && !detail.includes("\n\n")) {
       detail += `\n${description}`;
     } else if (description && !detail) {
@@ -226,6 +225,27 @@ mcp.setNotificationHandler(
     descMain = descMain.trim();
     const desc = descMain;
 
+    // Build preview content from raw input_preview for Edit/Write/Bash (sent as separate message)
+    let previewContent = "";
+    if ((tool_name === "Edit" || tool_name === "Write" || tool_name === "Bash") && previewStr.length > 10) {
+      // For Edit: try to build a readable diff from parsed input
+      if (tool_name === "Edit" && input.old_string != null && input.new_string != null) {
+        const oldLines = String(input.old_string).split("\n").map((l: string) => `- ${l}`);
+        const newLines = String(input.new_string).split("\n").map((l: string) => `+ ${l}`);
+        previewContent = [...oldLines, ...newLines].join("\n").slice(0, 3000);
+      } else if (tool_name === "Write" && input.content) {
+        previewContent = String(input.content).slice(0, 3000);
+      } else if (tool_name === "Bash" && input.command && input.command.length > 80) {
+        previewContent = input.command.slice(0, 3000);
+      } else {
+        // Show raw input_preview — even if truncated, it gives context
+        const cleanPreview = previewStr.replace(/^\{/, "").replace(/\}$/, "").trim();
+        if (cleanPreview.length > 20) {
+          previewContent = cleanPreview.slice(0, 3000);
+        }
+      }
+    }
+
     // Update status message with what CLI is doing
     const shortDesc = tool_name === "Bash" ? `Выполняю: ${String(input?.command ?? "").slice(0, 60)}`
       : tool_name === "Read" ? `Читаю: ${String(input?.file_path ?? "").split("/").pop()}`
@@ -233,6 +253,26 @@ mcp.setNotificationHandler(
       : tool_name === "Grep" ? `Ищу: ${String(input?.pattern ?? "").slice(0, 40)}`
       : `${tool_name}`;
     await updateStatus(chatId, shortDesc);
+
+    // Send preview as a separate message (will be deleted after user responds)
+    let previewMsgId: number | null = null;
+    if (previewContent) {
+      try {
+        const previewRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: Number(chatId),
+            text: `<pre>${escapeHtml(previewContent)}</pre>`,
+            parse_mode: "HTML",
+          }),
+        });
+        if (previewRes.ok) {
+          const previewData = (await previewRes.json()) as any;
+          previewMsgId = previewData.result?.message_id ?? null;
+        }
+      } catch {}
+    }
 
     // Send inline keyboard to Telegram (3 buttons: Allow / Always / Deny)
     const msgText = descDiff
@@ -284,6 +324,7 @@ mcp.setNotificationHandler(
           params: { request_id, behavior },
         });
         process.stderr.write(`[channel] permission ${request_id}: ${behavior} (telegram)\n`);
+        if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
         await updateStatus(chatId, "Выполняю...");
         resolved = true;
         break;
@@ -294,6 +335,7 @@ mcp.setNotificationHandler(
       if (exists.length === 0) {
         // Record deleted by another path — resolved elsewhere
         process.stderr.write(`[channel] permission ${request_id}: resolved externally\n`);
+        if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
         if (telegramMsgId) {
           await editTelegramMessage(chatId, telegramMsgId, `⚡ Resolved in terminal\n\n${desc}`);
         }
@@ -312,6 +354,7 @@ mcp.setNotificationHandler(
         method: "notifications/claude/channel/permission",
         params: { request_id, behavior: "deny" },
       });
+      if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
       if (telegramMsgId) {
         await editTelegramMessage(chatId, telegramMsgId, `⏰ Таймаут\n\n${desc}`);
       }
@@ -593,6 +636,16 @@ async function editTelegramMessage(chatId: string, messageId: number, text: stri
       body: JSON.stringify({ chat_id: Number(chatId), message_id: messageId, text }),
     });
   } catch {}
+}
+
+function deleteTelegramMessage(chatId: string, messageId: number): void {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return;
+  fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: Number(chatId), message_id: messageId }),
+  }).catch(() => {});
 }
 
 // --- Status messages ---
