@@ -86,9 +86,9 @@ interface TimeWindow {
 
 function getWindows(): TimeWindow[] {
   return [
-    { label: "24ч", cutoff: new Date(Date.now() - 24 * 3600 * 1000).toISOString() },
-    { label: "запуск", cutoff: startupAt },
-    { label: "всего", cutoff: null },
+    { label: "24h", cutoff: new Date(Date.now() - 24 * 3600 * 1000).toISOString() },
+    { label: "startup", cutoff: startupAt },
+    { label: "total", cutoff: null },
   ];
 }
 

@@ -81,7 +81,7 @@ export async function streamToTelegram(
   if (accumulated.length > 0) {
     await doEdit(accumulated, true);
   } else {
-    await bot.api.editMessageText(Number(chatId), messageId, "(пустой ответ)");
+    await bot.api.editMessageText(Number(chatId), messageId, "(empty response)");
   }
 
   return accumulated;

@@ -17,31 +17,31 @@ export function createBot(): Bot {
   // Sorted by frequency of use: most common first
   bot.api.setMyCommands([
     // Daily use
-    { command: "sessions", description: "Список сессий" },
-    { command: "switch", description: "Переключить сессию (с контекстом)" },
-    { command: "session", description: "Текущая сессия" },
-    { command: "standalone", description: "Автономный режим" },
-    { command: "pending", description: "Ожидающие разрешения CLI" },
+    { command: "sessions", description: "List sessions" },
+    { command: "switch", description: "Switch session (with context)" },
+    { command: "session", description: "Current session" },
+    { command: "standalone", description: "Standalone mode" },
+    { command: "pending", description: "Pending CLI permissions" },
     // Memory
-    { command: "remember", description: "Сохранить в память" },
-    { command: "recall", description: "Поиск по памяти" },
-    { command: "memories", description: "Список воспоминаний" },
-    { command: "forget", description: "Удалить воспоминание" },
+    { command: "remember", description: "Save to memory" },
+    { command: "recall", description: "Search memory" },
+    { command: "memories", description: "List memories" },
+    { command: "forget", description: "Delete memory" },
     // Monitoring
-    { command: "stats", description: "Статистика API, токены, транскрипции" },
-    { command: "logs", description: "Логи сессии" },
-    { command: "status", description: "Здоровье бота (DB, Ollama)" },
+    { command: "stats", description: "API stats, tokens, transcriptions" },
+    { command: "logs", description: "Session logs" },
+    { command: "status", description: "Bot health (DB, Ollama)" },
     // Knowledge base
-    { command: "skills", description: "Skills из goodai-base" },
-    { command: "rules", description: "Правила из goodai-base" },
-    { command: "tools", description: "MCP инструменты" },
+    { command: "skills", description: "Skills from goodai-base" },
+    { command: "rules", description: "Rules from goodai-base" },
+    { command: "tools", description: "MCP tools" },
     // Maintenance
-    { command: "clear", description: "Очистить контекст" },
-    { command: "summarize", description: "Суммаризировать диалог" },
-    { command: "rename", description: "Переименовать сессию" },
-    { command: "cleanup", description: "Очистить неактивные сессии" },
+    { command: "clear", description: "Clear context" },
+    { command: "summarize", description: "Summarize conversation" },
+    { command: "rename", description: "Rename session" },
+    { command: "cleanup", description: "Clean up inactive sessions" },
     // Help
-    { command: "help", description: "Справка" },
+    { command: "help", description: "Help" },
   ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
 
   // Error handler

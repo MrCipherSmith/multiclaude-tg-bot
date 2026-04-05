@@ -28,18 +28,18 @@ export async function composePrompt(
 
   // Build system prompt
   const parts: string[] = [
-    "Ты — полезный AI-ассистент. Отвечай на том языке, на котором пишет пользователь.",
-    `Текущая дата: ${new Date().toISOString().split("T")[0]}.`,
+    "You are a helpful AI assistant. Reply in the language the user writes in.",
+    `Current date: ${new Date().toISOString().split("T")[0]}.`,
   ];
 
   if (session && session.name && session.name !== "standalone") {
     parts.push(
-      `Текущая сессия: "${session.name}"${session.projectPath ? ` (${session.projectPath})` : ""}.`,
+      `Current session: "${session.name}"${session.projectPath ? ` (${session.projectPath})` : ""}.`,
     );
   }
 
   if (memories.length > 0) {
-    parts.push("\n## Релевантные воспоминания из долгосрочной памяти:");
+    parts.push("\n## Relevant memories from long-term memory:");
     for (const m of memories) {
       const dist = Number(m.distance).toFixed(3);
       parts.push(`- [${m.type}] ${m.content} (relevance: ${dist})`);

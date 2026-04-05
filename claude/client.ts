@@ -383,17 +383,17 @@ export async function summarizeConversation(
     [
       {
         role: "user",
-        content: `Проанализируй этот диалог и верни JSON:
+        content: `Analyze this conversation and return JSON:
 {
-  "summary": "краткое описание диалога в 2-3 предложениях",
-  "facts": ["факт 1 о пользователе или решениях", "факт 2", ...]
+  "summary": "brief description of the conversation in 2-3 sentences",
+  "facts": ["fact 1 about the user or decisions", "fact 2", ...]
 }
 
-Диалог:
+Conversation:
 ${formatted}`,
       },
     ],
-    "Ты извлекаешь структурированную информацию из диалогов. Отвечай только валидным JSON, без markdown.",
+    "You extract structured information from conversations. Reply only with valid JSON, no markdown.",
   );
 
   try {

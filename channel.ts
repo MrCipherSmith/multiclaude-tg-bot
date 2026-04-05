@@ -324,10 +324,10 @@ mcp.setNotificationHandler(
     }
 
     // Update status message with what CLI is doing
-    const shortDesc = tool_name === "Bash" ? `Выполняю: ${String(input?.command ?? "").slice(0, 60)}`
-      : tool_name === "Read" ? `Читаю: ${String(input?.file_path ?? "").split("/").pop()}`
-      : tool_name === "Edit" || tool_name === "Write" ? `Редактирую: ${String(input?.file_path ?? "").split("/").pop()}`
-      : tool_name === "Grep" ? `Ищу: ${String(input?.pattern ?? "").slice(0, 40)}`
+    const shortDesc = tool_name === "Bash" ? `Running: ${String(input?.command ?? "").slice(0, 60)}`
+      : tool_name === "Read" ? `Reading: ${String(input?.file_path ?? "").split("/").pop()}`
+      : tool_name === "Edit" || tool_name === "Write" ? `Editing: ${String(input?.file_path ?? "").split("/").pop()}`
+      : tool_name === "Grep" ? `Searching: ${String(input?.pattern ?? "").slice(0, 40)}`
       : `${tool_name}`;
     await updateStatus(chatId, shortDesc);
 
@@ -358,8 +358,8 @@ mcp.setNotificationHandler(
     // If preview was already sent as separate message, don't duplicate diff in permission message
     const showDiffInline = descDiff && !previewContent;
     const msgText = showDiffInline
-      ? `🔐 Разрешить?\n\n${escapeHtml(descMain)}\n\n<pre><code class="language-diff">${escapeHtml(descDiff)}</code></pre>`
-      : `🔐 Разрешить?\n\n${escapeHtml(descMain)}`;
+      ? `🔐 Allow?\n\n${escapeHtml(descMain)}\n\n<pre><code class="language-diff">${escapeHtml(descDiff)}</code></pre>`
+      : `🔐 Allow?\n\n${escapeHtml(descMain)}`;
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -369,9 +369,9 @@ mcp.setNotificationHandler(
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: [[
-            { text: "✅ Да", callback_data: `perm:allow:${request_id}` },
-            { text: "✅ Всегда", callback_data: `perm:always:${request_id}` },
-            { text: "❌ Нет", callback_data: `perm:deny:${request_id}` },
+            { text: "✅ Yes", callback_data: `perm:allow:${request_id}` },
+            { text: "✅ Always", callback_data: `perm:always:${request_id}` },
+            { text: "❌ No", callback_data: `perm:deny:${request_id}` },
           ]],
         },
       }),
@@ -407,7 +407,7 @@ mcp.setNotificationHandler(
         });
         process.stderr.write(`[channel] permission ${request_id}: ${behavior} (telegram)\n`);
         if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
-        await updateStatus(chatId, "Выполняю...");
+        await updateStatus(chatId, "Processing...");
         // Reload auto-approve rules in case user tapped "Always"
         loadAutoApproveRules().catch(() => {});
         resolved = true;
@@ -423,7 +423,7 @@ mcp.setNotificationHandler(
         if (telegramMsgId) {
           await editTelegramMessage(chatId, telegramMsgId, `⚡ Resolved in terminal\n\n${desc}`);
         }
-        await updateStatus(chatId, "Выполняю...");
+        await updateStatus(chatId, "Processing...");
         resolved = true;
         break;
       }
@@ -440,7 +440,7 @@ mcp.setNotificationHandler(
       });
       if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
       if (telegramMsgId) {
-        await editTelegramMessage(chatId, telegramMsgId, `⏰ Таймаут\n\n${desc}`);
+        await editTelegramMessage(chatId, telegramMsgId, `⏰ Timeout\n\n${desc}`);
       }
     }
 
@@ -559,7 +559,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       const isBackground = !isActive && sessionId;
       if (isBackground) {
         const bgName = sessionName || `#${sessionId}`;
-        replyText = `📌 **${bgName}**\n\n${replyText}\n\n_/switch ${sessionId} — переключиться_`;
+        replyText = `📌 **${bgName}**\n\n${replyText}\n\n_/switch ${sessionId} — switch_`;
         process.stderr.write(`[channel] reply from background session ${bgName}\n`);
       }
 
@@ -568,7 +568,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       // Inline button for background sessions
       const replyMarkup = isBackground
-        ? { inline_keyboard: [[{ text: "↩️ Переключиться и ответить", callback_data: `switch:${sessionId}` }]] }
+        ? { inline_keyboard: [[{ text: "↩️ Switch and reply", callback_data: `switch:${sessionId}` }]] }
         : undefined;
 
       // Try HTML first, fallback to plain text
@@ -746,8 +746,8 @@ const activeStatus = new Map<string, StatusState>();
 
 function formatElapsed(ms: number): string {
   const sec = Math.round(ms / 1000);
-  if (sec < 60) return `${sec}с`;
-  return `${Math.floor(sec / 60)}м ${sec % 60}с`;
+  if (sec < 60) return `${sec}s`;
+  return `${Math.floor(sec / 60)}m ${sec % 60}s`;
 }
 
 async function getSessionPrefix(chatId: string): Promise<string> {
@@ -988,7 +988,7 @@ async function pollMessages() {
         startTypingForChat(row.chat_id);
 
         // Send status message to Telegram
-        await sendStatusMessage(row.chat_id, "Думаю...");
+        await sendStatusMessage(row.chat_id, "Thinking...");
 
         // Start tmux monitor for real-time progress
         await startProgressMonitorForChat(row.chat_id);
