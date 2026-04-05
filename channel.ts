@@ -73,6 +73,10 @@ async function resolveSession(): Promise<number> {
   `;
   if (existing.length > 0) {
     sessionId = existing[0].id;
+    await sql`
+      UPDATE sessions SET status = 'active', last_active = now()
+      WHERE id = ${sessionId}
+    `;
     process.stderr.write(`[channel] attached to session #${sessionId} (${projectName})\n`);
     return sessionId;
   }
@@ -87,6 +91,20 @@ async function resolveSession(): Promise<number> {
   sessionId = row.id;
   process.stderr.write(`[channel] created session #${sessionId} (${projectName})\n`);
   return sessionId;
+}
+
+// --- Graceful disconnect ---
+async function markDisconnected(): Promise<void> {
+  if (sessionId === null) return;
+  try {
+    await sql`
+      UPDATE sessions SET status = 'disconnected', last_active = now()
+      WHERE id = ${sessionId}
+    `;
+    process.stderr.write(`[channel] session #${sessionId} marked disconnected\n`);
+  } catch (err) {
+    process.stderr.write(`[channel] failed to mark disconnected: ${err}\n`);
+  }
 }
 
 // --- MCP Server ---
@@ -740,17 +758,21 @@ async function main() {
   // Graceful shutdown
   process.on("SIGINT", async () => {
     polling = false;
+    await markDisconnected();
     await sql.end();
     process.exit(0);
   });
   process.on("SIGTERM", async () => {
     polling = false;
+    await markDisconnected();
     await sql.end();
     process.exit(0);
   });
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   process.stderr.write(`[channel] fatal: ${err}\n`);
+  await markDisconnected();
+  await sql.end();
   process.exit(1);
 });
