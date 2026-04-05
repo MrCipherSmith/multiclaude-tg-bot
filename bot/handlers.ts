@@ -887,7 +887,7 @@ async function handlePermissionCallback(ctx: Context): Promise<void> {
           if (!settings.permissions.allow.includes(pattern)) {
             settings.permissions.allow.push(pattern);
             const dir = settingsPath.split("/").slice(0, -1).join("/");
-            await Bun.$.quiet`mkdir -p ${dir}`;
+            await Bun.$`mkdir -p ${dir}`.quiet();
             await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");
             console.log(`[perm] added ${pattern} to ${settingsPath}`);
           }
