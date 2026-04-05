@@ -164,6 +164,36 @@ async function markDisconnected(): Promise<void> {
   }
 }
 
+// --- Auto-approve rules ---
+// Loaded from settings.local.json and updated when user taps "Всегда"
+const autoApprovePatterns = new Set<string>();
+
+async function loadAutoApproveRules(): Promise<void> {
+  const homeDir = process.env.HOME ?? "/root";
+  const encodedPath = projectPath.replace(/\//g, "-");
+  const paths = [
+    `${homeDir}/.claude/projects/${encodedPath}/settings.local.json`,
+    `${homeDir}/.claude/settings.local.json`,
+  ];
+  for (const p of paths) {
+    try {
+      const text = await Bun.file(p).text();
+      const settings = JSON.parse(text);
+      const patterns = settings?.permissions?.allow ?? [];
+      for (const pat of patterns) autoApprovePatterns.add(pat);
+    } catch {}
+  }
+  if (autoApprovePatterns.size > 0) {
+    process.stderr.write(`[channel] auto-approve patterns: ${[...autoApprovePatterns].join(", ")}\n`);
+  }
+}
+
+function isAutoApproved(toolName: string): boolean {
+  if (autoApprovePatterns.has(`${toolName}(*)`)) return true;
+  if (autoApprovePatterns.has(toolName)) return true;
+  return false;
+}
+
 // --- MCP Server ---
 const mcp = new Server(
   { name: "claude-bot-channel", version: "0.1.0" },
@@ -186,6 +216,16 @@ mcp.setNotificationHandler(
     const request_id = params.request_id;
     const tool_name = params.tool_name;
     const description = params.description;
+
+    // Auto-approve if tool is in always-allowed list
+    if (isAutoApproved(tool_name)) {
+      process.stderr.write(`[channel] auto-approved: ${tool_name}\n`);
+      await mcp.notification({
+        method: "notifications/claude/channel/permission",
+        params: { request_id, behavior: "allow" },
+      });
+      return;
+    }
 
     // input_preview is a JSON string, often truncated to ~200 chars
     let input: Record<string, any> = {};
@@ -367,6 +407,8 @@ mcp.setNotificationHandler(
         process.stderr.write(`[channel] permission ${request_id}: ${behavior} (telegram)\n`);
         if (previewMsgId) deleteTelegramMessage(chatId, previewMsgId);
         await updateStatus(chatId, "Выполняю...");
+        // Reload auto-approve rules in case user tapped "Всегда"
+        loadAutoApproveRules().catch(() => {});
         resolved = true;
         break;
       }
@@ -968,6 +1010,7 @@ async function pollMessages() {
 // --- Main ---
 async function main() {
   await resolveSession();
+  await loadAutoApproveRules();
 
   const transport = new StdioServerTransport();
   await mcp.connect(transport);
