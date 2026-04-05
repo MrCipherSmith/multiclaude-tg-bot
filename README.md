@@ -55,12 +55,15 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 ### Memory
 - **Short-Term** — sliding window of recent messages per session (in-memory cache + PostgreSQL)
 - **Long-Term** — semantic search via pgvector embeddings powered by Ollama (nomic-embed-text, 768 dims)
-- **Per-Session Binding** — memories are scoped to the session that created them
+- **Project-Scoped** — memories are shared across all sessions in the same project directory
+- **Cross-Session History** — new CLI sessions automatically load prior conversation context from previous sessions in the same project
+- **Auto-Summarization** — conversations are summarized on session disconnect and after 15 min idle
 
 ### Telegram UX
 - **Markdown Rendering** — responses formatted with HTML (bold, italic, code blocks with syntax highlighting, links)
 - **Live Status Updates** — real-time progress from CLI via tmux monitoring ("Explore: Find files", "Bash: git status")
 - **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), with input preview (file path + syntax-highlighted diff), synced with terminal
+- **Auto-Approve Permissions** — configure allowed tools in `settings.local.json` (`permissions.allow` patterns like `"Edit(*)"`, `"Bash(*)"`) to skip Telegram approval for trusted operations
 - **Statistics & Logging** — `/stats` for API usage and tokens, `/logs` for per-session request logs
 
 ### Operations
@@ -577,7 +580,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 
 ## Roadmap
 
-- [ ] Vision model support for image analysis in standalone mode
+- [x] Vision model support for image analysis in standalone mode
 - [ ] Webhook mode for Telegram (instead of polling)
 - [ ] Web dashboard for statistics and session management
 - [ ] Stream-json output parsing for non-tmux progress monitoring
