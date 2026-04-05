@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { Bot } from "grammy";
+import { type Bot, webhookCallback } from "grammy";
 import { randomUUID } from "crypto";
 import { basename } from "path";
 import { z } from "zod";
@@ -145,6 +145,13 @@ function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined
 }
 
 export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createServer> {
+  // Pre-create webhook handler if in webhook mode
+  const webhookHandler = CONFIG.TELEGRAM_TRANSPORT === "webhook" && bot
+    ? webhookCallback(bot, "http", {
+        secretToken: CONFIG.TELEGRAM_WEBHOOK_SECRET || undefined,
+      })
+    : null;
+
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://localhost:${CONFIG.PORT}`);
 
@@ -190,6 +197,12 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err?.message }));
       }
+      return;
+    }
+
+    // Telegram webhook endpoint
+    if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
+      await webhookHandler(req, res);
       return;
     }
 

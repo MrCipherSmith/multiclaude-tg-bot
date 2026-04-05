@@ -18,6 +18,12 @@ export const CONFIG = {
   EMBEDDING_MODEL: process.env.EMBEDDING_MODEL ?? "nomic-embed-text",
   VECTOR_DIMENSIONS: 768,
 
+  // Telegram transport
+  TELEGRAM_TRANSPORT: (process.env.TELEGRAM_TRANSPORT ?? "polling") as "polling" | "webhook",
+  TELEGRAM_WEBHOOK_URL: process.env.TELEGRAM_WEBHOOK_URL ?? "",
+  TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET ?? "",
+  TELEGRAM_WEBHOOK_PATH: process.env.TELEGRAM_WEBHOOK_PATH ?? "/telegram/webhook",
+
   // Server
   PORT: Number(process.env.PORT ?? "3847"),
   SHORT_TERM_WINDOW: Number(process.env.SHORT_TERM_WINDOW ?? "20"),

@@ -48,11 +48,21 @@ async function main() {
   // 4. Start cleanup timer
   const cleanupTimer = startCleanupTimer();
 
-  // 5. Start Telegram polling
-  console.log("[main] starting Telegram polling...");
-  bot.start({
-    onStart: () => console.log(`[main] bot @${bot.botInfo.username} is running`),
-  });
+  // 5. Start Telegram transport
+  if (CONFIG.TELEGRAM_TRANSPORT === "webhook") {
+    await bot.api.setWebhook(CONFIG.TELEGRAM_WEBHOOK_URL, {
+      secret_token: CONFIG.TELEGRAM_WEBHOOK_SECRET || undefined,
+      allowed_updates: ["message", "callback_query"],
+    });
+    await bot.init();
+    console.log(`[main] webhook registered at ${CONFIG.TELEGRAM_WEBHOOK_URL}`);
+    console.log(`[main] bot @${bot.botInfo.username} is running (webhook)`);
+  } else {
+    console.log("[main] starting Telegram polling...");
+    bot.start({
+      onStart: () => console.log(`[main] bot @${bot.botInfo.username} is running (polling)`),
+    });
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -60,7 +70,11 @@ async function main() {
     clearInterval(cleanupTimer);
     stopAllTimers();
     httpServer.close();
-    await bot.stop();
+    if (CONFIG.TELEGRAM_TRANSPORT === "webhook") {
+      await bot.api.deleteWebhook();
+    } else {
+      await bot.stop();
+    }
     await sql.end();
     process.exit(0);
   };

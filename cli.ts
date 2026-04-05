@@ -123,7 +123,30 @@ async function setup() {
     ollamaModel = ask("Ollama Chat Model", "qwen3:8b");
   }
 
-  // 4. Voice transcription
+  // 4. Telegram transport
+  const transportIdx = askChoice("Telegram transport:", [
+    "Polling (default — works everywhere, no domain needed)",
+    "Webhook (requires public URL, e.g. via Cloudflare Tunnel)",
+  ]);
+  const useWebhook = transportIdx === 1;
+
+  let webhookUrl = "";
+  let webhookSecret = "";
+  if (useWebhook) {
+    console.log(c.dim("\n  Webhook requires a public HTTPS URL pointing to this bot."));
+    console.log(c.dim("  If your server is behind Cloudflare Tunnel:"));
+    console.log(c.dim("    cloudflared tunnel route dns <tunnel-name> bot.yourdomain.com"));
+    console.log(c.dim("  Then the URL would be: https://bot.yourdomain.com/telegram/webhook"));
+    console.log(c.dim("  The secret is any random string to verify requests from Telegram.\n"));
+    webhookUrl = ask("Webhook URL (e.g. https://bot.yourdomain.com/telegram/webhook)");
+    if (!webhookUrl) {
+      console.log(c.red("\n  Webhook URL is required."));
+      return;
+    }
+    webhookSecret = ask("Webhook secret (random string)", crypto.randomUUID());
+  }
+
+  // 5. Voice transcription
   console.log();
   const groqKey = ask("Groq API Key for voice (Enter to skip, free at console.groq.com)");
 
@@ -145,6 +168,11 @@ async function setup() {
     "# Telegram",
     `TELEGRAM_BOT_TOKEN=${botToken}`,
     `ALLOWED_USERS=${allowedUsers}`,
+    `TELEGRAM_TRANSPORT=${useWebhook ? "webhook" : "polling"}`,
+    ...(useWebhook ? [
+      `TELEGRAM_WEBHOOK_URL=${webhookUrl}`,
+      `TELEGRAM_WEBHOOK_SECRET=${webhookSecret}`,
+    ] : []),
     "",
     "# LLM Provider",
     `ANTHROPIC_API_KEY=${anthropicKey}`,
