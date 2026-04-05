@@ -511,7 +511,8 @@ async function tmuxStart() {
     console.log(`\n  ${c.yellow("No projects configured.")}`);
     console.log(`  Add projects first:\n`);
     console.log(`    ${c.cyan("claude-bot add /path/to/project")}`);
-    console.log(`    ${c.cyan("claude-bot add .")} ${c.dim("(current directory)")}\n`);
+    console.log(`    ${c.cyan("claude-bot add .")} ${c.dim("(current directory)")}`);
+    console.log(`    ${c.cyan("claude-bot add . --name work-session")} ${c.dim("(custom session name)")}\n`);
     return;
   }
 
@@ -582,13 +583,20 @@ async function tmuxStop() {
 }
 
 async function tmuxAdd(dir?: string) {
-  const projectDir = resolve(dir ?? ".");
+  // Parse --name flag from argv
+  const nameIdx = process.argv.indexOf("--name");
+  const customName = nameIdx >= 0 ? process.argv[nameIdx + 1] : undefined;
+
+  // Skip --name and its value when resolving dir
+  let resolvedDir = dir;
+  if (resolvedDir === "--name") resolvedDir = undefined;
+  const projectDir = resolve(resolvedDir ?? ".");
   if (!existsSync(projectDir)) {
     console.log(c.red(`  Directory not found: ${projectDir}`));
     return;
   }
 
-  const name = basename(projectDir);
+  const name = customName ?? basename(projectDir);
   const projects = await loadProjects();
 
   if (projects.some(p => p.path === projectDir)) {
@@ -881,7 +889,7 @@ function help() {
     up [-a] [-s]    Start all projects in tmux (-a attach, -s split panes)
     down            Stop all tmux sessions + clean DB
     ps              List configured projects and status
-    add [dir]       Add project to tmux config
+    add [dir] [--name NAME]  Add project to tmux config
     remove <name>   Remove project from tmux config
 
   ${c.bold("Connect:")}
