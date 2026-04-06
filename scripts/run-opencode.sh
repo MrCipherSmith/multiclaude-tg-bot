@@ -19,7 +19,7 @@ echo "[run-opencode] Connecting to opencode serve at localhost:${PORT}"
 while true; do
   echo "[run-opencode] Starting at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
 
-  opencode --server "http://localhost:${PORT}"
+  opencode attach "http://localhost:${PORT}"
   EXIT_CODE=$?
 
   echo "[run-opencode] Exited with code $EXIT_CODE at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"

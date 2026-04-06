@@ -774,7 +774,7 @@ async function tmuxAdd(dir?: string) {
 
   // 3. Open TUI connected to the serve instance, in the project directory
   console.log(`\n  ${c.cyan("opencode TUI")} — ${c.dim("Ctrl+C or q to exit (session → disconnected)")}\n`);
-  const tui = Bun.spawn(["opencode", "--server", `http://localhost:${opencodePort}`], {
+  const tui = Bun.spawn(["opencode", "attach", `http://localhost:${opencodePort}`], {
     cwd: projectDir,
     stdout: "inherit",
     stderr: "inherit",
