@@ -212,7 +212,7 @@ async function setup() {
   // Start services
   if (useDocker) {
     step("Starting Docker services");
-    const up = await run(["docker", "compose", "up", "-d"]);
+    const up = await run(["docker", "compose", "up", "-d", "--build"]);
     up.ok ? done() : fail();
 
     // Wait for DB
