@@ -292,11 +292,47 @@ Keep status messages short (under 50 chars). The status is automatically deleted
   // opencode info (Docker only — service starts automatically)
   if (useDocker) {
     console.log(`\n  ${c.bold("opencode")} ${c.dim("(bundled, starts automatically)")}`);
-    console.log(`  opencode serve is included in docker-compose and runs on port 4096.`);
-    console.log(`  It reads API keys from .env — ${anthropicKey ? c.green("ANTHROPIC_API_KEY is set ✓") : c.yellow("no ANTHROPIC_API_KEY — configure via: opencode")}\n`);
-    console.log(`  Register projects with opencode:`);
-    console.log(`    ${c.cyan("claude-bot add --provider opencode .")}  — register current dir`);
-    console.log(`    ${c.cyan("claude-bot add --provider claude .")}     — register with Claude Code\n`);
+    console.log(`  opencode serve runs on port 4096. Configure providers via ${c.cyan("opencode")} TUI.\n`);
+  }
+
+  // Register projects
+  console.log(`  ${c.bold("Add projects (optional)")}`);
+  console.log(`  You can register project directories now, or later with ${c.cyan("claude-bot add .")}\n`);
+  let addMore = true;
+  while (addMore) {
+    const projPath = ask("Project path to register (Enter to skip)");
+    if (!projPath) break;
+
+    const absPath = resolve(projPath);
+    if (!existsSync(absPath)) {
+      console.log(c.red(`  Path not found: ${absPath}`));
+      continue;
+    }
+
+    const providerChoice = askChoice(`Provider for ${basename(absPath)}:`, [
+      "Claude Code (default)",
+      "opencode",
+    ]);
+    const provider = providerChoice === 1 ? "opencode" : "claude";
+
+    try {
+      const res = await fetch(`http://localhost:${port}/api/sessions/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectPath: absPath, cliType: provider, cliConfig: provider === "opencode" ? { port: 4096 } : {} }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { sessionId?: number; name?: string };
+        console.log(c.green(`  ✓ Registered: ${data.name ?? basename(absPath)} [${provider}] (session #${data.sessionId})`));
+      } else {
+        console.log(c.red(`  Registration failed: ${res.status}`));
+      }
+    } catch {
+      console.log(c.red(`  Could not reach bot API — add later with: claude-bot add --provider ${provider} ${absPath}`));
+    }
+
+    const again = ask("Add another project? (y/N)", "N");
+    addMore = again.toLowerCase() === "y";
   }
 
   // Summary
