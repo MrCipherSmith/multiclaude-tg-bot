@@ -310,26 +310,16 @@ Keep status messages short (under 50 chars). The status is automatically deleted
       console.log(`  ${c.green("✓")} opencode already installed`);
     }
 
-    // Start opencode serve in tmux (window "opencode") if tmux is available
-    const hasTmux = (await run(["which", "tmux"], { silent: true })).ok;
     const opencodePort = ask("opencode serve port", "4096");
 
-    if (hasTmux) {
-      step("Starting opencode serve in tmux");
-      // Kill existing window if any, then create fresh
-      await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
-      await run(["tmux", "send-keys", "-t", "opencode-serve",
-        `opencode serve --port ${opencodePort} --hostname 0.0.0.0`, "Enter"]);
-      done();
-      console.log(`  ${c.dim(`Attach: tmux attach -t opencode-serve`)}`);
-    } else {
-      step("Starting opencode serve in background");
-      Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
-        stdout: Bun.file(`${BOT_DIR}/logs/opencode.log`),
-        stderr: Bun.file(`${BOT_DIR}/logs/opencode.log`),
-      });
-      done();
-    }
+    step("Starting opencode serve in background");
+    Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
+      stdout: Bun.file(`${BOT_DIR}/logs/opencode.log`),
+      stderr: Bun.file(`${BOT_DIR}/logs/opencode.log`),
+      detached: true,
+    });
+    done();
+    console.log(`  ${c.dim(`Logs: ${BOT_DIR}/logs/opencode.log`)}\n`);
   }
 
   // Register projects
@@ -741,16 +731,11 @@ async function tmuxAdd(dir?: string) {
 
     if (!isAlive) {
       step("Starting opencode serve");
-      const hasTmux = (await run(["which", "tmux"], { silent: true })).ok;
-      if (hasTmux) {
-        await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
-        await run(["tmux", "send-keys", "-t", "opencode-serve",
-          `opencode serve --port ${opencodePort} --hostname 0.0.0.0`, "Enter"]);
-      } else {
-        Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
-          stdout: "ignore", stderr: "ignore",
-        });
-      }
+      Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
+        stdout: "ignore",
+        stderr: "ignore",
+        detached: true,
+      });
       // Wait for it to be ready
       for (let i = 0; i < 10; i++) {
         await new Promise(r => setTimeout(r, 1000));
