@@ -230,7 +230,15 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
 
     // Telegram webhook endpoint
     if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
-      await webhookHandler(req, res);
+      try {
+        await webhookHandler(req, res);
+      } catch (err: any) {
+        console.error("[webhook] unhandled error:", err?.message ?? err);
+        if (!res.headersSent) {
+          res.writeHead(200); // 200 to prevent Telegram retries
+          res.end();
+        }
+      }
       return;
     }
 
