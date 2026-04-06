@@ -283,6 +283,11 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         const sessionName = name ?? `${basename(projectPath)} · ${cliType}`;
         const clientId = `${cliType}-${basename(projectPath)}-${Date.now()}`;
         const session = await sessionManager.register(clientId, sessionName, projectPath, undefined, cliType, cliConfig);
+        // Start persistent SSE monitor for opencode sessions
+        if (cliType === "opencode") {
+          const { opencodeMonitor } = await import("../adapters/opencode-monitor.ts");
+          opencodeMonitor.start(session.id);
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, sessionId: session.id, name: session.name }));
       } catch (err: any) {

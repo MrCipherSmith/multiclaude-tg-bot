@@ -95,84 +95,22 @@ export async function handleText(ctx: Context): Promise<void> {
     const messageId = String(ctx.message?.message_id ?? "");
 
     if (route.cliType === "opencode") {
-      // OpencodeAdapter: send via HTTP and stream response back to Telegram
+      // OpencodeAdapter: send message, monitor handles the response
       const { opencodeAdapter } = await import("../adapters/opencode.ts");
+      const { opencodeMonitor } = await import("../adapters/opencode-monitor.ts");
       try {
+        // Send a placeholder "..." message — monitor will edit it with the response
+        const placeholder = await bot.api.sendMessage(Number(chatId), "...");
+        opencodeMonitor.setPending(route.sessionId, chatId, placeholder.message_id);
+
         await opencodeAdapter.send(route.sessionId, text, { chatId, fromUser, messageId });
         appendLog(route.sessionId, chatId, "queue", "message sent to opencode");
-
-        // Subscribe to SSE response and stream to Telegram
-        let fullResponse = "";
-        let sentMsgId: number | undefined;
-        // Declare before callbacks to avoid temporal dead zone
-        let unsubscribe: (() => void) | undefined;
-        let watchdog: ReturnType<typeof setTimeout> | undefined;
-
-        const cleanup = () => {
-          if (watchdog) { clearTimeout(watchdog); watchdog = undefined; }
-          unsubscribe?.();
-        };
-
-        const EDIT_INTERVAL_MS = 1500;
-        let lastEditAt = 0;
-
-        unsubscribe = await opencodeAdapter.subscribeToResponses(
-          route.sessionId,
-          async (chunk) => {
-            fullResponse += chunk;
-            if (!sentMsgId) {
-              const msg = await bot.api.sendMessage(Number(chatId), chunk);
-              sentMsgId = msg.message_id;
-              lastEditAt = Date.now();
-            } else {
-              const now = Date.now();
-              if (now - lastEditAt >= EDIT_INTERVAL_MS) {
-                lastEditAt = now;
-                try {
-                  await bot.api.editMessageText(Number(chatId), sentMsgId, fullResponse);
-                } catch {
-                  // edit throttle — ignore
-                }
-              }
-            }
-          },
-          async () => {
-            cleanup();
-            // Final edit to show complete response (bypasses throttle)
-            if (sentMsgId && fullResponse) {
-              try {
-                await bot.api.editMessageText(Number(chatId), sentMsgId, fullResponse);
-              } catch { /* ignore if not modified */ }
-            }
-            if (fullResponse) {
-              await addMessage({
-                sessionId: route.sessionId,
-                projectPath: route.projectPath,
-                chatId,
-                role: "assistant",
-                content: fullResponse,
-              });
-            }
-            appendLog(route.sessionId, chatId, "reply", `opencode response: ${fullResponse.length} chars`);
-          },
-          async (err) => {
-            cleanup();
-            appendLog(route.sessionId, chatId, "opencode", `SSE error: ${err.message}`, "error");
-            await ctx.reply(`opencode error: ${err.message}`);
-          },
-        );
-
-        // Watchdog: abort SSE if no response within 2 minutes
-        watchdog = setTimeout(() => {
-          cleanup();
-          ctx.reply("opencode response timed out (2 min).").catch(() => {});
-        }, 120_000);
       } catch (err: any) {
         const msg = err?.message ?? String(err);
         appendLog(route.sessionId, chatId, "opencode", `send error: ${msg}`, "error");
         if (msg.includes("ECONNREFUSED") || msg.includes("fetch")) {
           await ctx.reply(
-            `opencode is not running. Start it with:\n<code>opencode serve</code>\nor enable autostart in session config.`,
+            `opencode is not running. Start it with:\n<code>opencode serve</code>`,
             { parse_mode: "HTML" },
           );
         } else {

@@ -65,7 +65,7 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 3): P
  * If not present, one is created via POST /session on first send.
  */
 /** Normalize cli_config — handles broken states: JSONB string, array of strings, or object */
-function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
+export function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
   if (!raw) return {};
   if (Array.isArray(raw)) {
     // Broken state: array of JSON strings — merge them all

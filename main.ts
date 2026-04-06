@@ -62,6 +62,11 @@ async function main() {
   // 3. Start MCP HTTP server
   const httpServer = startMcpHttpServer(bot);
 
+  // 3b. Start opencode session monitors (persistent SSE → Telegram forwarding)
+  const { opencodeMonitor } = await import("./adapters/opencode-monitor.ts");
+  opencodeMonitor.setBot(bot);
+  await opencodeMonitor.startAll();
+
   // 4. Start cleanup timer
   const cleanupTimer = startCleanupTimer();
 
