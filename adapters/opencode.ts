@@ -10,7 +10,9 @@ function baseUrl(config: CliConfig): string {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`Invalid opencode port: ${port}`);
   }
-  return `http://localhost:${port}`;
+  // Allow overriding host via env var for Docker deployments (OPENCODE_HOST=opencode)
+  const host = process.env.OPENCODE_HOST ?? "localhost";
+  return `http://${host}:${port}`;
 }
 
 /** Validate tmux session name — prevents command injection via user-controlled cliConfig */
