@@ -57,7 +57,8 @@ export async function handleSessions(ctx: Context): Promise<void> {
           ? ` (active)`
           : ` (disconnected)`;
     const name = s.name ?? s.clientId;
-    return `${s.id}. ${name}${status}${marker}`;
+    const badge = s.id === 0 ? "" : ` [${s.cliType ?? "claude"}]`;
+    return `${s.id}. ${name}${badge}${status}${marker}`;
   });
 
   await ctx.reply(

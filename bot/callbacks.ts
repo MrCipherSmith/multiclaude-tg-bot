@@ -13,6 +13,18 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
   if (data.startsWith("perm:")) return handlePermissionCallback(ctx);
   if (data.startsWith("switch:")) return handleSwitchCallback(ctx);
   if (data.startsWith("skill:") || data.startsWith("cmd:")) return handleToolCallback(ctx);
+  if (data.startsWith("add_provider:")) {
+    const { handleAddProviderCallback } = await import("./commands/add.ts");
+    return handleAddProviderCallback(ctx, data.slice("add_provider:".length) as "claude" | "opencode");
+  }
+  if (data.startsWith("set_model:")) {
+    const { handleSetModelCallback } = await import("./commands/model.ts");
+    return handleSetModelCallback(ctx, data.slice("set_model:".length));
+  }
+  if (data.startsWith("configure_provider:")) {
+    const { handleConfigureProviderCallback } = await import("./commands/connections.ts");
+    return handleConfigureProviderCallback(ctx, data.slice("configure_provider:".length));
+  }
 
   await ctx.answerCallbackQuery({ text: "Unknown action" });
 }

@@ -198,14 +198,22 @@ export class SessionManager {
     await sql`UPDATE sessions SET last_active = now() WHERE id = ${sessionId}`;
   }
 
+  async updateCliConfig(sessionId: number, patch: Record<string, unknown>): Promise<void> {
+    await sql`
+      UPDATE sessions
+      SET cli_config = cli_config || ${JSON.stringify(patch)}::jsonb
+      WHERE id = ${sessionId}
+    `;
+  }
+
   async list(includeUnnamed = false): Promise<Session[]> {
     const rows = includeUnnamed
       ? await sql`
-          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions ORDER BY id
         `
       : await sql`
-          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions
           WHERE id = 0 OR name NOT LIKE 'cli-%'
           ORDER BY id
@@ -215,7 +223,7 @@ export class SessionManager {
 
   async get(sessionId: number): Promise<Session | null> {
     const rows = await sql`
-      SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+      SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       FROM sessions WHERE id = ${sessionId}
     `;
     return rows.length > 0 ? this.rowToSession(rows[0]) : null;
