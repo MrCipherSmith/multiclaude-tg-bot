@@ -732,6 +732,35 @@ async function tmuxAdd(dir?: string) {
   if (provider === "claude") {
     console.log(`  ${c.dim("Restart tmux to apply: claude-bot down && claude-bot up")}`);
   } else if (provider === "opencode") {
+    // Ensure opencode serve is running with 0.0.0.0 (needed for Docker bot to reach it)
+    const opencodePort = "4096";
+    const isAlive = (await run(
+      ["curl", "-sf", `http://localhost:${opencodePort}/session`],
+      { silent: true }
+    )).ok;
+
+    if (!isAlive) {
+      step("Starting opencode serve");
+      const hasTmux = (await run(["which", "tmux"], { silent: true })).ok;
+      if (hasTmux) {
+        await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
+        await run(["tmux", "send-keys", "-t", "opencode-serve",
+          `opencode serve --port ${opencodePort} --hostname 0.0.0.0`, "Enter"]);
+      } else {
+        Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
+          stdout: "ignore", stderr: "ignore",
+        });
+      }
+      // Wait for it to be ready
+      for (let i = 0; i < 10; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        if ((await run(["curl", "-sf", `http://localhost:${opencodePort}/session`], { silent: true })).ok) break;
+      }
+      done();
+    } else {
+      console.log(`  ${c.green("✓")} opencode serve already running on port ${opencodePort}`);
+    }
+
     // Launch opencode TUI in the project directory
     console.log(`  ${c.cyan("Launching opencode TUI...")} ${c.dim("(Ctrl+C to exit)")}\n`);
     const proc = Bun.spawn(["opencode"], {
