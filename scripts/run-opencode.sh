@@ -8,6 +8,7 @@
 PROJECT_DIR="${1:-.}"
 PORT="${2:-4096}"
 SESSION_ID="${3:-}"
+BOT_PORT="${BOT_PORT:-3847}"
 RESTART_DELAY="${RESTART_DELAY:-5}"
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 LOG_FILE="/tmp/opencode-${PROJECT_NAME}.log"
@@ -32,6 +33,10 @@ while true; do
 
   if [ $EXIT_CODE -eq 0 ]; then
     echo "[run-opencode] Clean exit, stopping."
+    # Notify bot that TUI disconnected so it stops the SSE monitor
+    curl -sf -X POST "http://localhost:${BOT_PORT}/api/sessions/disconnect" \
+      -H "Content-Type: application/json" \
+      -d "{\"projectPath\": \"${PROJECT_DIR}\"}" 2>/dev/null || true
     break
   fi
 

@@ -32,10 +32,21 @@ interface PendingMessage {
   messageId: number;
 }
 
+interface ResponseState {
+  assistantMessageIds: Set<string>;
+  partTexts: Map<string, string>;
+  accumulated: string;
+  sentMsgId: number | undefined;
+  targetChatId: string | undefined;
+  lastEdit: number;
+}
+
 class OpencodeMonitor {
   private bot: Bot | null = null;
   private controllers = new Map<number, AbortController>();
   private pending = new Map<number, PendingMessage>(); // sessionId → pending Telegram message
+  // Response state survives SSE reconnects (mid-response disconnect)
+  private responseState = new Map<number, ResponseState>();
 
   setBot(bot: Bot) {
     this.bot = bot;
@@ -77,6 +88,7 @@ class OpencodeMonitor {
     this.controllers.get(sessionId)?.abort();
     this.controllers.delete(sessionId);
     this.pending.delete(sessionId);
+    this.responseState.delete(sessionId);
     console.log(`[opencode-monitor] stopped for session #${sessionId}`);
   }
 
@@ -114,20 +126,27 @@ class OpencodeMonitor {
 
     const decoder = new TextDecoder();
     let buffer = "";
-    const assistantMessageIds = new Set<string>();
-    const partTexts = new Map<string, string>();
 
-    // Per-response accumulation
-    let accumulated = "";
-    let sentMsgId: number | undefined;
-    let targetChatId: string | undefined;
-    let lastEdit = 0;
+    // Use class-level state so partial responses survive reconnects
+    if (!this.responseState.has(sessionId)) {
+      this.responseState.set(sessionId, {
+        assistantMessageIds: new Set(),
+        partTexts: new Map(),
+        accumulated: "",
+        sentMsgId: undefined,
+        targetChatId: undefined,
+        lastEdit: 0,
+      });
+    }
+    const state = this.responseState.get(sessionId)!;
 
     const resetResponse = () => {
-      accumulated = "";
-      sentMsgId = undefined;
-      targetChatId = undefined;
-      lastEdit = 0;
+      state.assistantMessageIds = new Set();
+      state.partTexts = new Map();
+      state.accumulated = "";
+      state.sentMsgId = undefined;
+      state.targetChatId = undefined;
+      state.lastEdit = 0;
     };
 
     while (!signal.aborted) {
@@ -154,42 +173,42 @@ class OpencodeMonitor {
 
         if (event.type === "message.updated") {
           if (props.info?.role === "assistant" && props.info?.id) {
-            assistantMessageIds.add(props.info.id);
+            state.assistantMessageIds.add(props.info.id);
           }
         } else if (event.type === "message.part.updated") {
           const part = props.part ?? {};
-          if (part.type === "text" && assistantMessageIds.has(part.messageID)) {
+          if (part.type === "text" && state.assistantMessageIds.has(part.messageID)) {
             const fullText: string = part.text ?? "";
-            const prev = partTexts.get(part.id) ?? "";
+            const prev = state.partTexts.get(part.id) ?? "";
             const delta = fullText.slice(prev.length);
             if (delta && this.bot) {
-              partTexts.set(part.id, fullText);
-              accumulated += delta;
+              state.partTexts.set(part.id, fullText);
+              state.accumulated += delta;
 
               // Resolve target chat on first chunk
-              if (!targetChatId) {
+              if (!state.targetChatId) {
                 const pend = this.pending.get(sessionId);
                 if (pend) {
-                  targetChatId = pend.chatId;
-                  sentMsgId = pend.messageId;
+                  state.targetChatId = pend.chatId;
+                  state.sentMsgId = pend.messageId;
                   this.pending.delete(sessionId);
                 } else {
-                  targetChatId = await this._getLastChatId(sessionId);
+                  state.targetChatId = await this._getLastChatId(sessionId);
                 }
               }
 
-              if (targetChatId) {
+              if (state.targetChatId) {
                 const now = Date.now();
-                if (!sentMsgId) {
+                if (!state.sentMsgId) {
                   try {
-                    const msg = await this.bot.api.sendMessage(Number(targetChatId), accumulated);
-                    sentMsgId = msg.message_id;
-                    lastEdit = Date.now();
+                    const msg = await this.bot.api.sendMessage(Number(state.targetChatId), state.accumulated);
+                    state.sentMsgId = msg.message_id;
+                    state.lastEdit = Date.now();
                   } catch { /* ignore */ }
-                } else if (now - lastEdit >= EDIT_INTERVAL_MS) {
-                  lastEdit = now;
+                } else if (now - state.lastEdit >= EDIT_INTERVAL_MS) {
+                  state.lastEdit = now;
                   try {
-                    await this.bot.api.editMessageText(Number(targetChatId), sentMsgId, accumulated);
+                    await this.bot.api.editMessageText(Number(state.targetChatId), state.sentMsgId, state.accumulated);
                   } catch { /* throttle */ }
                 }
               }
@@ -197,9 +216,9 @@ class OpencodeMonitor {
           }
         } else if (event.type === "session.status" && props.status?.type === "idle") {
           // Final edit with complete text
-          if (targetChatId && sentMsgId && accumulated && this.bot) {
+          if (state.targetChatId && state.sentMsgId && state.accumulated && this.bot) {
             try {
-              await this.bot.api.editMessageText(Number(targetChatId), sentMsgId, accumulated);
+              await this.bot.api.editMessageText(Number(state.targetChatId), state.sentMsgId, state.accumulated);
             } catch { /* not modified */ }
           }
           resetResponse();

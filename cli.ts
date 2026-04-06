@@ -778,7 +778,7 @@ async function tmuxAdd(dir?: string) {
   const regResult = await run([
     "docker", "compose", "exec", "-T", "bot",
     "bun", "/app/cli.ts", "_register",
-    "--provider", "opencode", "--path", projectDir, "--name", name,
+    "--provider", "opencode", "--path", projectDir, "--name", name, "--port", opencodePort,
   ], { silent: false });
   if (regResult.output) console.log(regResult.output);
 
@@ -1177,11 +1177,12 @@ async function internalRegister() {
   const projectPath = get("--path");
   const provider = (get("--provider") ?? "claude") as "claude" | "opencode";
   const name = get("--name");
+  const opencodePort = Number(get("--port") ?? "4096");
 
   if (!projectPath) { console.error("_register: --path required"); process.exit(1); }
 
   const port = process.env.PORT ?? "3847";
-  const cliConfig = provider === "opencode" ? { port: 4096, autostart: false } : {};
+  const cliConfig = provider === "opencode" ? { port: opencodePort, autostart: false } : {};
   try {
     const res = await fetch(`http://localhost:${port}/api/sessions/register`, {
       method: "POST",

@@ -1,5 +1,7 @@
 import type { CliAdapter, CliConfig, MessageMeta } from "./types.ts";
 import { sql } from "../memory/db.ts";
+export { normalizeCLIConfig } from "../utils/cli-config.ts";
+import { normalizeCLIConfig } from "../utils/cli-config.ts";
 
 const DEFAULT_PORT = 4096;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -64,28 +66,6 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 3): P
  * The opencode session ID is stored in cli_config.opencodeSessionId.
  * If not present, one is created via POST /session on first send.
  */
-/** Normalize cli_config — handles broken states: JSONB string, array of strings, or object */
-export function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
-  if (!raw) return {};
-  if (Array.isArray(raw)) {
-    // Broken state: array of JSON strings — merge them all
-    const merged: Record<string, unknown> = {};
-    for (const item of raw) {
-      try {
-        const parsed = typeof item === "string" ? JSON.parse(item) : item;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          Object.assign(merged, parsed);
-        }
-      } catch { /* skip */ }
-    }
-    return merged;
-  }
-  if (typeof raw === "string") {
-    try { return JSON.parse(raw); } catch { return {}; }
-  }
-  if (typeof raw === "object") return raw as Record<string, unknown>;
-  return {};
-}
 
 export class OpencodeAdapter implements CliAdapter {
   readonly type = "opencode" as const;
@@ -217,123 +197,6 @@ export class OpencodeAdapter implements CliAdapter {
       }
     }
     throw new Error(`opencode serve did not start within 10s on port ${port}`);
-  }
-
-  /**
-   * Subscribe to opencode SSE event stream and forward response chunks to Telegram.
-   * Returns an unsubscribe function.
-   *
-   * @param sessionId  Bot session ID
-   * @param onChunk    Called with each text chunk from opencode
-   * @param onDone     Called when the response is complete
-   * @param onError    Called on SSE connection error
-   */
-  async subscribeToResponses(
-    sessionId: number,
-    onChunk: (text: string) => void,
-    onDone: () => void,
-    onError: (err: Error) => void,
-  ): Promise<() => void> {
-    const config = await this.getConfig(sessionId);
-    const url = `${baseUrl(config)}/event`;
-
-    // Get the opencode session ID to filter SSE events
-    const rows = await sql`SELECT cli_config FROM sessions WHERE id = ${sessionId}`;
-    const opencodeSessionId = normalizeCLIConfig(rows[0]?.cli_config).opencodeSessionId as string | undefined;
-
-    let stopped = false;
-    let doneCalled = false;
-    const controller = new AbortController();
-
-    // Guard against double-fire of onDone (multiple completion signals in SSE)
-    const safeDone = () => {
-      if (doneCalled) return;
-      doneCalled = true;
-      onDone();
-    };
-
-    const run = async () => {
-      try {
-        const res = await fetch(url, {
-          headers: { Accept: "text/event-stream" },
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          throw new Error(`opencode SSE stream failed: ${res.status}`);
-        }
-
-        const reader = res.body?.getReader();
-        if (!reader) throw new Error("No SSE response body");
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        // Track which message IDs are assistant messages, and accumulated text per part
-        const assistantMessageIds = new Set<string>();
-        const partTexts = new Map<string, string>(); // partId → accumulated text so far
-
-        while (!stopped) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const data = line.slice(6).trim();
-            if (!data || data === "[DONE]") { safeDone(); return; }
-            try {
-              const event = JSON.parse(data) as Record<string, any>;
-              const props = event.properties ?? {};
-              const evSessionId = props.sessionID;
-
-              // Only process events for our opencode session
-              if (evSessionId && evSessionId !== opencodeSessionId) continue;
-
-              if (event.type === "message.updated") {
-                // Track which message IDs belong to assistant
-                if (props.info?.role === "assistant" && props.info?.id) {
-                  assistantMessageIds.add(props.info.id);
-                }
-              } else if (event.type === "message.part.updated") {
-                const part = props.part ?? {};
-                // Only stream text parts from assistant messages
-                if (part.type === "text" && assistantMessageIds.has(part.messageID)) {
-                  const fullText: string = part.text ?? "";
-                  const prev = partTexts.get(part.id) ?? "";
-                  const delta = fullText.slice(prev.length);
-                  if (delta) {
-                    partTexts.set(part.id, fullText);
-                    onChunk(delta);
-                  }
-                }
-              } else if (event.type === "session.status") {
-                // session.status {type:"idle"} signals response is complete
-                if (props.status?.type === "idle") {
-                  safeDone();
-                  return;
-                }
-              }
-            } catch {
-              // ignore parse errors
-            }
-          }
-        }
-        safeDone();
-      } catch (err: unknown) {
-        if (!stopped) onError(err as Error);
-      }
-    };
-
-    run();
-
-    return () => {
-      stopped = true;
-      controller.abort();
-    };
   }
 
   /**

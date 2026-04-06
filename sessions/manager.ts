@@ -1,22 +1,5 @@
 import { sql } from "../memory/db.ts";
-
-/** Normalize cli_config — handles broken states: JSONB string, array of strings, or object */
-function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
-  if (!raw) return {};
-  if (Array.isArray(raw)) {
-    const merged: Record<string, unknown> = {};
-    for (const item of raw) {
-      try {
-        const parsed = typeof item === "string" ? JSON.parse(item) : item;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) Object.assign(merged, parsed);
-      } catch { /* skip */ }
-    }
-    return merged;
-  }
-  if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return {}; } }
-  if (typeof raw === "object") return raw as Record<string, unknown>;
-  return {};
-}
+import { normalizeCLIConfig } from "../utils/cli-config.ts";
 
 export interface Session {
   id: number;

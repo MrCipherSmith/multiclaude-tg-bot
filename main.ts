@@ -27,6 +27,12 @@ function startCleanupTimer() {
       await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
+      // Stop SSE monitors for disconnected opencode sessions before deleting them
+      const disconnectedOC = await sql`SELECT id FROM sessions WHERE status = 'disconnected' AND cli_type = 'opencode' AND id != 0`;
+      if (disconnectedOC.length > 0) {
+        const { opencodeMonitor } = await import("./adapters/opencode-monitor.ts");
+        for (const s of disconnectedOC) opencodeMonitor.stop(s.id);
+      }
       const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
       // Clean up stale idle timers for disconnected sessions
       await cleanupStaleTimers();

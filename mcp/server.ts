@@ -306,7 +306,15 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         });
         const { projectPath } = JSON.parse(body);
         if (projectPath) {
-          await sql`UPDATE sessions SET status = 'disconnected' WHERE project_path = ${projectPath} AND cli_type = 'opencode'`;
+          const updated = await sql`
+            UPDATE sessions SET status = 'disconnected'
+            WHERE project_path = ${projectPath} AND cli_type = 'opencode'
+            RETURNING id
+          `;
+          if (updated.length > 0) {
+            const { opencodeMonitor } = await import("../adapters/opencode-monitor.ts");
+            for (const row of updated) opencodeMonitor.stop(row.id);
+          }
         }
         res.writeHead(200); res.end(JSON.stringify({ ok: true }));
       } catch (err: any) { res.writeHead(500); res.end(JSON.stringify({ error: err?.message })); }
