@@ -141,6 +141,23 @@ async function trySummarize(
 }
 
 /**
+ * Clean up idle timers for sessions that no longer exist.
+ */
+export async function cleanupStaleTimers(): Promise<void> {
+  if (idleTimers.size === 0) return;
+  const activeIds = new Set(
+    (await sql`SELECT id FROM sessions WHERE status = 'active'`).map((r) => r.id),
+  );
+  for (const [key, timer] of idleTimers) {
+    const sessionId = Number(key.split(":")[0]);
+    if (!activeIds.has(sessionId)) {
+      clearTimeout(timer);
+      idleTimers.delete(key);
+    }
+  }
+}
+
+/**
  * Stop all idle timers (for graceful shutdown).
  */
 export function stopAllTimers(): void {

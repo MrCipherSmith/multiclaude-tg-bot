@@ -1,6 +1,5 @@
 import { IncomingMessage, ServerResponse } from "http";
-import { existsSync } from "fs";
-import { readFile } from "fs/promises";
+import { readFile, access } from "fs/promises";
 import { join, extname, resolve } from "path";
 import { sql } from "../memory/db.ts";
 import { deleteSessionCascade } from "../sessions/delete.ts";
@@ -43,7 +42,8 @@ async function parseBody(req: IncomingMessage): Promise<any> {
       if (data.length > MAX_BODY_SIZE) { req.destroy(); reject(new Error("Body too large")); }
     });
     req.on("end", () => {
-      try { resolve(JSON.parse(data)); } catch { resolve({}); }
+      if (!data.trim()) { resolve({}); return; }
+      try { resolve(JSON.parse(data)); } catch { reject(new Error("Invalid JSON body")); }
     });
     req.on("error", reject);
   });
@@ -270,10 +270,13 @@ async function handleDeleteMemory(res: ServerResponse, id: number): Promise<void
 async function serveStatic(res: ServerResponse, pathname: string): Promise<boolean> {
   let filePath = resolve(join(DIST_DIR, pathname));
   if (!filePath.startsWith(DIST_DIR)) return false; // path traversal protection
-  if (!existsSync(filePath) || pathname === "/") {
+
+  const exists = await access(filePath).then(() => true, () => false);
+  if (!exists || pathname === "/") {
     filePath = join(DIST_DIR, "index.html");
   }
-  if (!existsSync(filePath)) return false;
+  const indexExists = await access(filePath).then(() => true, () => false);
+  if (!indexExists) return false;
 
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";

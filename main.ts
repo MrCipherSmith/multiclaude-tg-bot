@@ -2,7 +2,7 @@ import { CONFIG } from "./config.ts";
 import { migrate, sql } from "./memory/db.ts";
 import { createBot } from "./bot/bot.ts";
 import { startMcpHttpServer } from "./mcp/server.ts";
-import { stopAllTimers } from "./memory/summarizer.ts";
+import { stopAllTimers, cleanupStaleTimers } from "./memory/summarizer.ts";
 import { sessionManager } from "./sessions/manager.ts";
 
 function startCleanupTimer() {
@@ -19,6 +19,8 @@ function startCleanupTimer() {
       // Clear chat_sessions referencing disconnected sessions, then delete them
       await sql`DELETE FROM chat_sessions WHERE active_session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
+      // Clean up stale idle timers for disconnected sessions
+      await cleanupStaleTimers();
       // Always reset sequence to avoid ID gaps
       await sessionManager.resetSequence();
       const total = mq.count + logs.count + stats.count + perms.count + cliJunk.count + stale;

@@ -65,7 +65,11 @@ export async function streamToTelegram(
           await bot.api.sendMessage(Number(chatId), htmlChunk, { parse_mode: "HTML" });
         } catch {
           // Fallback to plain text
-          await bot.api.sendMessage(Number(chatId), chunk);
+          try {
+            await bot.api.sendMessage(Number(chatId), chunk);
+          } catch (e) {
+            console.warn("[streaming] failed to send continuation chunk:", (e as Error)?.message);
+          }
         }
       }
     }
