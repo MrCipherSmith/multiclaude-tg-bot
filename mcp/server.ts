@@ -30,13 +30,13 @@ async function isAuthenticated(req: IncomingMessage): Promise<boolean> {
 
 function isLocalRequest(req: IncomingMessage): boolean {
   const raw = req.socket.remoteAddress ?? "";
-  if (raw === "127.0.0.1" || raw === "::1" || raw === "::ffff:127.0.0.1") return true;
+  if (raw === "127.0.0.1" || raw === "::1" || raw === "::ffff:127.0.0.1" || raw === "") return true;
   // Normalize IPv4-mapped IPv6
   const addr = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
   const parts = addr.split(".").map(Number);
   if (parts.length !== 4 || parts.some((p) => isNaN(p))) return false;
   const [a, b] = parts;
-  // RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+  // RFC 1918: 10.0.0.0/8, 172.16.0.0/12 (includes Docker bridge 172.17-31), 192.168.0.0/16
   return a === 10 ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168);
