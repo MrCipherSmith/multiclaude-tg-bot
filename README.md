@@ -84,51 +84,56 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 ## Architecture
 
 ```
-                          ┌─────────────────────────────────────────────────┐
-                          │      Host / Laptop / Any terminal              │
-                          │                                                 │
-  ┌─────────────┐ stdio   │  ┌───────────┐  ┌───────────┐  ┌───────────┐  │
-  │ channel.ts  │◀═══════▶│  │ Claude CLI│  │ Claude CLI│  │ Claude CLI│  │
-  │ (per-session│  MCP     │  │ project-a │  │ project-b │  │ general   │  │
+                          ┌──────────────────────────────────────────────────┐
+                          │      Host / Laptop / Any terminal                │
+                          │                                                  │
+  ┌─────────────┐ stdio   │  ┌───────────┐  ┌───────────┐  ┌───────────┐   │
+  │ channel.ts  │◀═══════▶│  │ Claude CLI│  │ Claude CLI│  │ Claude CLI│   │
+  │ (per-session│  MCP    │  │ project-a │  │ project-b │  │ general   │   │
   │  adapter)   │         │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  │
-  └──────┬──────┘         │        │              │              │         │
-         │ polls           │        │   Bash/Read/Edit/Write     │         │
-         │ message_queue   │        ▼              ▼              ▼         │
-         │                 │  ┌──────────────────────────────────────────┐  │
-         │                 │  │           Project Files (host)           │  │
-         │                 │  └──────────────────────────────────────────┘  │
-         │                 └─────────────────────────────────────────────────┘
-         │
-         │                 ┌─────────────────────────────────────────────────┐
-         │                 │              Docker                             │
-         │  direct DB      │                                                 │
-         ├────────────────▶│  ┌──────────────────────────────────────────┐  │
-         │                 │  │  Bot (main.ts)                    :3847  │  │
-         │                 │  │                                          │  │
-         │                 │  │  Telegram polling ◀──▶ Telegram API      │  │
-         │                 │  │  HTTP MCP server  ◀──▶ Claude CLIs      │  │
+  └──────┬──────┘         │        │   Bash/Read/Edit/Write       │         │
+         │ polls           │        ▼              ▼              ▼          │
+         │ message_queue   │  ┌──────────────────────────────────────────┐   │
+         │                 │  │           Project Files (host)           │   │
+         │                 │  └──────────────────────────────────────────┘   │
+         │                 │                                                  │
+         │                 │  ┌──────────────────────────────────────────┐   │
+         │                 │  │  opencode serve (tmux)            :4096  │   │
+         │                 │  │  OpenCode TUI ◀──▶ Project Files (host)  │   │
+         │                 │  └──────────────────────────────────────────┘   │
+         │                 └──────────────────────────────────────────────────┘
+         │                            ▲ HTTP/SSE  (host.docker.internal:4096)
+         │                 ┌──────────┴───────────────────────────────────────┐
+         │                 │              Docker                              │
+         │  direct DB      │                                                  │
+         ├────────────────▶│  ┌──────────────────────────────────────────┐   │
+         │                 │  │  Bot (main.ts)                    :3847  │   │
+         │                 │  │                                          │   │
+         │                 │  │  Telegram polling ◀──▶ Telegram API      │   │
+         │                 │  │  HTTP MCP server  ◀──▶ Claude CLIs      │   │
+         │                 │  │  OpenCode SSE monitor ──▶ Telegram       │   │
          │                 │  │  Standalone LLM   ──▶ Google AI/OpenRouter│  │
-         │                 │  │  Voice transcribe ──▶ Groq API          │  │
-         │                 │  │  Markdown → HTML  ──▶ Telegram          │  │
-         │                 │  │  /health, /stats, cleanup timers        │  │
-         │                 │  └──────────────┬───────────────────────────┘  │
-         │                 │                 │                               │
-         │                 │                 ▼                               │
-         │                 │  ┌──────────────────────────────────────────┐  │
-         │                 │  │  PostgreSQL + pgvector            :5433  │  │
-         │                 │  │                                          │  │
-         │                 │  │  sessions          message_queue         │  │
-         │                 │  │  messages           permission_requests  │  │
-         │                 │  │  memories (vector)  api_request_stats    │  │
-         │                 │  │  chat_sessions      transcription_stats  │  │
-         │                 │  │                     request_logs         │  │
-         │                 │  └──────────────────────────────────────────┘  │
-         │                 └─────────────────────────────────────────────────┘
+         │                 │  │  Voice transcribe ──▶ Groq API           │   │
+         │                 │  │  Markdown → HTML  ──▶ Telegram           │   │
+         │                 │  │  /health, /stats, cleanup timers         │   │
+         │                 │  └──────────────┬────────────────────────────┘  │
+         │                 │                 │                                │
+         │                 │                 ▼                                │
+         │                 │  ┌──────────────────────────────────────────┐   │
+         │                 │  │  PostgreSQL + pgvector            :5433  │   │
+         │                 │  │                                          │   │
+         │                 │  │  sessions          message_queue         │   │
+         │                 │  │  messages           permission_requests  │   │
+         │                 │  │  memories (vector)  api_request_stats    │   │
+         │                 │  │  chat_sessions      transcription_stats  │   │
+         │                 │  │                     request_logs         │   │
+         │                 │  └──────────────────────────────────────────┘   │
+         │                 └──────────────────────────────────────────────────┘
          │
          │                 ┌───────────────────────┐
          └────────────────▶│  Ollama (host)  :11434│
                            │  nomic-embed-text     │
-              embeddings   │  (768 dims)           │
+               embeddings  │  (768 dims)           │
                            └───────────────────────┘
 
 ┌──────────┐   messages    ┌──────────────────┐

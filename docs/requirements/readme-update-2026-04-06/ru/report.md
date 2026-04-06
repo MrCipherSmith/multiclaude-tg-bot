@@ -120,8 +120,12 @@
 
 ---
 
-## 7. Открытые вопросы
+## 7. Закрытые вопросы
 
-- Диаграмма архитектуры не обновлена — OpenCode TUI не отражен на схеме
-- Нет PRD для `/add /model /connections` (управление провайдерами)
-- Нет PRD для OpenCode integration
+Все открытые вопросы, выявленные при создании отчета, теперь закрыты:
+
+| Вопрос | Решение |
+|--------|--------|
+| Диаграмма архитектуры не отражает OpenCode | Исправлено — диаграмма обновлена в README.md: добавлен блок `opencode serve (tmux)` в раздел хоста, стрелка `HTTP/SSE ↕ host.docker.internal:4096`, строка `OpenCode SSE monitor` внутри блока Bot |
+| Нет PRD для `/add /model /connections` | Создан — `docs/requirements/provider-management-2026-04-06/en/prd.md` |
+| Нет PRD для OpenCode integration | Создан — `docs/requirements/opencode-integration-2026-04-06/en/prd.md` |

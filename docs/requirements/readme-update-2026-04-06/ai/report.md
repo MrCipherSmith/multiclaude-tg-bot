@@ -86,3 +86,10 @@ README: 620 → 770 lines
 cli.ts +302, adapters/opencode-monitor.ts NEW+214, utils/tools-reader.ts NEW+141, bot/commands/admin.ts +98, sessions/manager.ts +35, bot/handlers.ts +28, mcp/server.ts +33, bot/text-handler.ts +32-62, bot/callbacks.ts +35, scripts/run-opencode.sh NEW+40, docker-compose.yml -20, install.sh +6, package.json +1
 
 Total: 659 insertions, 144 deletions, 13 files
+
+## Open Items Resolution
+
+All open items resolved:
+- Architecture diagram: updated in README.md — added opencode serve box to host section, HTTP/SSE arrow to Docker Bot, OpenCode SSE monitor line in Bot box
+- PRD for /add /model /connections: docs/requirements/provider-management-2026-04-06/en/prd.md
+- PRD for OpenCode integration: docs/requirements/opencode-integration-2026-04-06/en/prd.md

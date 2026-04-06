@@ -153,9 +153,12 @@ Added `## Recent Changes (v1.8.0)` with 4 categories: Skills & Commands, LLM Pro
 
 ---
 
-## 7. Open Items
+## 7. Resolution of Open Items
 
-- Architecture diagram could be extended to show OpenCode TUI as a new component
-- `docs/requirements/telegram-tool-commands-2026-04-06/` already covers `/skills /commands /hooks` PRD
-- No dedicated PRD exists yet for `/add /model /connections` provider management
-- No dedicated PRD exists yet for OpenCode integration
+All open items identified at report creation are now resolved:
+
+| Item | Resolution |
+|------|-----------|
+| Architecture diagram missing OpenCode | Fixed — diagram updated in README.md: added `opencode serve (tmux)` host box and `HTTP/SSE ↕ host.docker.internal:4096` arrow; added `OpenCode SSE monitor` line inside Bot box |
+| No PRD for `/add /model /connections` | Created — `docs/requirements/provider-management-2026-04-06/en/prd.md` |
+| No PRD for OpenCode integration | Created — `docs/requirements/opencode-integration-2026-04-06/en/prd.md` |
