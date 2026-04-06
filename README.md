@@ -26,7 +26,10 @@ Done. Open Telegram, type `/sessions` — your project is there.
 
 ### Dashboard
 
-<img width="1722" height="885" alt="Dashboard" src="https://github.com/user-attachments/assets/4ba73c7c-1141-4fe7-b9af-5293d95cf5e8" />
+![Overview](examples/screenshots/overview.jpg)
+![Stats](examples/screenshots/stats.jpg)
+
+See all dashboard pages: [Overview, Sessions, Stats, Logs, Memory](examples/dashboard.md)
 
 ## Why MCP?
 
@@ -596,6 +599,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 
 ## Guides
 
+- [Dashboard](examples/dashboard.md) — overview, sessions, stats, logs, memory pages with screenshots
 - [Cloudflare Tunnel Setup](guides/cloudflare-tunnel-setup.md) — domain purchase, tunnel configuration, and webhook activation
 - [Usage Patterns](examples/usage-patterns.md) — status updates, sub-agent progress trees, file diffs, memory integration
 
