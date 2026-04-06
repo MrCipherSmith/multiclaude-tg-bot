@@ -21,6 +21,9 @@ COPY . .
 # Copy dashboard build output from stage 1
 COPY --from=dashboard-build /app/dashboard/dist dashboard/dist
 
+# Ensure downloads dir exists and is writable
+RUN mkdir -p /app/downloads
+
 # Non-root user
 RUN useradd --no-create-home --shell /bin/false app && chown -R app /app
 USER app
