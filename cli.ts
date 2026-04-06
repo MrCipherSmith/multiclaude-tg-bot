@@ -370,10 +370,112 @@ Keep status messages short (under 50 chars). The status is automatically deleted
 
 // --- Management commands ---
 
-async function start() {
+async function dockerStart() {
   step("Starting bot");
   const result = await run(["docker", "compose", "up", "-d"]);
   result.ok ? done() : fail();
+}
+
+async function start(dir?: string) {
+  // Resolve directory
+  let resolvedDir = dir;
+  if (!resolvedDir || resolvedDir.startsWith("--")) resolvedDir = ".";
+  const projectDir = resolve(resolvedDir);
+  if (!existsSync(projectDir)) {
+    console.log(c.red(`  Directory not found: ${projectDir}`));
+    return;
+  }
+
+  const name = basename(projectDir);
+
+  // Determine provider: from flag, then from projects file, then ask
+  let provider: "claude" | "opencode" | undefined;
+  if (process.argv.includes("--claude")) provider = "claude";
+  else if (process.argv.includes("--opencode")) provider = "opencode";
+
+  if (!provider) {
+    const projects = await loadProjects();
+    const project = projects.find(p => p.path === projectDir);
+    if (project?.provider) {
+      provider = project.provider as "claude" | "opencode";
+      console.log(`  ${c.dim(`Provider from config: ${provider}`)}`);
+    }
+  }
+
+  if (!provider) {
+    const choice = askChoice("Provider:", ["claude (Claude Code — full MCP integration)", "opencode (opencode TUI)"]);
+    provider = choice === 1 ? "opencode" : "claude";
+  }
+
+  // Register in bot DB
+  const regResult = await run([
+    "docker", "compose", "exec", "-T", "bot",
+    "bun", "/app/cli.ts", "_register",
+    "--provider", provider, "--path", projectDir, "--name", name,
+  ], { silent: false });
+  if (regResult.output) console.log(regResult.output);
+  if (!regResult.ok) console.log(`  ${c.yellow("Warning:")} bot not running — session will register on next start`);
+
+  if (provider === "claude") {
+    console.log(`  ${c.green("Starting claude...")} ${c.dim("(Ctrl+C to stop)")}\n`);
+    const proc = Bun.spawn(
+      ["bash", `${BOT_DIR}/scripts/run-cli.sh`, projectDir],
+      { stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir },
+    );
+    await proc.exited;
+    return;
+  }
+
+  // --- opencode: open TUI with shared session ---
+  const opencodePort = "4096";
+  await ensureOpencodeServe(opencodePort);
+
+  let opencodeSessionId: string | undefined;
+  const getResult = await run([
+    "docker", "compose", "exec", "-T", "bot",
+    "bun", "/app/cli.ts", "_get-opencode-session", "--path", projectDir,
+  ], { silent: true });
+  opencodeSessionId = getResult.output?.trim() || undefined;
+
+  if (!opencodeSessionId) {
+    try {
+      const res = await fetch(`http://localhost:${opencodePort}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json() as { id?: string };
+      opencodeSessionId = data.id;
+    } catch (err: any) {
+      console.log(`  ${c.red("Failed to create opencode session:")} ${err.message}`);
+    }
+  }
+
+  if (opencodeSessionId) {
+    await run([
+      "docker", "compose", "exec", "-T", "bot",
+      "bun", "/app/cli.ts", "_set-opencode-session",
+      "--path", projectDir, "--session-id", opencodeSessionId,
+    ], { silent: true });
+  }
+
+  console.log(`\n  ${c.cyan("opencode TUI")} — ${c.dim("Ctrl+C or q to exit (session → disconnected)")}\n`);
+  const tuiArgs = ["opencode", "attach", `http://localhost:${opencodePort}`];
+  if (opencodeSessionId) tuiArgs.push("--session", opencodeSessionId);
+  const tui = Bun.spawn(tuiArgs, {
+    cwd: projectDir,
+    stdout: "inherit",
+    stderr: "inherit",
+    stdin: "inherit",
+  });
+  await tui.exited;
+
+  await run([
+    "docker", "compose", "exec", "-T", "bot",
+    "bun", "/app/cli.ts", "_disconnect",
+    "--path", projectDir,
+  ], { silent: true });
+  console.log(`\n  ${c.dim("Session disconnected.")}`);
 }
 
 async function stop() {
@@ -1258,7 +1360,7 @@ function help() {
     mcp-register    Re-register MCP servers in Claude Code
 
   ${c.bold("Manage:")}
-    start           Start bot (docker compose up)
+    docker-start    Start bot (docker compose up)
     stop            Stop bot (docker compose down)
     restart         Rebuild and restart bot
     status          Show bot health and stats
@@ -1280,6 +1382,7 @@ function help() {
     opencode-stop   Kill opencode serve tmux session
 
   ${c.bold("Connect:")}
+    start [dir]          Register + launch CLI/TUI in terminal (--claude / --opencode)
     connect [dir]        Start single CLI session (default: current dir)
     connect [dir] --tmux Start in standalone tmux (not managed)
 `);
@@ -1292,7 +1395,8 @@ const command = process.argv[2];
 switch (command) {
   case "setup":       await setup(); break;
   case "remote":      await remote(); break;
-  case "start":       await start(); break;
+  case "start":       await start(process.argv[3]); break;
+  case "docker-start": await dockerStart(); break;
   case "stop":        await stop(); break;
   case "restart":     await restart(); break;
   case "status":      await status(); break;
