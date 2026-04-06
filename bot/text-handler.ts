@@ -7,6 +7,7 @@ import { touchIdleTimer, checkOverflow } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
 import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, getBotRef } from "./handlers.ts";
+import { getAdapter } from "../adapters/index.ts";
 
 export async function enqueueToolCommand(
   chatId: string,
@@ -21,10 +22,17 @@ export async function enqueueToolCommand(
     return;
   }
 
-  await sql`
-    INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
-    VALUES (${route.sessionId}, ${chatId}, ${fromUser}, ${command}, ${"tool"})
-  `;
+  // Route tool commands through the adapter (only claude uses message_queue for tools)
+  if (route.cliType === "claude") {
+    await sql`
+      INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
+      VALUES (${route.sessionId}, ${chatId}, ${fromUser}, ${command}, ${"tool"})
+    `;
+  } else {
+    const adapter = getAdapter(route.cliType);
+    await adapter.send(route.sessionId, command, { chatId, fromUser, messageId: "tool" });
+  }
+
   appendLog(route.sessionId, chatId, "tools", `queued: ${command.slice(0, 80)}`);
   if (ctx) await ctx.reply(`✅ Sent to session: <code>${command}</code>`, { parse_mode: "HTML" });
 }
@@ -65,7 +73,7 @@ export async function handleText(ctx: Context): Promise<void> {
   }
 
   if (route.mode === "cli") {
-    appendLog(route.sessionId, chatId, "route", `cli session #${route.sessionId}`);
+    appendLog(route.sessionId, chatId, "route", `cli session #${route.sessionId} [${route.cliType}]`);
 
     // Show typing indicator
     await ctx.replyWithChatAction("typing");
@@ -83,18 +91,83 @@ export async function handleText(ctx: Context): Promise<void> {
       },
     });
 
-    // Put message into queue for stdio channel adapter
-    await sql`
-      INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
-      VALUES (
-        ${route.sessionId},
-        ${chatId},
-        ${ctx.from?.username ?? ctx.from?.first_name ?? "user"},
-        ${text},
-        ${String(ctx.message?.message_id ?? "")}
-      )
-    `;
-    appendLog(route.sessionId, chatId, "queue", "message queued for CLI");
+    const fromUser = ctx.from?.username ?? ctx.from?.first_name ?? "user";
+    const messageId = String(ctx.message?.message_id ?? "");
+
+    if (route.cliType === "opencode") {
+      // OpencodeAdapter: send via HTTP and stream response back to Telegram
+      const { opencodeAdapter } = await import("../adapters/opencode.ts");
+      try {
+        await opencodeAdapter.send(route.sessionId, text, { chatId, fromUser, messageId });
+        appendLog(route.sessionId, chatId, "queue", "message sent to opencode");
+
+        // Subscribe to SSE response and stream to Telegram
+        let fullResponse = "";
+        let sentMsgId: number | undefined;
+
+        const unsubscribe = await opencodeAdapter.subscribeToResponses(
+          route.sessionId,
+          async (chunk) => {
+            fullResponse += chunk;
+            // Update or send streaming message
+            if (!sentMsgId) {
+              const msg = await bot.api.sendMessage(Number(chatId), chunk);
+              sentMsgId = msg.message_id;
+            } else {
+              try {
+                await bot.api.editMessageText(Number(chatId), sentMsgId, fullResponse);
+              } catch {
+                // edit throttle — ignore
+              }
+            }
+          },
+          async () => {
+            // On done: save assistant response
+            if (fullResponse) {
+              await addMessage({
+                sessionId: route.sessionId,
+                projectPath: route.projectPath,
+                chatId,
+                role: "assistant",
+                content: fullResponse,
+              });
+            }
+            appendLog(route.sessionId, chatId, "reply", `opencode response: ${fullResponse.length} chars`);
+            unsubscribe();
+          },
+          async (err) => {
+            appendLog(route.sessionId, chatId, "opencode", `SSE error: ${err.message}`, "error");
+            await ctx.reply(`opencode error: ${err.message}`);
+            unsubscribe();
+          },
+        );
+      } catch (err: any) {
+        const msg = err?.message ?? String(err);
+        appendLog(route.sessionId, chatId, "opencode", `send error: ${msg}`, "error");
+        if (msg.includes("ECONNREFUSED") || msg.includes("fetch")) {
+          await ctx.reply(
+            `opencode is not running. Start it with:\n<code>opencode serve</code>\nor enable autostart in session config.`,
+            { parse_mode: "HTML" },
+          );
+        } else {
+          await ctx.reply(`Error: ${msg}`);
+        }
+      }
+    } else {
+      // ClaudeAdapter (default): insert into message_queue — channel.ts handles delivery
+      await sql`
+        INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
+        VALUES (
+          ${route.sessionId},
+          ${chatId},
+          ${fromUser},
+          ${text},
+          ${messageId}
+        )
+      `;
+      appendLog(route.sessionId, chatId, "queue", "message queued for CLI");
+    }
+
     touchIdleTimer(route.sessionId, chatId, route.projectPath);
     return;
   }
