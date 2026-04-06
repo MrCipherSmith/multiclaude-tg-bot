@@ -289,9 +289,19 @@ Keep status messages short (under 50 chars). The status is automatically deleted
     console.log(` ${c.yellow("exists, skipping")}`);
   }
 
+  // opencode info (Docker only — service starts automatically)
+  if (useDocker) {
+    console.log(`\n  ${c.bold("opencode")} ${c.dim("(bundled, starts automatically)")}`);
+    console.log(`  opencode serve is included in docker-compose and runs on port 4096.`);
+    console.log(`  It reads API keys from .env — ${anthropicKey ? c.green("ANTHROPIC_API_KEY is set ✓") : c.yellow("no ANTHROPIC_API_KEY — configure via: opencode")}\n`);
+    console.log(`  Register projects with opencode:`);
+    console.log(`    ${c.cyan("claude-bot add --provider opencode .")}  — register current dir`);
+    console.log(`    ${c.cyan("claude-bot add --provider claude .")}     — register with Claude Code\n`);
+  }
+
   // Summary
   console.log(`\n  ${c.green(c.bold("Setup complete!"))}\n`);
-  console.log(`  Start a CLI session:`);
+  console.log(`  Start a Claude Code session:`);
   console.log(`    ${c.cyan("cd your-project")}`);
   console.log(`    ${c.cyan("claude --dangerously-load-development-channels server:claude-bot-channel")}\n`);
   console.log(`  Manage the bot:`);
