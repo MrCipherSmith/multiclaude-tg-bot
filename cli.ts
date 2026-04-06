@@ -319,12 +319,12 @@ Keep status messages short (under 50 chars). The status is automatically deleted
       // Kill existing window if any, then create fresh
       await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
       await run(["tmux", "send-keys", "-t", "opencode-serve",
-        `opencode serve --port ${opencodePort}`, "Enter"]);
+        `opencode serve --port ${opencodePort} --hostname 0.0.0.0`, "Enter"]);
       done();
       console.log(`  ${c.dim(`Attach: tmux attach -t opencode-serve`)}`);
     } else {
       step("Starting opencode serve in background");
-      Bun.spawn(["opencode", "serve", "--port", opencodePort], {
+      Bun.spawn(["opencode", "serve", "--port", opencodePort, "--hostname", "0.0.0.0"], {
         stdout: Bun.file(`${BOT_DIR}/logs/opencode.log`),
         stderr: Bun.file(`${BOT_DIR}/logs/opencode.log`),
       });
