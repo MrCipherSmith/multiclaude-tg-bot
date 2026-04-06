@@ -767,6 +767,8 @@ interface StatusState {
 }
 
 const activeStatus = new Map<string, StatusState>();
+// Last known token count per chat, extracted from tmux monitor spinner lines
+const lastTokenInfo = new Map<string, string>();
 
 function formatElapsed(ms: number): string {
   const sec = Math.round(ms / 1000);
@@ -869,7 +871,9 @@ async function editStatusMessage(state: StatusState): Promise<void> {
   if (!token) return;
 
   const elapsed = formatElapsed(Date.now() - state.startedAt);
-  const text = `⏳ ${state.stage} (${elapsed})`;
+  const tokens = lastTokenInfo.get(state.chatId);
+  const tokenStr = tokens ? ` · ↓ ${tokens}` : "";
+  const text = `⏳ ${state.stage} (${elapsed}${tokenStr})`;
 
   try {
     await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
@@ -890,6 +894,7 @@ async function deleteStatusMessage(chatId: string): Promise<void> {
 
   if (state.timer) clearInterval(state.timer);
   activeStatus.delete(chatId);
+  lastTokenInfo.delete(chatId);
 
   // Also stop typing indicator
   stopTypingForChat(chatId);
@@ -918,7 +923,12 @@ const activeMonitors = new Map<string, TmuxMonitorHandle | OutputMonitorHandle>(
 async function startProgressMonitorForChat(chatId: string): Promise<void> {
   stopProgressMonitorForChat(chatId);
 
-  const onStatus = (status: string) => updateStatus(chatId, status);
+  const onStatus = (status: string) => {
+    // Extract token count from spinner lines: "↓ 12.1k tokens" or "↓ 386 tokens"
+    const tokenMatch = status.match(/↓\s*([\d.]+[kmKM]?\s*tokens)/i);
+    if (tokenMatch) lastTokenInfo.set(chatId, tokenMatch[1].trim());
+    updateStatus(chatId, status);
+  };
 
   // Try tmux first, fall back to output file monitor
   let monitor = await startTmuxMonitor(projectName, onStatus);
