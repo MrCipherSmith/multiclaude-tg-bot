@@ -6,6 +6,30 @@ import type { Bot, Context } from "grammy";
 export const pendingInput = new Map<string, (ctx: Context) => Promise<void>>();
 const pendingInputTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Pending tool invocation: waiting for user to supply arguments
+export interface PendingTool {
+  type: "skill" | "cmd";
+  name: string;
+}
+export const pendingToolInput = new Map<string, PendingTool>();
+const pendingToolTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export function setPendingTool(chatId: string, tool: PendingTool): void {
+  const existing = pendingToolTimers.get(chatId);
+  if (existing) clearTimeout(existing);
+  pendingToolInput.set(chatId, tool);
+  pendingToolTimers.set(chatId, setTimeout(() => {
+    pendingToolInput.delete(chatId);
+    pendingToolTimers.delete(chatId);
+  }, 5 * 60_000)); // 5 min TTL
+}
+
+export function clearPendingTool(chatId: string): void {
+  pendingToolInput.delete(chatId);
+  const t = pendingToolTimers.get(chatId);
+  if (t) { clearTimeout(t); pendingToolTimers.delete(chatId); }
+}
+
 export function setPendingInput(chatId: string, handler: (ctx: Context) => Promise<void>): void {
   // Clear existing timer
   const existing = pendingInputTimers.get(chatId);
@@ -38,7 +62,7 @@ export function getBotRef(): Bot {
 
 import { handleSessions, handleSwitch, handleSwitchTo, handleSessionInfo, handleRename, handleRemove, handleCleanup, handleStart, handleHelp } from "./commands/session.ts";
 import { handleRemember, handleRecall, handleMemories, handleForget, handleSummarize, handleClear } from "./commands/memory.ts";
-import { handleStats, handleLogs, handleStatus, handlePending, handleTools, handleSkills, handleRules } from "./commands/admin.ts";
+import { handleStats, handleLogs, handleStatus, handlePending, handleTools, handleSkills, handleCommands, handleHooks, handleRules } from "./commands/admin.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
 import { handleCallbackQuery } from "./callbacks.ts";
 import { handleText } from "./text-handler.ts";
@@ -72,6 +96,8 @@ export function registerHandlers(b: Bot): void {
   b.command("pending", handlePending);
   b.command("tools", handleTools);
   b.command("skills", handleSkills);
+  b.command("commands", handleCommands);
+  b.command("hooks", handleHooks);
   b.command("rules", handleRules);
 
   // Inline keyboard callbacks (permissions, session switch)

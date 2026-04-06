@@ -2,6 +2,7 @@ import type { Context } from "grammy";
 import { sessionManager } from "../../sessions/manager.ts";
 import { sql } from "../../memory/db.ts";
 import { getApiStats, getTranscriptionStats, getMessageStats, getSessionLogs } from "../../utils/stats.ts";
+import { readSkills, readCommands, readHooks } from "../../utils/tools-reader.ts";
 
 export async function handleStats(ctx: Context): Promise<void> {
   await ctx.replyWithChatAction("typing");
@@ -222,58 +223,76 @@ export async function handleTools(ctx: Context): Promise<void> {
   await ctx.reply(lines.join("\n"));
 }
 
-const KNOWLEDGE_BASE = process.env.KNOWLEDGE_BASE;
-
 export async function handleSkills(ctx: Context): Promise<void> {
-  if (!KNOWLEDGE_BASE) {
-    await ctx.reply("KNOWLEDGE_BASE not configured. Set the path in .env.");
+  await ctx.replyWithChatAction("typing");
+
+  const skills = await readSkills();
+  if (skills.length === 0) {
+    await ctx.reply("No skills found in ~/.claude/skills/");
     return;
   }
-  try {
-    const agents = await Bun.file(`${KNOWLEDGE_BASE}/AGENTS.md`).text();
 
-    // Extract skills from Skills Catalog section
-    const skillsMatch = agents.match(/## 🎨 Skills Catalog[\s\S]*?(?=\n---|\n## [^#])/);
-    if (!skillsMatch) {
-      await ctx.reply("Skills catalog not found.");
-      return;
-    }
+  const buttons = skills.map((s) => {
+    const label = `${s.name} — ${s.description.slice(0, 55)}${s.description.length > 55 ? "…" : ""}`;
+    const data = `skill:${s.name}`.slice(0, 64);
+    return [{ text: label, callback_data: data }];
+  });
 
-    const lines: string[] = ["<b>Skills Catalog</b>\n"];
+  await ctx.reply(`⚡ <b>Skills</b> (${skills.length})`, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: buttons },
+  });
+}
 
-    // Parse skill entries with categories
-    const categoryRegex = /### (.+)\n/g;
-    const skillRegex = /\*\*`skills\/([\w-]+)`\*\*\s*(?:⭐\s*\w+[^*]*)?\n-\s*\*\*Purpose\*\*:\s*(.+)/g;
+export async function handleCommands(ctx: Context): Promise<void> {
+  await ctx.replyWithChatAction("typing");
 
-    // Extract categories and their positions
-    const categories: { name: string; pos: number }[] = [];
-    let catMatch;
-    while ((catMatch = categoryRegex.exec(skillsMatch[0])) !== null) {
-      categories.push({ name: catMatch[1], pos: catMatch.index });
-    }
-
-    let match;
-    while ((match = skillRegex.exec(skillsMatch[0])) !== null) {
-      // Find which category this skill belongs to
-      const cat = categories.filter((c) => c.pos < match!.index).pop();
-      if (cat && !lines.some((l) => l.includes(cat.name))) {
-        lines.push(`\n<b>${cat.name}</b>`);
-      }
-      lines.push(`  <code>${match[1]}</code> — ${match[2]}`);
-    }
-
-    if (lines.length === 1) {
-      await ctx.reply("No skills found in catalog.");
-      return;
-    }
-
-    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
-  } catch {
-    await ctx.reply(`Failed to read knowledge base (${KNOWLEDGE_BASE})`);
+  const commands = await readCommands();
+  if (commands.length === 0) {
+    await ctx.reply("No commands found in ~/.claude/commands/");
+    return;
   }
+
+  const buttons = commands.map((c) => {
+    const label = `/${c.name} — ${c.description.slice(0, 52)}${c.description.length > 52 ? "…" : ""}`;
+    const data = `cmd:${c.name}`.slice(0, 64);
+    return [{ text: label, callback_data: data }];
+  });
+
+  await ctx.reply(`🛠 <b>Commands</b> (${commands.length})`, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: buttons },
+  });
+}
+
+export async function handleHooks(ctx: Context): Promise<void> {
+  await ctx.replyWithChatAction("typing");
+
+  const hooks = await readHooks();
+  if (hooks.length === 0) {
+    await ctx.reply("No hooks configured in ~/.claude/settings.json");
+    return;
+  }
+
+  const byEvent = new Map<string, string[]>();
+  for (const h of hooks) {
+    if (!byEvent.has(h.event)) byEvent.set(h.event, []);
+    const short = h.command.split(" ").pop()?.split("/").pop() ?? h.command;
+    byEvent.get(h.event)!.push(h.matcher ? `${h.matcher} → ${short}` : short);
+  }
+
+  const lines = ["🪝 <b>Hooks</b>\n"];
+  for (const [event, entries] of byEvent) {
+    lines.push(`<b>${event}</b>`);
+    for (const e of entries) lines.push(`  ${e}`);
+    lines.push("");
+  }
+
+  await ctx.reply(lines.join("\n").trim(), { parse_mode: "HTML" });
 }
 
 export async function handleRules(ctx: Context): Promise<void> {
+  const KNOWLEDGE_BASE = process.env.KNOWLEDGE_BASE;
   if (!KNOWLEDGE_BASE) {
     await ctx.reply("KNOWLEDGE_BASE not configured. Set the path in .env.");
     return;
@@ -281,7 +300,6 @@ export async function handleRules(ctx: Context): Promise<void> {
   try {
     const agents = await Bun.file(`${KNOWLEDGE_BASE}/AGENTS.md`).text();
 
-    // Extract rules from Core Rule Catalog section
     const rulesMatch = agents.match(/## 📖 Core Rule Catalog[\s\S]*?(?=\n---|\n## [^#])/);
     if (!rulesMatch) {
       await ctx.reply("Rules catalog not found.");
@@ -289,8 +307,6 @@ export async function handleRules(ctx: Context): Promise<void> {
     }
 
     const lines: string[] = ["<b>Core Rules</b>\n"];
-
-    // Parse categories and rules
     const categoryRegex = /\*\*(.+?):\*\*/g;
     const ruleRegex = /-\s*`core\/([\w-]+)\.mdc`:\s*(.+)/g;
 

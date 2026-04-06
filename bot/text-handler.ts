@@ -6,7 +6,28 @@ import { routeMessage } from "../sessions/router.ts";
 import { touchIdleTimer, checkOverflow } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
-import { pendingInput, clearPendingInput, getBotRef } from "./handlers.ts";
+import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, getBotRef } from "./handlers.ts";
+
+export async function enqueueToolCommand(
+  chatId: string,
+  fromUser: string,
+  command: string,
+  ctx?: Context,
+): Promise<void> {
+  const route = await routeMessage(chatId);
+
+  if (route.mode !== "cli") {
+    if (ctx) await ctx.reply("⚠️ No active CLI session. Use /switch to connect one.");
+    return;
+  }
+
+  await sql`
+    INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
+    VALUES (${route.sessionId}, ${chatId}, ${fromUser}, ${command}, ${"tool"})
+  `;
+  appendLog(route.sessionId, chatId, "tools", `queued: ${command.slice(0, 80)}`);
+  if (ctx) await ctx.reply(`✅ Sent to session: <code>${command}</code>`, { parse_mode: "HTML" });
+}
 
 export async function handleText(ctx: Context): Promise<void> {
   const bot = getBotRef();
@@ -19,6 +40,15 @@ export async function handleText(ctx: Context): Promise<void> {
   if (handler) {
     clearPendingInput(chatId);
     await handler(ctx);
+    return;
+  }
+
+  // Check for pending tool invocation (waiting for arguments)
+  const pendingTool = pendingToolInput.get(chatId);
+  if (pendingTool) {
+    clearPendingTool(chatId);
+    const command = `/${pendingTool.name} ${text}`.trim();
+    await enqueueToolCommand(chatId, ctx.from?.username ?? ctx.from?.first_name ?? "user", command, ctx);
     return;
   }
 

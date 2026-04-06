@@ -2,6 +2,9 @@ import type { Context } from "grammy";
 import { sessionManager } from "../sessions/manager.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
+import { readSkills, readCommands } from "../utils/tools-reader.ts";
+import { setPendingTool } from "./handlers.ts";
+import { enqueueToolCommand } from "./text-handler.ts";
 
 export async function handleCallbackQuery(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
@@ -9,8 +12,40 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
 
   if (data.startsWith("perm:")) return handlePermissionCallback(ctx);
   if (data.startsWith("switch:")) return handleSwitchCallback(ctx);
+  if (data.startsWith("skill:") || data.startsWith("cmd:")) return handleToolCallback(ctx);
 
   await ctx.answerCallbackQuery({ text: "Unknown action" });
+}
+
+async function handleToolCallback(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  const chatId = String(ctx.chat?.id ?? "");
+  const fromUser = ctx.from?.username ?? ctx.from?.first_name ?? "user";
+
+  const isSkill = data.startsWith("skill:");
+  const type = isSkill ? "skill" : "cmd";
+  const name = data.slice(data.indexOf(":") + 1);
+
+  if (!name) {
+    await ctx.answerCallbackQuery({ text: "Invalid action" });
+    return;
+  }
+
+  // Resolve requiresArgs
+  const items = isSkill ? await readSkills() : await readCommands();
+  const tool = items.find((t) => t.name === name);
+  const requiresArgs = tool?.requiresArgs ?? true; // safe default
+
+  if (!requiresArgs) {
+    await ctx.answerCallbackQuery({ text: `Running /${name}…` });
+    await enqueueToolCommand(chatId, fromUser, `/${name}`);
+    return;
+  }
+
+  // Ask for arguments
+  setPendingTool(chatId, { type, name });
+  await ctx.answerCallbackQuery();
+  await ctx.reply(`Enter arguments for <code>/${name}</code>:`, { parse_mode: "HTML" });
 }
 
 async function handleSwitchCallback(ctx: Context): Promise<void> {
