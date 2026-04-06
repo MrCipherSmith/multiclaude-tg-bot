@@ -57,7 +57,7 @@ function parseCookie(req: IncomingMessage, name: string): string | undefined {
 }
 
 function setCookie(res: ServerResponse, name: string, value: string, maxAge: number): void {
-  const secure = (process.env.SECURE_COOKIES === "true" || CONFIG.TELEGRAM_WEBHOOK_URL.startsWith("https")) ? "; Secure" : "";
+  const secure = (process.env.SECURE_COOKIES !== "false" && (process.env.SECURE_COOKIES === "true" || CONFIG.TELEGRAM_WEBHOOK_URL.startsWith("https") || process.env.NODE_ENV === "production")) ? "; Secure" : "";
   res.setHeader("Set-Cookie", `${name}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${secure}`);
 }
 
@@ -315,6 +315,16 @@ export async function handleDashboardRequest(
   if (pathname.startsWith("/api/")) {
     const user = await getUser(req);
     if (!user) { sendError(res, "Unauthorized", 401); return true; }
+
+    // CSRF protection: verify Origin header on state-changing requests
+    if (method !== "GET" && method !== "HEAD") {
+      const origin = req.headers.origin;
+      const host = req.headers.host;
+      if (origin && host && !origin.includes(host)) {
+        sendError(res, "CSRF: origin mismatch", 403);
+        return true;
+      }
+    }
 
     // Parse session ID from path
     const sessionMatch = pathname.match(/^\/api\/sessions\/(\d+)(\/messages)?$/);

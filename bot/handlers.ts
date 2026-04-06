@@ -25,11 +25,12 @@ export function clearPendingInput(chatId: string): void {
 }
 
 // Bot reference set from bot.ts
-let bot: any;
-export function setBotRef(b: any): void {
+let bot: Bot | null = null;
+export function setBotRef(b: Bot): void {
   bot = b;
 }
-export function getBotRef(): any {
+export function getBotRef(): Bot {
+  if (!bot) throw new Error("Bot reference not set — call setBotRef() first");
   return bot;
 }
 

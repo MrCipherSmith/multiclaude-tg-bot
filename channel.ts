@@ -36,7 +36,8 @@ const PermissionRequestSchema = NotificationSchema.extend({
   }).passthrough(),
 });
 
-// Read config from env or defaults
+// Config read directly from env (not via config.ts) because channel.ts runs
+// as a separate stdio process, not part of the main bot. This is intentional.
 const DATABASE_URL = process.env.DATABASE_URL!;
 const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
@@ -956,7 +957,33 @@ async function releasePollingLock(): Promise<void> {
   await sql`SELECT pg_advisory_unlock(${sessionId})`.catch(() => {});
 }
 
+// Wake signal: LISTEN/NOTIFY triggers immediate poll instead of waiting POLL_INTERVAL_MS
+let wakeResolve: (() => void) | null = null;
+
+async function setupListenNotify(): Promise<void> {
+  try {
+    // Use a separate connection for LISTEN (it stays open)
+    const listenSql = postgres(DATABASE_URL, { max: 1 });
+    await listenSql.listen(`message_queue_${sessionId}`, () => {
+      if (wakeResolve) { wakeResolve(); wakeResolve = null; }
+    });
+    process.stderr.write(`[channel] LISTEN/NOTIFY active for session #${sessionId}\n`);
+  } catch (err) {
+    process.stderr.write(`[channel] LISTEN/NOTIFY setup failed, falling back to polling: ${err}\n`);
+  }
+}
+
+function waitForWakeOrTimeout(): Promise<void> {
+  return new Promise((resolve) => {
+    wakeResolve = resolve;
+    setTimeout(() => { wakeResolve = null; resolve(); }, POLL_INTERVAL_MS);
+  });
+}
+
 async function pollMessages() {
+  // Try to set up instant wake via LISTEN/NOTIFY
+  if (sessionId !== null) await setupListenNotify();
+
   while (polling) {
     try {
       if (sessionId === null) {
@@ -1007,7 +1034,8 @@ async function pollMessages() {
       process.stderr.write(`[channel] poll error: ${err}\n`);
     }
 
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    // Wait for NOTIFY wake signal or fall back to polling interval
+    await waitForWakeOrTimeout();
   }
 }
 

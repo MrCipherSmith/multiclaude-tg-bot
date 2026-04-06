@@ -7,7 +7,7 @@ services:
     env_file: .env
     environment:
       # Override for Docker-internal networking
-      DATABASE_URL: postgres://claude_bot:${POSTGRES_PASSWORD:-claude_bot_secret}@postgres:5432/claude_bot
+      DATABASE_URL: postgres://claude_bot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/claude_bot
       OLLAMA_URL: http://host.docker.internal:11434
       DOWNLOADS_DIR: /app/downloads
       HOST_DOWNLOADS_DIR: ${HOST_DOWNLOADS_DIR:-${PWD}/downloads}
@@ -36,7 +36,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: claude_bot
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claude_bot_secret}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: claude_bot
     ports:
       - "127.0.0.1:5433:5432"

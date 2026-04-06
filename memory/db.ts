@@ -191,8 +191,28 @@ const migrations: Migration[] = [
       await tx`CREATE INDEX IF NOT EXISTS idx_request_logs_session_created ON request_logs(session_id, created_at)`;
     },
   },
-  // Future migrations go here:
-  // { version: 2, name: "add some column", up: async (tx) => { ... } },
+  {
+    version: 2,
+    name: "message_queue NOTIFY trigger",
+    up: async (tx) => {
+      // Trigger sends NOTIFY with session_id as channel name
+      // channel.ts listens on `message_queue_{session_id}` for instant wake
+      await tx.unsafe(`
+        CREATE OR REPLACE FUNCTION notify_message_queue() RETURNS trigger AS $$
+        BEGIN
+          PERFORM pg_notify('message_queue_' || NEW.session_id, NEW.id::text);
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+      `);
+      await tx.unsafe(`
+        DROP TRIGGER IF EXISTS message_queue_notify ON message_queue;
+        CREATE TRIGGER message_queue_notify
+          AFTER INSERT ON message_queue
+          FOR EACH ROW EXECUTE FUNCTION notify_message_queue();
+      `);
+    },
+  },
 ];
 
 // --- Public API ---
