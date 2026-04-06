@@ -1,5 +1,23 @@
 import { sql } from "../memory/db.ts";
 
+/** Normalize cli_config — handles broken states: JSONB string, array of strings, or object */
+function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (Array.isArray(raw)) {
+    const merged: Record<string, unknown> = {};
+    for (const item of raw) {
+      try {
+        const parsed = typeof item === "string" ? JSON.parse(item) : item;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) Object.assign(merged, parsed);
+      } catch { /* skip */ }
+    }
+    return merged;
+  }
+  if (typeof raw === "string") { try { return JSON.parse(raw); } catch { return {}; } }
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  return {};
+}
+
 export interface Session {
   id: number;
   name: string | null;
@@ -38,7 +56,7 @@ export class SessionManager {
         const [row] = await sql`
           UPDATE sessions
           SET client_id = ${clientId}, status = 'active', last_active = now(),
-              cli_type = ${cliType ?? "claude"}, cli_config = ${JSON.stringify(cliConfig ?? {})}
+              cli_type = ${cliType ?? "claude"}, cli_config = ${JSON.stringify(cliConfig ?? {})}::jsonb
           WHERE id = ${old.id}
           RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
         `;
@@ -56,9 +74,9 @@ export class SessionManager {
         ${projectPath ?? null},
         ${clientId},
         'active',
-        ${JSON.stringify(metadata ?? {})},
+        ${JSON.stringify(metadata ?? {})}::jsonb,
         ${cliType ?? "claude"},
-        ${JSON.stringify(cliConfig ?? {})}
+        ${JSON.stringify(cliConfig ?? {})}::jsonb
       )
       ON CONFLICT (client_id) DO UPDATE SET
         status = 'active',
@@ -201,11 +219,10 @@ export class SessionManager {
   }
 
   async updateCliConfig(sessionId: number, patch: Record<string, unknown>): Promise<void> {
-    await sql`
-      UPDATE sessions
-      SET cli_config = cli_config || ${JSON.stringify(patch)}::jsonb
-      WHERE id = ${sessionId}
-    `;
+    const rows = await sql`SELECT cli_config FROM sessions WHERE id = ${sessionId}`;
+    const current = normalizeCLIConfig(rows[0]?.cli_config);
+    const updated = { ...current, ...patch };
+    await sql`UPDATE sessions SET cli_config = ${JSON.stringify(updated)}::jsonb WHERE id = ${sessionId}`;
   }
 
   async list(includeUnnamed = false): Promise<Session[]> {
@@ -261,7 +278,7 @@ export class SessionManager {
       connectedAt: r.connected_at,
       lastActive: r.last_active,
       cliType: (r.cli_type ?? "claude") as "claude" | "opencode",
-      cliConfig: r.cli_config ?? {},
+      cliConfig: normalizeCLIConfig(r.cli_config),
     };
   }
 }

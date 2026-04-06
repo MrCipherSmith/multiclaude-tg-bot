@@ -64,22 +64,43 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, retries = 3): P
  * The opencode session ID is stored in cli_config.opencodeSessionId.
  * If not present, one is created via POST /session on first send.
  */
+/** Normalize cli_config — handles broken states: JSONB string, array of strings, or object */
+function normalizeCLIConfig(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  if (Array.isArray(raw)) {
+    // Broken state: array of JSON strings — merge them all
+    const merged: Record<string, unknown> = {};
+    for (const item of raw) {
+      try {
+        const parsed = typeof item === "string" ? JSON.parse(item) : item;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          Object.assign(merged, parsed);
+        }
+      } catch { /* skip */ }
+    }
+    return merged;
+  }
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch { return {}; }
+  }
+  if (typeof raw === "object") return raw as Record<string, unknown>;
+  return {};
+}
+
 export class OpencodeAdapter implements CliAdapter {
   readonly type = "opencode" as const;
 
   /**
    * Ensure an opencode session exists, creating one if needed.
    * Stores the opencode session ID in the sessions.cli_config column.
+   * Uses read-merge-write to avoid JSONB || operator issues.
    */
   private async ensureOpencodeSession(
     sessionId: number,
     config: CliConfig,
   ): Promise<string> {
-    // Check if we already have an opencode session ID in cli_config
-    const rows = await sql`
-      SELECT cli_config FROM sessions WHERE id = ${sessionId}
-    `;
-    const cliConfig = (rows[0]?.cli_config ?? {}) as Record<string, unknown>;
+    const rows = await sql`SELECT cli_config FROM sessions WHERE id = ${sessionId}`;
+    const cliConfig = normalizeCLIConfig(rows[0]?.cli_config);
 
     if (typeof cliConfig.opencodeSessionId === "string") {
       return cliConfig.opencodeSessionId;
@@ -103,12 +124,11 @@ export class OpencodeAdapter implements CliAdapter {
     const opencodeSessionId = data.id;
     if (!opencodeSessionId) throw new Error("opencode session creation returned no ID");
 
-    // Persist atomically — only if no session ID was set yet (prevents race condition)
+    // Merge and write back as proper JSONB object
+    const updated = { ...cliConfig, opencodeSessionId };
     await sql`
-      UPDATE sessions
-      SET cli_config = cli_config || ${JSON.stringify({ opencodeSessionId })}::jsonb
+      UPDATE sessions SET cli_config = ${JSON.stringify(updated)}::jsonb
       WHERE id = ${sessionId}
-        AND (cli_config->>'opencodeSessionId') IS NULL
     `;
 
     console.log(`[opencode] created session ${opencodeSessionId} for bot session #${sessionId}`);
@@ -165,7 +185,7 @@ export class OpencodeAdapter implements CliAdapter {
 
   private async getConfig(sessionId: number): Promise<CliConfig> {
     const rows = await sql`SELECT cli_config FROM sessions WHERE id = ${sessionId}`;
-    return (rows[0]?.cli_config ?? {}) as CliConfig;
+    return normalizeCLIConfig(rows[0]?.cli_config) as CliConfig;
   }
 
   private async autostart(config: CliConfig): Promise<void> {
@@ -219,7 +239,7 @@ export class OpencodeAdapter implements CliAdapter {
 
     // Get the opencode session ID to filter SSE events
     const rows = await sql`SELECT cli_config FROM sessions WHERE id = ${sessionId}`;
-    const opencodeSessionId = ((rows[0]?.cli_config ?? {}) as Record<string, unknown>).opencodeSessionId as string | undefined;
+    const opencodeSessionId = normalizeCLIConfig(rows[0]?.cli_config).opencodeSessionId as string | undefined;
 
     let stopped = false;
     let doneCalled = false;
