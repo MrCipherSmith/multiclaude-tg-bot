@@ -731,6 +731,16 @@ async function tmuxAdd(dir?: string) {
 
   if (provider === "claude") {
     console.log(`  ${c.dim("Restart tmux to apply: claude-bot down && claude-bot up")}`);
+  } else if (provider === "opencode") {
+    // Launch opencode TUI in the project directory
+    console.log(`  ${c.cyan("Launching opencode TUI...")} ${c.dim("(Ctrl+C to exit)")}\n`);
+    const proc = Bun.spawn(["opencode"], {
+      cwd: projectDir,
+      stdout: "inherit",
+      stderr: "inherit",
+      stdin: "inherit",
+    });
+    await proc.exited;
   }
 }
 
