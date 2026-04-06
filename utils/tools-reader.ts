@@ -5,6 +5,51 @@
 
 import { readdir } from "fs/promises";
 
+const ICONS: Record<string, string> = {
+  hookify: "🪝",
+  "hookify-list": "📋",
+  "hookify-configure": "⚙️",
+  "hookify-help": "❓",
+  commit: "💾",
+  push: "🚀",
+  pr: "🔀",
+  "clean-gone": "🧹",
+  changelog: "📜",
+  "code-review": "🔍",
+  "code-ai-review": "🤖",
+  "code-b091-review": "🤖",
+  "code-style-review": "🎨",
+  "code-mobx-store-review": "🏪",
+  "security-audit": "🔒",
+  deploy: "📡",
+  "feature-dev": "🛠",
+  "feature-analyzer": "🔭",
+  "issue-analyzer": "🎯",
+  "task-implementer": "⚙️",
+  "job-orchestrator": "🎼",
+  "job-documenter": "📖",
+  brainstorm: "💡",
+  "db-migrate": "🗄️",
+  "test-gen": "🧪",
+  "dependency-update": "📦",
+  "perf-check": "⚡",
+  "prd-creator": "📝",
+  "context-collector": "🔗",
+  "skill-creator": "✨",
+  "claude-md-improver": "🔧",
+  "claude-md-management": "📁",
+  "pr-issue-documenter": "📄",
+  "pr-review-comments": "💬",
+  "writing-rules": "✍️",
+  "revise-claude-md": "♻️",
+  interview: "🎤",
+  interviewer: "🎤",
+};
+
+export function toolIcon(name: string): string {
+  return ICONS[name] ?? "▸";
+}
+
 const HOST_CLAUDE_CONFIG = process.env.HOST_CLAUDE_CONFIG ?? "/host-claude-config";
 
 // Commands/skills that never need arguments

@@ -2,7 +2,7 @@ import type { Context } from "grammy";
 import { sessionManager } from "../sessions/manager.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
-import { readSkills, readCommands } from "../utils/tools-reader.ts";
+import { readSkills, readCommands, toolIcon } from "../utils/tools-reader.ts";
 import { setPendingTool } from "./handlers.ts";
 import { enqueueToolCommand } from "./text-handler.ts";
 
@@ -36,16 +36,19 @@ async function handleToolCallback(ctx: Context): Promise<void> {
   const tool = items.find((t) => t.name === name);
   const requiresArgs = tool?.requiresArgs ?? true; // safe default
 
+  const icon = toolIcon(name);
+
   if (!requiresArgs) {
     await ctx.answerCallbackQuery({ text: `Running /${name}…` });
     await enqueueToolCommand(chatId, fromUser, `/${name}`);
     return;
   }
 
-  // Ask for arguments
+  // Ask for arguments — show description too
   setPendingTool(chatId, { type, name });
   await ctx.answerCallbackQuery();
-  await ctx.reply(`Enter arguments for <code>/${name}</code>:`, { parse_mode: "HTML" });
+  const desc = tool?.description ? `\n<i>${tool.description.slice(0, 120)}</i>\n` : "";
+  await ctx.reply(`${icon} <b>/${name}</b>${desc}\nEnter arguments:`, { parse_mode: "HTML" });
 }
 
 async function handleSwitchCallback(ctx: Context): Promise<void> {

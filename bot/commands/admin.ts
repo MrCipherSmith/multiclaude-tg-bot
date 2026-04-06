@@ -2,7 +2,7 @@ import type { Context } from "grammy";
 import { sessionManager } from "../../sessions/manager.ts";
 import { sql } from "../../memory/db.ts";
 import { getApiStats, getTranscriptionStats, getMessageStats, getSessionLogs } from "../../utils/stats.ts";
-import { readSkills, readCommands, readHooks } from "../../utils/tools-reader.ts";
+import { readSkills, readCommands, readHooks, toolIcon } from "../../utils/tools-reader.ts";
 
 export async function handleStats(ctx: Context): Promise<void> {
   await ctx.replyWithChatAction("typing");
@@ -223,6 +223,34 @@ export async function handleTools(ctx: Context): Promise<void> {
   await ctx.reply(lines.join("\n"));
 }
 
+function buildToolsMessage(
+  header: string,
+  items: { name: string; description: string; requiresArgs: boolean }[],
+  prefix: "skill" | "cmd",
+): { text: string; buttons: { text: string; callback_data: string }[][] } {
+  // Text: icon + bold name + newline + italic short description
+  const lines = [header, ""];
+  for (const item of items) {
+    const icon = toolIcon(item.name);
+    const desc = item.description.split(".")[0].slice(0, 50);
+    lines.push(`${icon} <b>${item.name}</b>`);
+    if (desc) lines.push(`<i>${desc}</i>`);
+    lines.push("");
+  }
+
+  // Buttons: icon + name, 2 per row
+  const flat = items.map((item) => ({
+    text: `${toolIcon(item.name)} ${item.name}`,
+    callback_data: `${prefix}:${item.name}`.slice(0, 64),
+  }));
+  const buttons: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < flat.length; i += 2) {
+    buttons.push(flat.slice(i, i + 2));
+  }
+
+  return { text: lines.join("\n").trim(), buttons };
+}
+
 export async function handleSkills(ctx: Context): Promise<void> {
   await ctx.replyWithChatAction("typing");
 
@@ -232,16 +260,15 @@ export async function handleSkills(ctx: Context): Promise<void> {
     return;
   }
 
-  const buttons = skills.map((s) => {
-    const label = `${s.name} — ${s.description.slice(0, 55)}${s.description.length > 55 ? "…" : ""}`;
-    const data = `skill:${s.name}`.slice(0, 64);
-    return [{ text: label, callback_data: data }];
-  });
+  const { text, buttons } = buildToolsMessage(`⚡ <b>Skills</b> (${skills.length})`, skills, "skill");
 
-  await ctx.reply(`⚡ <b>Skills</b> (${skills.length})`, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buttons },
-  });
+  // Split into text message + buttons message if text is too long
+  if (text.length > 3800) {
+    await ctx.reply(text, { parse_mode: "HTML" });
+    await ctx.reply("Tap to run:", { reply_markup: { inline_keyboard: buttons } });
+  } else {
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: { inline_keyboard: buttons } });
+  }
 }
 
 export async function handleCommands(ctx: Context): Promise<void> {
@@ -253,16 +280,14 @@ export async function handleCommands(ctx: Context): Promise<void> {
     return;
   }
 
-  const buttons = commands.map((c) => {
-    const label = `/${c.name} — ${c.description.slice(0, 52)}${c.description.length > 52 ? "…" : ""}`;
-    const data = `cmd:${c.name}`.slice(0, 64);
-    return [{ text: label, callback_data: data }];
-  });
+  const { text, buttons } = buildToolsMessage(`🛠 <b>Commands</b> (${commands.length})`, commands, "cmd");
 
-  await ctx.reply(`🛠 <b>Commands</b> (${commands.length})`, {
-    parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buttons },
-  });
+  if (text.length > 3800) {
+    await ctx.reply(text, { parse_mode: "HTML" });
+    await ctx.reply("Tap to run:", { reply_markup: { inline_keyboard: buttons } });
+  } else {
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup: { inline_keyboard: buttons } });
+  }
 }
 
 export async function handleHooks(ctx: Context): Promise<void> {
