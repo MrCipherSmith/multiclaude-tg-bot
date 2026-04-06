@@ -78,20 +78,50 @@ Prefixes: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 ## Project Structure
 
 ```
-├── main.ts              # Entry point, server setup
-├── bot/                 # Telegram bot handlers
-├── claude/              # LLM client (Anthropic, Google AI, OpenRouter, Ollama)
-├── memory/              # Database, embeddings, summarization
-├── mcp/                 # MCP server, tools, dashboard API
-├── utils/               # Stats, transcription, helpers
-├── dashboard/           # React + Tailwind dashboard (Vite)
-│   └── src/
-│       ├── pages/       # Dashboard pages
-│       ├── components/  # Shared components
-│       └── api/         # API client
+├── main.ts              # Entry point, server setup, cleanup timer
+├── config.ts            # Centralized environment config
 ├── channel.ts           # stdio channel adapter for CLI sessions
 ├── cli.ts               # CLI tool (setup, connect, manage)
-└── config.ts            # Environment config
+├── bot/
+│   ├── bot.ts           # grammY bot creation, access middleware
+│   ├── handlers.ts      # Handler registry, shared state (pendingInput, botRef)
+│   ├── streaming.ts     # LLM streaming with Telegram message edits
+│   ├── format.ts        # Markdown → Telegram HTML converter
+│   ├── text-handler.ts  # Main text message routing
+│   ├── media.ts         # Voice, photo, document, video handlers
+│   ├── callbacks.ts     # Inline keyboard callback handlers
+│   └── commands/
+│       ├── session.ts   # /sessions, /switch, /rename, /cleanup
+│       ├── memory.ts    # /remember, /recall, /forget, /summarize
+│       └── admin.ts     # /stats, /logs, /status, /tools
+├── claude/
+│   ├── client.ts        # Multi-provider LLM client with retry
+│   └── prompt.ts        # System prompt composition
+├── memory/
+│   ├── db.ts            # PostgreSQL schema, versioned migrations
+│   ├── short-term.ts    # In-memory message cache (LRU)
+│   ├── long-term.ts     # Semantic memory (pgvector)
+│   ├── embeddings.ts    # Ollama embeddings with retry
+│   └── summarizer.ts    # Auto-summarization on idle/overflow
+├── sessions/
+│   ├── manager.ts       # Session lifecycle management
+│   ├── router.ts        # Chat → session routing
+│   └── delete.ts        # Transactional cascade delete
+├── mcp/
+│   ├── server.ts        # HTTP MCP server, auth, health
+│   ├── tools.ts         # MCP tool definitions (JSON Schema)
+│   ├── bridge.ts        # MCP session ↔ Telegram bridge
+│   └── dashboard-api.ts # Dashboard REST API + static serving
+├── dashboard/           # React + Tailwind dashboard (Vite)
+│   ├── auth.ts          # JWT + Telegram Login verification
+│   └── src/
+│       ├── pages/       # Overview, Sessions, Stats, Logs, Memory
+│       ├── components/  # SlidePanel, UI components
+│       └── api/         # Typed API client
+└── utils/
+    ├── stats.ts         # API/transcription stats recording + queries
+    ├── transcribe.ts    # Voice transcription (Groq + Whisper)
+    └── files.ts         # File download helpers
 ```
 
 ## Code Style

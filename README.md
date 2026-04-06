@@ -511,8 +511,11 @@ ollama pull nomic-embed-text
 | `OLLAMA_CHAT_MODEL` | No | Local Ollama model (default: `qwen3:8b`) |
 | `GROQ_API_KEY` | No | Voice transcription ([free](https://console.groq.com)) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
+| `POSTGRES_PASSWORD` | Yes | PostgreSQL password (required in docker-compose) |
 | `OLLAMA_URL` | Yes | Ollama API URL |
 | `PORT` | No | Bot port (default: `3847`) |
+| `JWT_SECRET` | No | JWT signing secret (auto-derived from bot token if not set) |
+| `SECURE_COOKIES` | No | Force Secure flag on cookies (`true`/`false`, auto-detected) |
 | `KNOWLEDGE_BASE` | No | Path to knowledge base for `/skills` and `/rules` |
 
 ### Manual Setup (without Docker)
@@ -589,6 +592,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | Embeddings | [Ollama](https://ollama.ai) (nomic-embed-text) |
 | Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
+| Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
 
 ## Roadmap
 
@@ -607,12 +611,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 
 ## Contributing
 
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Commit your changes
-4. Push and open a Pull Request
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style, project structure, and PR guidelines.
 
 For bug reports and feature requests, use [GitHub Issues](https://github.com/MrCipherSmith/multiclaude-tg-bot/issues).
 

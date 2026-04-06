@@ -40,6 +40,10 @@ This project handles sensitive data. When deploying, please ensure:
 - **Webhook secret** (`TELEGRAM_WEBHOOK_SECRET`) is set when using webhook transport
 - **API keys** (Anthropic, OpenRouter, Google AI, Groq) are kept private
 - **Dashboard authentication** uses Telegram Login Widget — only `ALLOWED_USERS` can access
+- **JWT secret** is derived from bot token by default; set `JWT_SECRET` for a separate signing key
+- **CSRF protection** is enabled via Origin header validation on state-changing requests
+- **MCP endpoint** (`/mcp`) is restricted to local/Docker network connections
+- **Request body limits** are enforced (1MB for dashboard API, 5MB for MCP)
 
 ## Scope
 
