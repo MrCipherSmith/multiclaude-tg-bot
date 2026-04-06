@@ -24,7 +24,9 @@ cd your-project && claude-bot connect . --tmux
 
 Done. Open Telegram, type `/sessions` — your project is there.
 
-<!-- TODO: Add screenshots/GIF showing: /sessions list, voice transcription, CLI progress status, permission buttons -->
+### Dashboard
+
+<img width="1722" height="885" alt="Dashboard" src="https://github.com/user-attachments/assets/4ba73c7c-1141-4fe7-b9af-5293d95cf5e8" />
 
 ## Why MCP?
 
@@ -48,7 +50,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Auto-Named Sessions** — CLI sessions automatically named after the project directory, with source labels (tmux/cli)
 
 ### AI & Media
-- **Standalone Mode** — bot responds directly via LLM API (Anthropic / OpenRouter / Ollama)
+- **Standalone Mode** — bot responds directly via LLM API (Anthropic / Google AI / OpenRouter / Ollama) with automatic retry on 429/5xx
 - **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
@@ -66,6 +68,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), with input preview (file path + syntax-highlighted diff), synced with terminal
 - **Auto-Approve Permissions** — configure allowed tools in `settings.local.json` (`permissions.allow` patterns like `"Edit(*)"`, `"Bash(*)"`) to skip Telegram approval for trusted operations
 - **Statistics & Logging** — `/stats` for API usage and tokens, `/logs` for per-session request logs
+- **Web Dashboard** — real-time stats (by provider, project, operation, session), token charts, cost estimation, error drill-down with slide panel, log viewer with full message detail
 
 ### Operations
 - **Health Endpoint** — `GET /health` with DB status, uptime, active sessions
@@ -99,7 +102,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
          │                 │  │                                          │  │
          │                 │  │  Telegram polling ◀──▶ Telegram API      │  │
          │                 │  │  HTTP MCP server  ◀──▶ Claude CLIs      │  │
-         │                 │  │  Standalone LLM   ──▶ OpenRouter/Ollama │  │
+         │                 │  │  Standalone LLM   ──▶ Google AI/OpenRouter│  │
          │                 │  │  Voice transcribe ──▶ Groq API          │  │
          │                 │  │  Markdown → HTML  ──▶ Telegram          │  │
          │                 │  │  /health, /stats, cleanup timers        │  │
@@ -268,11 +271,12 @@ Get your ID from [@userinfobot](https://t.me/userinfobot): send `/start` → it 
 ```
 LLM Provider for standalone mode:
 ❯ 1. Anthropic (best quality, requires API key)
-  2. OpenRouter (free models available)
-  3. Ollama (local, free)
+  2. Google AI (Gemma 4 models, free tier available)
+  3. OpenRouter (many models, free & paid)
+  4. Ollama (local, free)
 ```
 
-This is for **standalone mode** (when no CLI session is active). Choose **OpenRouter** for free or **Ollama** for fully local.
+This is for **standalone mode** (when no CLI session is active). Choose **Google AI** for Gemma 4 models, **OpenRouter** for variety, or **Ollama** for fully local.
 
 ```
 Groq API Key for voice (Enter to skip, free at console.groq.com):
@@ -496,7 +500,9 @@ ollama pull nomic-embed-text
 | `TELEGRAM_BOT_TOKEN` | Yes | From [@BotFather](https://t.me/BotFather) |
 | `ALLOWED_USERS` | Yes | Comma-separated Telegram user IDs |
 | `ANTHROPIC_API_KEY` | No | Anthropic API (best quality standalone) |
-| `OPENROUTER_API_KEY` | No | OpenRouter API (free models available) |
+| `GOOGLE_AI_API_KEY` | No | Google AI API ([aistudio.google.com](https://aistudio.google.com/apikey)) |
+| `GOOGLE_AI_MODEL` | No | Google AI model (default: `gemma-4-31b-it`) |
+| `OPENROUTER_API_KEY` | No | OpenRouter API (many models available) |
 | `OLLAMA_CHAT_MODEL` | No | Local Ollama model (default: `qwen3:8b`) |
 | `GROQ_API_KEY` | No | Voice transcription ([free](https://console.groq.com)) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
@@ -584,7 +590,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 - [x] Vision model support for image analysis in standalone mode
 - [x] Webhook mode for Telegram (instead of polling)
 - [x] Stream-json output parsing for non-tmux progress monitoring
-- [ ] Web dashboard for statistics and session management
+- [x] Web dashboard for statistics and session management
 - [ ] Multi-user support with separate session namespaces
 - [ ] Inline mode — respond in any Telegram chat via @bot
 

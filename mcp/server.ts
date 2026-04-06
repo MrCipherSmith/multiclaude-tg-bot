@@ -6,6 +6,7 @@ import { basename } from "path";
 import { z } from "zod";
 import { executeTool } from "./tools.ts";
 import { registerMcpSession, unregisterMcpSession } from "./bridge.ts";
+import { handleDashboardRequest } from "./dashboard-api.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { sql } from "../memory/db.ts";
@@ -149,6 +150,8 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
   const webhookHandler = CONFIG.TELEGRAM_TRANSPORT === "webhook" && bot
     ? webhookCallback(bot, "http", {
         secretToken: CONFIG.TELEGRAM_WEBHOOK_SECRET || undefined,
+        timeoutMilliseconds: 180_000,
+        onTimeout: "return",
       })
     : null;
 
@@ -203,6 +206,17 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
     // Telegram webhook endpoint
     if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
       await webhookHandler(req, res);
+      return;
+    }
+
+    // Dashboard API + static files
+    try {
+      const handled = await handleDashboardRequest(req, res, url);
+      if (handled) return;
+    } catch (err: any) {
+      console.error("[dashboard] error:", err);
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err?.message }));
       return;
     }
 

@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+:root {
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+}
+
+body {
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+
+/* Glow card effect */
+.card-glow {
+  position: relative;
+  overflow: hidden;
+}
+.card-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), transparent 50%);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Subtle gradient background */
+.bg-gradient-subtle {
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.03) 0%, transparent 50%);
+}
+
+/* Stat value animation */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-in {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* Active nav indicator */
+.nav-active {
+  border-left: 2px solid #6366f1;
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.1), transparent);
+}
+
+/* Table row hover */
+.table-row-hover:hover {
+  background: linear-gradient(90deg, rgba(99, 102, 241, 0.05), transparent);
+}
+
+/* Badge glow */
+.badge-active {
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+}
+
+/* Chart bar hover */
+.chart-bar {
+  transition: all 0.15s ease;
+}
+.chart-bar:hover {
+  filter: brightness(1.2);
+  transform: scaleY(1.02);
+  transform-origin: bottom;
+}
+
+/* Slide panel */
+@keyframes slideIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+.animate-slide-in {
+  animation: slideIn 0.2s ease-out;
+}

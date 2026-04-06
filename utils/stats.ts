@@ -75,6 +75,27 @@ export async function appendLog(
   }
 }
 
+// --- Cost estimation ---
+
+// Prices per million tokens: [input, output]
+const MODEL_PRICES: Record<string, [number, number]> = {
+  // OpenRouter Gemma
+  "google/gemma-4-31b-it": [0.14, 0.40],
+  "google/gemma-4-26b-a4b-it": [0.13, 0.40],
+  // OpenRouter Qwen
+  "qwen/qwen3-235b-a22b:free": [0, 0],
+  "qwen/qwen3.6-plus:free": [0, 0],
+  // Anthropic
+  "claude-sonnet-4-20250514": [3.0, 15.0],
+  "claude-haiku-4-5-20251001": [0.80, 4.0],
+};
+
+function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
+  const prices = MODEL_PRICES[model];
+  if (!prices) return 0;
+  return (inputTokens / 1_000_000) * prices[0] + (outputTokens / 1_000_000) * prices[1];
+}
+
 // --- Querying ---
 
 const startupAt = new Date().toISOString();
@@ -116,6 +137,8 @@ export async function getApiStats() {
         provider,
         model,
         count(*)::int as requests,
+        coalesce(sum(input_tokens), 0)::int as input_tokens,
+        coalesce(sum(output_tokens), 0)::int as output_tokens,
         coalesce(sum(total_tokens), 0)::int as tokens,
         coalesce(avg(duration_ms), 0)::int as avg_ms
       FROM api_request_stats ${where}
@@ -123,21 +146,68 @@ export async function getApiStats() {
       ORDER BY requests DESC
     `;
 
+    // Add cost estimation to byProvider
+    for (const row of byProvider) {
+      row.cost = estimateCost(row.model, row.input_tokens, row.output_tokens);
+    }
+
     const bySession = await sql`
       SELECT
         s.session_id,
         sess.name as session_name,
+        sess.project_path,
         count(*)::int as requests,
+        coalesce(sum(s.input_tokens), 0)::int as input_tokens,
+        coalesce(sum(s.output_tokens), 0)::int as output_tokens,
         coalesce(sum(s.total_tokens), 0)::int as tokens,
         coalesce(avg(s.duration_ms), 0)::int as avg_ms
       FROM api_request_stats s
       LEFT JOIN sessions sess ON sess.id = s.session_id
       ${w.cutoff ? sql`WHERE s.created_at >= ${w.cutoff}` : sql``}
-      GROUP BY s.session_id, sess.name
+      GROUP BY s.session_id, sess.name, sess.project_path
       ORDER BY requests DESC
     `;
 
-    results[w.label] = { summary, byProvider, bySession };
+    const byProject = await sql`
+      SELECT
+        coalesce(sess.project_path, 'standalone') as project,
+        count(*)::int as requests,
+        coalesce(sum(s.input_tokens), 0)::int as input_tokens,
+        coalesce(sum(s.output_tokens), 0)::int as output_tokens,
+        coalesce(sum(s.total_tokens), 0)::int as tokens,
+        coalesce(avg(s.duration_ms), 0)::int as avg_ms,
+        count(DISTINCT s.session_id)::int as sessions
+      FROM api_request_stats s
+      LEFT JOIN sessions sess ON sess.id = s.session_id
+      ${w.cutoff ? sql`WHERE s.created_at >= ${w.cutoff}` : sql``}
+      GROUP BY sess.project_path
+      ORDER BY tokens DESC
+    `;
+
+    const byOperation = await sql`
+      SELECT
+        operation,
+        count(*)::int as requests,
+        coalesce(sum(input_tokens), 0)::int as input_tokens,
+        coalesce(sum(output_tokens), 0)::int as output_tokens,
+        coalesce(sum(total_tokens), 0)::int as tokens,
+        count(*) FILTER (WHERE status = 'error')::int as errors,
+        coalesce(avg(duration_ms) FILTER (WHERE status = 'success'), 0)::int as avg_ms
+      FROM api_request_stats ${where}
+      GROUP BY operation
+      ORDER BY tokens DESC
+    `;
+
+    // Add total estimated cost to summary
+    summary.estimated_cost = estimateCost(
+      "", // will be 0 for unknown; compute from byProvider instead
+      0, 0,
+    );
+    let totalCost = 0;
+    for (const row of byProvider) totalCost += row.cost;
+    summary.estimated_cost = totalCost;
+
+    results[w.label] = { summary, byProvider, bySession, byProject, byOperation };
   }
 
   return results;
@@ -174,6 +244,21 @@ export async function getTranscriptionStats() {
   }
 
   return results;
+}
+
+export async function getRecentErrors(limit = 20) {
+  return sql`
+    SELECT
+      s.model, s.operation, s.error_message, s.duration_ms,
+      s.input_tokens, s.output_tokens,
+      sess.name as session_name, sess.project_path,
+      s.created_at
+    FROM api_request_stats s
+    LEFT JOIN sessions sess ON sess.id = s.session_id
+    WHERE s.status = 'error'
+    ORDER BY s.created_at DESC
+    LIMIT ${limit}
+  `;
 }
 
 export async function getSessionLogs(sessionId: number, limit = 50) {

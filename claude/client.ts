@@ -22,28 +22,70 @@ function toTextMessages(messages: MessageParam[]): { role: string; content: stri
   return messages.map((m) => ({ role: m.role, content: contentToString(m.content) }));
 }
 
-// Provider detection: anthropic > openai-compatible (openrouter etc) > ollama
+// --- Retry with backoff ---
+
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 2000;
+
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastErr: Error | undefined;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const is429 = err?.message?.includes("429") || err?.message?.includes("rate");
+      const is5xx = err?.message?.match(/5\d\d/);
+      if ((is429 || is5xx) && attempt < MAX_RETRIES) {
+        const delay = RETRY_BASE_MS * Math.pow(2, attempt) + Math.random() * 1000;
+        console.log(`[client] ${label} retry ${attempt + 1}/${MAX_RETRIES} after ${Math.round(delay)}ms (${is429 ? "429" : "5xx"})`);
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastErr;
+}
+
+// Provider detection: anthropic > google-ai > openai-compatible (openrouter etc) > ollama
+const googleAiKey = process.env.GOOGLE_AI_API_KEY ?? "";
 const openaiKey = process.env.OPENROUTER_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
 const openaiUrl = process.env.OPENROUTER_BASE_URL ?? process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1";
 const openaiModel = process.env.OPENROUTER_MODEL ?? process.env.OPENAI_MODEL ?? "qwen/qwen3-235b-a22b:free";
+const googleAiModel = process.env.GOOGLE_AI_MODEL ?? "gemma-4-31b-it";
+const googleAiUrl = "https://generativelanguage.googleapis.com/v1beta/openai";
 const ollamaModel = process.env.OLLAMA_CHAT_MODEL ?? "qwen3:8b";
 
 const provider = process.env.ANTHROPIC_API_KEY
   ? "anthropic"
-  : openaiKey
-    ? "openai"
-    : "ollama";
+  : googleAiKey
+    ? "google-ai"
+    : openaiKey
+      ? "openai"
+      : "ollama";
 
 const anthropic = provider === "anthropic" ? new Anthropic() : null;
 
+// Resolve effective OpenAI-compat settings (Google AI uses the same protocol)
+const effectiveApiKey = provider === "google-ai" ? googleAiKey : openaiKey;
+const effectiveBaseUrl = provider === "google-ai" ? googleAiUrl : openaiUrl;
+const effectiveModel = provider === "google-ai" ? googleAiModel : openaiModel;
+
 export function getProviderInfo() {
   const model = provider === "anthropic" ? CONFIG.CLAUDE_MODEL
+    : provider === "google-ai" ? googleAiModel
     : provider === "openai" ? openaiModel
     : ollamaModel;
   return { provider, model };
 }
 
-console.log(`[client] provider: ${provider}${provider === "openai" ? ` (${openaiModel} @ ${openaiUrl})` : provider === "ollama" ? ` (${ollamaModel})` : ""}`);
+console.log(`[client] provider: ${provider}${
+  provider === "google-ai" ? ` (${googleAiModel} @ Google AI)`
+  : provider === "openai" ? ` (${openaiModel} @ ${openaiUrl})`
+  : provider === "ollama" ? ` (${ollamaModel})`
+  : ""
+}`);
 
 // --- OpenAI-compatible API (OpenRouter) ---
 
@@ -51,28 +93,47 @@ console.log(`[client] provider: ${provider}${provider === "openai" ? ` (${openai
 let _lastStreamUsage: { input?: number; output?: number } = {};
 export function getLastStreamUsage() { return _lastStreamUsage; }
 
+/** Shared fetch for OpenAI-compatible APIs (OpenRouter, Google AI) */
+async function fetchOpenai(
+  messages: { role: string; content: string }[],
+  stream: boolean,
+): Promise<Response> {
+  const body: Record<string, unknown> = {
+    model: effectiveModel,
+    messages,
+    stream,
+  };
+  if (stream) body.stream_options = { include_usage: true };
+
+  const res = await fetch(`${effectiveBaseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${effectiveApiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok && (res.status === 429 || res.status >= 500)) {
+    throw new Error(`API failed: ${res.status} ${await res.text()}`);
+  }
+
+  return res;
+}
+
 async function* openaiStream(
   messages: MessageParam[],
   system: string,
 ): AsyncGenerator<string> {
   _lastStreamUsage = {};
 
-  const res = await fetch(`${openaiUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: openaiModel,
-      messages: [{ role: "system", content: system }, ...toTextMessages(messages)],
-      stream: true,
-      stream_options: { include_usage: true },
-    }),
-  });
+  const res = await withRetry(() => fetchOpenai(
+    [{ role: "system", content: system }, ...toTextMessages(messages)],
+    true,
+  ), "stream");
 
   if (!res.ok) {
-    throw new Error(`OpenRouter failed: ${res.status} ${await res.text()}`);
+    throw new Error(`API failed: ${res.status} ${await res.text()}`);
   }
 
   const reader = res.body?.getReader();
@@ -119,21 +180,13 @@ async function openaiGenerate(
   messages: MessageParam[],
   system: string,
 ): Promise<GenerateResult> {
-  const res = await fetch(`${openaiUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiKey}`,
-    },
-    body: JSON.stringify({
-      model: openaiModel,
-      messages: [{ role: "system", content: system }, ...toTextMessages(messages)],
-      stream: false,
-    }),
-  });
+  const res = await withRetry(() => fetchOpenai(
+    [{ role: "system", content: system }, ...toTextMessages(messages)],
+    false,
+  ), "generate");
 
   if (!res.ok) {
-    throw new Error(`OpenRouter failed: ${res.status} ${await res.text()}`);
+    throw new Error(`API failed: ${res.status} ${await res.text()}`);
   }
 
   const data = (await res.json()) as any;
@@ -247,6 +300,7 @@ export async function* streamResponse(
 
   try {
     switch (provider) {
+      case "google-ai":
       case "openai":
         yield* openaiStream(messages, system);
         // Capture usage from last SSE chunk
@@ -312,6 +366,7 @@ export async function generateResponse(
   try {
     let result: string;
     switch (provider) {
+      case "google-ai":
       case "openai": {
         const r = await openaiGenerate(messages, system);
         result = r.content;
