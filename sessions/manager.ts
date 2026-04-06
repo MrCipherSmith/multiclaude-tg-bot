@@ -9,6 +9,8 @@ export interface Session {
   metadata: Record<string, unknown>;
   connectedAt: Date;
   lastActive: Date;
+  cliType: "claude" | "opencode";
+  cliConfig: Record<string, unknown>;
 }
 
 export class SessionManager {
@@ -20,6 +22,8 @@ export class SessionManager {
     name?: string,
     projectPath?: string,
     metadata?: Record<string, unknown>,
+    cliType?: "claude" | "opencode",
+    cliConfig?: Record<string, unknown>,
   ): Promise<Session> {
     // Deduplicate: if a session with the same name and project_path already exists, adopt it
     if (projectPath && name && !name.startsWith("cli-")) {
@@ -33,9 +37,10 @@ export class SessionManager {
         this.activeClients.delete(old.client_id);
         const [row] = await sql`
           UPDATE sessions
-          SET client_id = ${clientId}, status = 'active', last_active = now()
+          SET client_id = ${clientId}, status = 'active', last_active = now(),
+              cli_type = ${cliType ?? "claude"}, cli_config = ${JSON.stringify(cliConfig ?? {})}
           WHERE id = ${old.id}
-          RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active
+          RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
         `;
         const session = this.rowToSession(row);
         this.activeClients.set(clientId, session.id);
@@ -45,21 +50,25 @@ export class SessionManager {
     }
 
     const [row] = await sql`
-      INSERT INTO sessions (name, project_path, client_id, status, metadata)
+      INSERT INTO sessions (name, project_path, client_id, status, metadata, cli_type, cli_config)
       VALUES (
         ${name ?? null},
         ${projectPath ?? null},
         ${clientId},
         'active',
-        ${JSON.stringify(metadata ?? {})}
+        ${JSON.stringify(metadata ?? {})},
+        ${cliType ?? "claude"},
+        ${JSON.stringify(cliConfig ?? {})}
       )
       ON CONFLICT (client_id) DO UPDATE SET
         status = 'active',
         name = COALESCE(EXCLUDED.name, sessions.name),
         project_path = COALESCE(EXCLUDED.project_path, sessions.project_path),
         metadata = COALESCE(EXCLUDED.metadata, sessions.metadata),
+        cli_type = EXCLUDED.cli_type,
+        cli_config = EXCLUDED.cli_config,
         last_active = now()
-      RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active
+      RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
     `;
 
     const session = this.rowToSession(row);
@@ -105,9 +114,10 @@ export class SessionManager {
         SET client_id = ${currentClientId}, status = 'active', last_active = now(),
             project_path = COALESCE(${projectPath ?? null}, project_path)
         WHERE id = ${oldId}
-        RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active
+        RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       `;
 
+      if (!row) throw new Error(`[session] adoptOrRename: session #${oldId} not found for update`);
       const session = this.rowToSession(row);
       this.activeClients.delete(oldClientId);
       this.activeClients.set(currentClientId, session.id);
@@ -119,8 +129,9 @@ export class SessionManager {
         UPDATE sessions
         SET name = ${name}, project_path = COALESCE(${projectPath ?? null}, project_path)
         WHERE client_id = ${currentClientId}
-        RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active
+        RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       `;
+      if (!row) throw new Error(`[session] adoptOrRename: session not found for clientId ${currentClientId}`);
       const session = this.rowToSession(row);
       console.log(`[session] renamed session #${session.id} to ${name}`);
       return session;
@@ -189,14 +200,22 @@ export class SessionManager {
     await sql`UPDATE sessions SET last_active = now() WHERE id = ${sessionId}`;
   }
 
+  async updateCliConfig(sessionId: number, patch: Record<string, unknown>): Promise<void> {
+    await sql`
+      UPDATE sessions
+      SET cli_config = cli_config || ${JSON.stringify(patch)}::jsonb
+      WHERE id = ${sessionId}
+    `;
+  }
+
   async list(includeUnnamed = false): Promise<Session[]> {
     const rows = includeUnnamed
       ? await sql`
-          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions ORDER BY id
         `
       : await sql`
-          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+          SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions
           WHERE id = 0 OR name NOT LIKE 'cli-%'
           ORDER BY id
@@ -206,7 +225,7 @@ export class SessionManager {
 
   async get(sessionId: number): Promise<Session | null> {
     const rows = await sql`
-      SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+      SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       FROM sessions WHERE id = ${sessionId}
     `;
     return rows.length > 0 ? this.rowToSession(rows[0]) : null;
@@ -241,6 +260,8 @@ export class SessionManager {
       metadata: r.metadata ?? {},
       connectedAt: r.connected_at,
       lastActive: r.last_active,
+      cliType: (r.cli_type ?? "claude") as "claude" | "opencode",
+      cliConfig: r.cli_config ?? {},
     };
   }
 }

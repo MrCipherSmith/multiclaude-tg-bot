@@ -213,6 +213,16 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    name: "add cli_type and cli_config to sessions",
+    up: async (tx) => {
+      await tx`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cli_type TEXT NOT NULL DEFAULT 'claude'`;
+      await tx`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cli_config JSONB NOT NULL DEFAULT '{}'`;
+      await tx`UPDATE sessions SET cli_type = 'claude' WHERE cli_type IS NULL OR cli_type = ''`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_sessions_cli_type ON sessions(cli_type)`;
+    },
+  },
 ];
 
 // --- Public API ---

@@ -29,8 +29,17 @@ async function isAuthenticated(req: IncomingMessage): Promise<boolean> {
 }
 
 function isLocalRequest(req: IncomingMessage): boolean {
-  const addr = req.socket.remoteAddress ?? "";
-  return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1" || addr.startsWith("172.") || addr.startsWith("10.");
+  const raw = req.socket.remoteAddress ?? "";
+  if (raw === "127.0.0.1" || raw === "::1" || raw === "::ffff:127.0.0.1") return true;
+  // Normalize IPv4-mapped IPv6
+  const addr = raw.startsWith("::ffff:") ? raw.slice(7) : raw;
+  const parts = addr.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((p) => isNaN(p))) return false;
+  const [a, b] = parts;
+  // RFC 1918: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+  return a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168);
 }
 
 // Track active transports by session
@@ -221,6 +230,61 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err?.message }));
+      }
+      return;
+    }
+
+    // API: register a project session from shell CLI (local requests only)
+    if (url.pathname === "/api/sessions/register" && req.method === "POST") {
+      if (!isLocalRequest(req)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Forbidden" }));
+        return;
+      }
+      try {
+        const body = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          req.on("data", (chunk) => (data += chunk));
+          req.on("end", () => resolve(data));
+          req.on("error", reject);
+        });
+        const parsed = JSON.parse(body);
+        const { projectPath, name } = parsed;
+        const cliType = parsed.cliType ?? "claude";
+        const rawConfig = parsed.cliConfig ?? {};
+
+        if (!projectPath || typeof projectPath !== "string") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "projectPath required" }));
+          return;
+        }
+        // Validate cliType against allowed values
+        if (!["claude", "opencode"].includes(cliType)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "cliType must be 'claude' or 'opencode'" }));
+          return;
+        }
+        // Validate and sanitize cliConfig — only allow known safe fields
+        const port = Number(rawConfig.port ?? 4096);
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "cliConfig.port must be an integer between 1024 and 65535" }));
+          return;
+        }
+        const cliConfig: Record<string, unknown> = { port };
+        if (rawConfig.autostart === true) cliConfig.autostart = true;
+        if (typeof rawConfig.tmuxSession === "string" && /^[a-zA-Z0-9_\-]{1,64}$/.test(rawConfig.tmuxSession)) {
+          cliConfig.tmuxSession = rawConfig.tmuxSession;
+        }
+        const { basename } = await import("path");
+        const sessionName = name ?? `${basename(projectPath)} · ${cliType}`;
+        const clientId = `${cliType}-${basename(projectPath)}-${Date.now()}`;
+        const session = await sessionManager.register(clientId, sessionName, projectPath, undefined, cliType, cliConfig);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, sessionId: session.id, name: session.name }));
       } catch (err: any) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: err?.message }));

@@ -4,6 +4,7 @@ import { createBot } from "./bot/bot.ts";
 import { startMcpHttpServer } from "./mcp/server.ts";
 import { stopAllTimers, cleanupStaleTimers } from "./memory/summarizer.ts";
 import { sessionManager } from "./sessions/manager.ts";
+import "./adapters/index.ts"; // Register all CLI adapters at startup
 
 function startCleanupTimer() {
   const INTERVAL = 60 * 60 * 1000; // 1 hour

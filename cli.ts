@@ -611,13 +611,15 @@ async function tmuxStop() {
 }
 
 async function tmuxAdd(dir?: string) {
-  // Parse --name flag from argv
+  // Parse --name and --provider flags from argv
   const nameIdx = process.argv.indexOf("--name");
   const customName = nameIdx >= 0 ? process.argv[nameIdx + 1] : undefined;
+  const providerIdx = process.argv.indexOf("--provider");
+  const provider = (providerIdx >= 0 ? process.argv[providerIdx + 1] : "claude") as "claude" | "opencode";
 
-  // Skip --name and its value when resolving dir
+  // Skip --name/--provider and their values when resolving dir
   let resolvedDir = dir;
-  if (resolvedDir === "--name") resolvedDir = undefined;
+  if (resolvedDir === "--name" || resolvedDir === "--provider") resolvedDir = undefined;
   const projectDir = resolve(resolvedDir ?? ".");
   if (!existsSync(projectDir)) {
     console.log(c.red(`  Directory not found: ${projectDir}`));
@@ -625,16 +627,36 @@ async function tmuxAdd(dir?: string) {
   }
 
   const name = customName ?? basename(projectDir);
-  const projects = await loadProjects();
 
-  if (projects.some(p => p.path === projectDir)) {
-    console.log(`  ${c.yellow(name)} already in project list.`);
-    return;
+  // 1. Add to tmux-projects.json (existing behavior)
+  const projects = await loadProjects();
+  if (!projects.some(p => p.path === projectDir)) {
+    projects.push({ name, path: projectDir });
+    await saveProjects(projects);
   }
 
-  projects.push({ name, path: projectDir });
-  await saveProjects(projects);
-  console.log(`  ${c.green("Added:")} ${name} (${projectDir})`);
+  // 2. Register session in bot via HTTP API
+  const BOT_API_URL = process.env.BOT_API_URL ?? "http://localhost:3847";
+  try {
+    const cliConfig = provider === "opencode" ? { port: 4096, autostart: false } : {};
+    const res = await fetch(`${BOT_API_URL}/api/sessions/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ projectPath: projectDir, cliType: provider, cliConfig, name }),
+    });
+    if (res.ok) {
+      const data = await res.json() as { sessionId?: number };
+      console.log(`  ${c.green("Added:")} ${name} (${projectDir}) [${provider}]`);
+      if (data.sessionId) console.log(`  Session #${data.sessionId} registered`);
+    } else {
+      console.log(`  ${c.green("Added to tmux:")} ${name} (${projectDir})`);
+      console.log(`  ${c.yellow("Warning:")} bot API unavailable (${res.status}) — session not registered in DB`);
+    }
+  } catch {
+    console.log(`  ${c.green("Added to tmux:")} ${name} (${projectDir})`);
+    console.log(`  ${c.yellow("Warning:")} bot not running — session will register on next start`);
+  }
+
   console.log(`  ${c.dim("Restart tmux to apply: claude-bot down && claude-bot up")}`);
 }
 
