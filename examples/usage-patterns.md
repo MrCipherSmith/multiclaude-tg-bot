@@ -147,3 +147,7 @@ For file edits, the bot also shows a syntax-highlighted diff preview. Configure 
 | Voice/Photos | Transcription + analysis | Forwarded to CLI |
 
 Switch between modes: `/standalone` for chat mode, `/switch <id>` for CLI sessions.
+
+### Dashboard
+<img width="1722" height="885" alt="image" src="https://github.com/user-attachments/assets/4ba73c7c-1141-4fe7-b9af-5293d95cf5e8" />
+
