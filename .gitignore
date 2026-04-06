@@ -9,4 +9,4 @@ bun.lock
 .claude/
 downloads
 tmux-projects.json
-docs/
+# docs/ tracked in git
