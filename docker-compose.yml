@@ -1,27 +1,4 @@
 services:
-  opencode:
-    image: node:20-slim
-    command: ["npx", "--yes", "opencode-ai@latest", "serve", "--port", "4096"]
-    restart: unless-stopped
-    user: root
-    ports:
-      - "127.0.0.1:4096:4096"
-    env_file: .env
-    environment:
-      HOME: /root
-      npm_config_cache: /root/.npm
-    volumes:
-      - ${HOME}:/root/host:ro
-      - opencode-npm-cache:/root/.npm
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4096/session >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 60s
-    networks:
-      - claude-bot
-
   bot:
     build: .
     restart: unless-stopped
@@ -32,7 +9,7 @@ services:
       # Override for Docker-internal networking
       DATABASE_URL: postgres://claude_bot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/claude_bot
       OLLAMA_URL: http://host.docker.internal:11434
-      OPENCODE_HOST: opencode
+      OPENCODE_HOST: host.docker.internal
       DOWNLOADS_DIR: /app/downloads
       HOST_DOWNLOADS_DIR: ${HOST_DOWNLOADS_DIR:-${PWD}/downloads}
       KNOWLEDGE_BASE: ${KNOWLEDGE_BASE:-}
@@ -92,7 +69,6 @@ services:
 volumes:
   pgdata:
     name: claude-bot-pgdata
-  opencode-npm-cache:
 
 networks:
   claude-bot:
