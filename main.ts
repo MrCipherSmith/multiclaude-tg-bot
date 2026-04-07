@@ -50,6 +50,19 @@ function startCleanupTimer() {
         RETURNING id
       `;
 
+      // Delete memories past per-type TTL
+      let deletedMemories = 0;
+      for (const [mtype, ttlDays] of Object.entries(CONFIG.MEMORY_TTL_DAYS)) {
+        if (ttlDays <= 0) continue;
+        const result = await sql`
+          DELETE FROM memories
+          WHERE type = ${mtype}
+            AND created_at < now() - make_interval(days => ${ttlDays})
+          RETURNING id
+        `;
+        deletedMemories += result.length;
+      }
+
       // Delete terminated local sessions past TTL (cascade)
       const staleSessions = await sql`
         SELECT id FROM sessions
@@ -61,7 +74,7 @@ function startCleanupTimer() {
         await deleteSessionCascade(s.id);
       }
 
-      console.log(`[ttl-cleanup] deleted messages=${deletedMessages.length} perms=${deletedPerms.length} sessions=${staleSessions.length}`);
+      console.log(`[ttl-cleanup] deleted messages=${deletedMessages.length} perms=${deletedPerms.length} memories=${deletedMemories} sessions=${staleSessions.length}`);
 
       // Always reset sequence to avoid ID gaps
       await sessionManager.resetSequence();

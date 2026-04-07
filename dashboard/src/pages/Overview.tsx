@@ -1,7 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import { api } from '../api/client'
 import { useI18n } from '../i18n'
+import { useEventStream } from '../hooks/useEventStream'
+import { requestNotificationPermission, sendBrowserNotification } from '../lib/notifications'
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400)
@@ -18,6 +21,24 @@ const fmt = new Intl.NumberFormat()
 
 export function OverviewPage() {
   const { t } = useI18n()
+  const queryClient = useQueryClient()
+
+  // Request notification permission on mount
+  useEffect(() => {
+    requestNotificationPermission()
+  }, [])
+
+  // Subscribe to SSE events for real-time session state updates
+  useEventStream("/api/events", {
+    "session-state": (data: any) => {
+      const statusLabel = data.status === "active" ? "started" : data.status === "inactive" ? "stopped" : data.status
+      sendBrowserNotification(
+        `Session ${data.project ?? `#${data.id}`} ${statusLabel}`,
+        { body: `Status changed to ${data.status}` },
+      )
+      queryClient.invalidateQueries({ queryKey: ["overview"] })
+    },
+  })
 
   const formatRelative = (date: string): string => {
     const diff = (Date.now() - new Date(date).getTime()) / 1000

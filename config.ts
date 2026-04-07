@@ -44,4 +44,13 @@ export const CONFIG = {
   // Smart memory reconciliation
   MEMORY_SIMILARITY_THRESHOLD: Number(process.env.MEMORY_SIMILARITY_THRESHOLD ?? "0.35") || 0.35,
   MEMORY_RECONCILE_TOP_K: Number(process.env.MEMORY_RECONCILE_TOP_K ?? "5") || 5,
+
+  // Per-type memory TTL (days). Set to 0 to disable TTL for a type.
+  MEMORY_TTL_DAYS: {
+    fact: Number(process.env.MEMORY_TTL_FACT_DAYS ?? "90") || 90,
+    summary: Number(process.env.MEMORY_TTL_SUMMARY_DAYS ?? "60") || 60,
+    decision: Number(process.env.MEMORY_TTL_DECISION_DAYS ?? "180") || 180,
+    note: Number(process.env.MEMORY_TTL_NOTE_DAYS ?? "30") || 30,
+    project_context: Number(process.env.MEMORY_TTL_PROJECT_CONTEXT_DAYS ?? "180") || 180,
+  },
 } as const;

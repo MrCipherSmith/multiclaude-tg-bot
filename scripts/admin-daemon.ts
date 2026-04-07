@@ -77,8 +77,8 @@ async function processCommand(row: { id: bigint; command: string; payload: Recor
 
       case "tmux_stop":
         result = await runShell("tmux kill-session -t bots 2>&1 || true");
-        // Mark all remote sessions as disconnected in DB
-        await sql`UPDATE sessions SET status = 'disconnected' WHERE source = 'remote'`;
+        // Mark all remote sessions as inactive in DB
+        await sql`UPDATE sessions SET status = 'inactive' WHERE source = 'remote'`;
         break;
 
       case "proj_start": {
@@ -100,10 +100,14 @@ async function processCommand(row: { id: bigint; command: string; payload: Recor
       }
 
       case "proj_stop": {
-        const { name } = row.payload;
+        let { name, project_id } = row.payload;
+        if (!name && project_id) {
+          const prows = await sql`SELECT name FROM projects WHERE id = ${project_id}`;
+          if (prows.length > 0) name = prows[0].name;
+        }
         if (!name) { result = { ok: false, output: "missing name" }; break; }
         result = await runShell(`tmux kill-window -t "bots:${name}" 2>&1 || tmux kill-window -t "bots:${name} " 2>&1 || echo "window not found"`);
-        await sql`UPDATE sessions SET status = 'disconnected' WHERE project = ${name} AND source = 'remote'`;
+        await sql`UPDATE sessions SET status = 'inactive' WHERE project = ${name} AND source = 'remote'`;
         break;
       }
 

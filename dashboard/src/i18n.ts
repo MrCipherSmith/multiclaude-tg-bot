@@ -116,6 +116,26 @@ const translations = {
     'memory.deleteConfirm': 'Delete this memory?',
     'memory.noMemories': 'No memories',
 
+    // Projects
+    'nav.projects': 'Projects',
+    'projects.title': 'Projects',
+    'projects.name': 'Name',
+    'projects.path': 'Path',
+    'projects.status': 'Status',
+    'projects.actions': 'Actions',
+    'projects.active': 'Active',
+    'projects.inactive': 'Inactive',
+    'projects.start': 'Start',
+    'projects.stop': 'Stop',
+    'projects.delete': 'Delete',
+    'projects.deleteConfirm': 'Delete project "{name}"?',
+    'projects.noProjects': 'No projects',
+    'projects.addTitle': 'Add Project',
+    'projects.namePlaceholder': 'Project name',
+    'projects.pathPlaceholder': '/absolute/path/to/project',
+    'projects.addBtn': 'Add',
+    'projects.adding': 'Adding...',
+
     // Common
     'common.loading': 'Loading...',
     'common.error': 'Error',
@@ -239,6 +259,26 @@ const translations = {
     'memory.deleteBtn': 'Удалить',
     'memory.deleteConfirm': 'Удалить это воспоминание?',
     'memory.noMemories': 'Нет воспоминаний',
+
+    // Projects
+    'nav.projects': 'Проекты',
+    'projects.title': 'Проекты',
+    'projects.name': 'Название',
+    'projects.path': 'Путь',
+    'projects.status': 'Статус',
+    'projects.actions': 'Действия',
+    'projects.active': 'Активен',
+    'projects.inactive': 'Неактивен',
+    'projects.start': 'Запустить',
+    'projects.stop': 'Остановить',
+    'projects.delete': 'Удалить',
+    'projects.deleteConfirm': 'Удалить проект "{name}"?',
+    'projects.noProjects': 'Нет проектов',
+    'projects.addTitle': 'Добавить проект',
+    'projects.namePlaceholder': 'Название проекта',
+    'projects.pathPlaceholder': '/абсолютный/путь/к/проекту',
+    'projects.addBtn': 'Добавить',
+    'projects.adding': 'Добавление...',
 
     // Common
     'common.loading': 'Загрузка...',
