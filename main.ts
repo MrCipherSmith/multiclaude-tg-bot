@@ -28,6 +28,8 @@ function startCleanupTimer() {
       await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
+      // Delete orphaned cli-xxx sessions with no project (leftover from crashed processes)
+      await sessionManager.deleteOrphanCliSessions();
       // Clean up stale idle timers for disconnected sessions
       await cleanupStaleTimers();
       // Always reset sequence to avoid ID gaps

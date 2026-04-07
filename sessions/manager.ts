@@ -44,7 +44,7 @@ export class SessionManager {
         ${'local'},
         ${projectPath ?? null},
         ${clientId},
-        'disconnected',
+        'active',
         ${JSON.stringify(metadata ?? {})}::jsonb,
         'claude',
         ${JSON.stringify(cliConfig ?? {})}::jsonb
@@ -246,6 +246,25 @@ export class SessionManager {
 
   getSessionIdByClient(clientId: string): number | undefined {
     return this.activeClients.get(clientId);
+  }
+
+
+  async getByClientId(clientId: string): Promise<Session | null> {
+    const rows = await sql`
+      SELECT id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+      FROM sessions WHERE client_id = ${clientId}
+    `;
+    return rows.length > 0 ? this.rowToSession(rows[0]) : null;
+  }
+
+  /** Delete all orphaned cli-xxx sessions (no live transport) — call on startup */
+  async deleteOrphanCliSessions(): Promise<number> {
+    const result = await sql`
+      DELETE FROM sessions
+      WHERE name LIKE 'cli-%' AND project IS NULL
+      RETURNING id
+    `;
+    return result.length;
   }
 
   private rowToSession(r: Record<string, any>): Session {

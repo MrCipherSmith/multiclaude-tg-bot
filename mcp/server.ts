@@ -336,11 +336,9 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         onsessioninitialized: async (id: string) => {
           transports.set(id, transport!);
           registerMcpSession(id, mcpServer);
-          const cwd = req.headers["x-project-path"] as string | undefined;
           const name = req.headers["x-session-name"] as string | undefined;
-          const autoName = cwd ? `${basename(cwd)} · cli` : `cli-${id.slice(0, 8)}`;
           transportSessionId = id;
-          const session = await sessionManager.register(id, name ?? autoName, cwd);
+          const session = await sessionManager.register(id, name ?? `cli-${id.slice(0, 8)}`);
           console.log(`[mcp] session initialized: ${id} (db #${session.id})`);
         },
       });
