@@ -286,6 +286,78 @@ async function handleDeleteMemory(res: ServerResponse, id: number): Promise<void
   sendJson(res, { ok: true });
 }
 
+async function handleListProjects(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const rows = await sql`
+    SELECT p.id, p.name, p.path, p.tmux_session_name, p.created_at,
+           s.id as session_id, s.status as session_status
+    FROM projects p
+    LEFT JOIN sessions s ON s.project_id = p.id AND s.source = 'remote'
+    ORDER BY p.name
+  `;
+  sendJson(res, rows);
+}
+
+async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { name, path } = await parseBody(req);
+  if (!name || typeof name !== "string") { sendError(res, "name required"); return; }
+  if (!path || typeof path !== "string") { sendError(res, "path required"); return; }
+  if (!path.startsWith("/")) { sendError(res, "path must be absolute"); return; }
+
+  const tmuxName = name.toLowerCase().replace(/\s+/g, "_");
+
+  let project: any;
+  try {
+    const rows = await sql`
+      INSERT INTO projects (name, path, tmux_session_name)
+      VALUES (${name}, ${path}, ${tmuxName})
+      ON CONFLICT (path) DO NOTHING
+      RETURNING id, name, path, tmux_session_name, created_at
+    `;
+    if (rows.length === 0) {
+      sendError(res, "Project with this path already exists", 409);
+      return;
+    }
+    project = rows[0];
+  } catch (err: any) {
+    if (err.code === "23505") { sendError(res, "Project already exists", 409); return; }
+    throw err;
+  }
+
+  // Register remote session
+  await sql`
+    INSERT INTO sessions (project_id, name, project_path, source, status)
+    VALUES (${project.id}, ${project.name}, ${project.path}, 'remote', 'inactive')
+    ON CONFLICT DO NOTHING
+  `.catch(() => {/* ignore if sessions table has no project_id unique constraint */});
+
+  sendJson(res, project, 201);
+}
+
+async function handleProjectAction(req: IncomingMessage, res: ServerResponse, id: number, action: "start" | "stop"): Promise<void> {
+  const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+  if (!project) { sendError(res, "Project not found", 404); return; }
+
+  const command = action === "start" ? "proj_start" : "proj_stop";
+  await sql`INSERT INTO admin_commands (command, payload) VALUES (${command}, ${JSON.stringify({ project_id: id })})`;
+  sendJson(res, { ok: true });
+}
+
+async function handleDeleteProject(res: ServerResponse, id: number): Promise<void> {
+  const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
+  if (!project) { sendError(res, "Project not found", 404); return; }
+
+  const activeSessions = await sql`
+    SELECT id FROM sessions WHERE project_id = ${id} AND status = 'active'
+  `;
+  if (activeSessions.length > 0) {
+    sendError(res, "Cannot delete project with active sessions", 409);
+    return;
+  }
+
+  await sql`DELETE FROM projects WHERE id = ${id}`;
+  sendJson(res, { ok: true });
+}
+
 // --- Static file serving ---
 
 async function serveStatic(res: ServerResponse, pathname: string): Promise<boolean> {
@@ -418,6 +490,28 @@ export async function handleDashboardRequest(
     if (pathname.match(/^\/api\/memories\/(\d+)$/) && method === "DELETE") {
       const id = Number(pathname.split("/").pop());
       await handleDeleteMemory(res, id);
+      return true;
+    }
+
+    // Projects
+    if (pathname === "/api/projects" && method === "GET") {
+      await handleListProjects(req, res);
+      return true;
+    }
+    if (pathname === "/api/projects" && method === "POST") {
+      await handleCreateProject(req, res);
+      return true;
+    }
+    const projectActionMatch = pathname.match(/^\/api\/projects\/(\d+)\/(start|stop)$/);
+    if (projectActionMatch && method === "POST") {
+      const id = Number(projectActionMatch[1]);
+      const action = projectActionMatch[2] as "start" | "stop";
+      await handleProjectAction(req, res, id, action);
+      return true;
+    }
+    if (pathname.match(/^\/api\/projects\/(\d+)$/) && method === "DELETE") {
+      const id = Number(pathname.split("/").pop());
+      await handleDeleteProject(res, id);
       return true;
     }
 

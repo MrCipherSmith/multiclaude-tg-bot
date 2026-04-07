@@ -66,6 +66,14 @@ export const api = {
   deleteMemory: (id: number) => request<void>(`/memories/${id}`, { method: 'DELETE' }),
   memoryTags: () => request<MemoryTag[]>('/memories/tags'),
   deleteMemoriesByTag: (tag: string) => request<{ deleted: number }>(`/memories/tag/${encodeURIComponent(tag)}`, { method: 'DELETE' }),
+
+  // Projects
+  projects: () => request<Project[]>('/projects'),
+  createProject: (data: { name: string; path: string }) =>
+    request<Project>('/projects', { method: 'POST', body: JSON.stringify(data) }),
+  startProject: (id: number) => request<{ ok: boolean }>(`/projects/${id}/start`, { method: 'POST' }),
+  stopProject: (id: number) => request<{ ok: boolean }>(`/projects/${id}/stop`, { method: 'POST' }),
+  deleteProject: (id: number) => request<{ ok: boolean }>(`/projects/${id}`, { method: 'DELETE' }),
 };
 
 // Types
@@ -210,6 +218,16 @@ export interface PaginatedMemories {
 export interface MemoryTag {
   tag: string;
   count: number;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  path: string;
+  tmux_session_name: string;
+  created_at: string;
+  session_id: number | null;
+  session_status: string | null;
 }
 
 export interface ApiError {
