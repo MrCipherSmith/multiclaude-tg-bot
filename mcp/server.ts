@@ -151,6 +151,17 @@ function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => s
     },
     async (args) => exec("set_session_name", args),
   );
+
+  server.tool(
+    "search_project_context",
+    "Semantic search over long-term project context and work summaries. Use when you need knowledge from prior sessions about this project.",
+    {
+      query: z.string().describe("Natural language search query"),
+      project_path: z.string().optional().describe("Project path to search in. Defaults to current session project_path."),
+      limit: z.number().optional().describe("Number of results to return (default: 5, max: 20)"),
+    },
+    async (args) => exec("search_project_context", args),
+  );
 }
 
 function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined): McpServer {
