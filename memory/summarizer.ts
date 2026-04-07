@@ -1,7 +1,8 @@
 import { sql } from "./db.ts";
 import { remember } from "./long-term.ts";
 import { getCachedMessages, clearCache, type Message } from "./short-term.ts";
-import { summarizeConversation } from "../claude/client.ts";
+import { summarizeConversation, generateResponse } from "../claude/client.ts";
+import { embedSafe } from "./embeddings.ts";
 import { CONFIG } from "../config.ts";
 
 // Idle timers: "sessionId:chatId" -> timeout handle
@@ -133,6 +134,21 @@ async function trySummarize(
     }
 
     console.log(`[summarizer] saved summary + ${facts.length} facts`);
+
+    // Archive old messages, keep last SHORT_TERM_WINDOW for continuity
+    await sql`
+      UPDATE messages SET archived_at = now()
+      WHERE session_id = ${sessionId}
+        AND chat_id = ${chatId}
+        AND archived_at IS NULL
+        AND id NOT IN (
+          SELECT id FROM messages
+          WHERE session_id = ${sessionId} AND chat_id = ${chatId}
+          ORDER BY created_at DESC
+          LIMIT ${CONFIG.SHORT_TERM_WINDOW}
+        )
+    `;
+
     return summary;
   } catch (err) {
     console.error("[summarizer] failed:", err);

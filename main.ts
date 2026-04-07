@@ -4,6 +4,7 @@ import { createBot } from "./bot/bot.ts";
 import { startMcpHttpServer } from "./mcp/server.ts";
 import { stopAllTimers, cleanupStaleTimers } from "./memory/summarizer.ts";
 import { sessionManager } from "./sessions/manager.ts";
+import { deleteSessionCascade } from "./sessions/delete.ts";
 import "./adapters/index.ts"; // Register all CLI adapters at startup
 
 function startCleanupTimer() {
@@ -14,29 +15,58 @@ function startCleanupTimer() {
       const mq = await sql`DELETE FROM message_queue WHERE delivered = true AND created_at < now() - interval '24 hours'`;
       const logs = await sql`DELETE FROM request_logs WHERE created_at < now() - interval '7 days'`;
       const stats = await sql`DELETE FROM api_request_stats WHERE created_at < now() - interval '30 days'`;
-      const perms = await sql`DELETE FROM permission_requests WHERE created_at < now() - interval '1 hour'`;
       // Mark stale "active" sessions that have no live transport (10 min threshold)
       const stale = await sessionManager.markStale(600);
-      // Clear chat_sessions referencing disconnected sessions, then delete them
+      // Clear chat_sessions referencing disconnected local sessions, then delete them
       // Must delete child rows first to satisfy FK constraints
-      await sql`DELETE FROM chat_sessions WHERE active_session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM memories WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM permission_requests WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM message_queue WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
+      await sql`DELETE FROM chat_sessions WHERE active_session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM memories WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM permission_requests WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM message_queue WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
+      const cliJunk = await sql`DELETE FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0`;
       // Delete orphaned cli-xxx sessions with no project (leftover from crashed processes)
       await sessionManager.deleteOrphanCliSessions();
       // Clean up stale idle timers for disconnected sessions
       await cleanupStaleTimers();
+
+      // Delete archived messages past TTL
+      const deletedMessages = await sql`
+        DELETE FROM messages
+        WHERE archived_at IS NOT NULL
+          AND archived_at < now() - make_interval(days => ${CONFIG.ARCHIVE_TTL_DAYS})
+        RETURNING id
+      `;
+
+      // Delete archived permission_requests past TTL (not by created_at)
+      const deletedPerms = await sql`
+        DELETE FROM permission_requests
+        WHERE archived_at IS NOT NULL
+          AND archived_at < now() - make_interval(days => ${CONFIG.ARCHIVE_TTL_DAYS})
+        RETURNING id
+      `;
+
+      // Delete terminated local sessions past TTL (cascade)
+      const staleSessions = await sql`
+        SELECT id FROM sessions
+        WHERE source = 'local'
+          AND status = 'terminated'
+          AND last_active < now() - make_interval(days => ${CONFIG.ARCHIVE_TTL_DAYS})
+      `;
+      for (const s of staleSessions) {
+        await deleteSessionCascade(s.id);
+      }
+
+      console.log(`[ttl-cleanup] deleted messages=${deletedMessages.length} perms=${deletedPerms.length} sessions=${staleSessions.length}`);
+
       // Always reset sequence to avoid ID gaps
       await sessionManager.resetSequence();
-      const total = mq.count + logs.count + stats.count + perms.count + cliJunk.count + stale;
+      const total = mq.count + logs.count + stats.count + cliJunk.count + stale;
       if (total > 0) {
-        console.log(`[cleanup] queue=${mq.count} logs=${logs.count} stats=${stats.count} perms=${perms.count} cli_junk=${cliJunk.count} stale=${stale}`);
+        console.log(`[cleanup] queue=${mq.count} logs=${logs.count} stats=${stats.count} cli_junk=${cliJunk.count} stale=${stale}`);
       }
     } catch (err) {
       console.error("[cleanup] error:", err);
