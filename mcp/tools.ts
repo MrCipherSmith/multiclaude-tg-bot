@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { remember, recall, forget, listMemories, type Memory } from "../memory/long-term.ts";
+import { rememberSmart, recall, forget, listMemories, type Memory } from "../memory/long-term.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { sql } from "../memory/db.ts";
 import { embedSafe } from "../memory/embeddings.ts";
@@ -207,14 +207,15 @@ export async function executeTool(
           projectPath = sess?.projectPath ?? null;
         }
       }
-      const m = await remember({
+      const result = await rememberSmart({
         content: args.content as string,
         type: (args.type as Memory["type"]) ?? "note",
         tags: (args.tags as string[]) ?? [],
         source: (args.source as Memory["source"]) ?? "cli",
         projectPath,
       });
-      return text(`Saved memory #${m.id}: "${m.content.slice(0, 80)}..."`);
+      const actionLabel = result.action === "added" ? "Saved" : result.action === "updated" ? "Updated" : "Already known";
+      return text(`${actionLabel} memory #${result.id}: "${result.content.slice(0, 80)}..."`);
     }
 
     case "recall": {

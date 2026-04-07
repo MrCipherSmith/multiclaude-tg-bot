@@ -1,8 +1,7 @@
 import { sql } from "./db.ts";
-import { remember } from "./long-term.ts";
+import { remember, rememberSmart } from "./long-term.ts";
 import { getCachedMessages, clearCache, type Message } from "./short-term.ts";
 import { summarizeConversation, generateResponse } from "../claude/client.ts";
-import { embedSafe } from "./embeddings.ts";
 import { CONFIG } from "../config.ts";
 
 // Idle timers: "sessionId:chatId" -> timeout handle
@@ -285,30 +284,28 @@ export async function summarizeWork(sessionId: number): Promise<boolean> {
       .join("\n");
   }
 
-  // 5. Embed
-  const embedding = await embedSafe(summary);
-  const embeddingStr = embedding ? `[${embedding.join(",")}]` : null;
+  // 5. Save to memories with smart reconciliation (outside transaction — acceptable)
+  let memId: number | undefined;
+  try {
+    const mem = await rememberSmart({
+      source: "api",
+      sessionId: null,
+      chatId: "",
+      type: "project_context",
+      content: summary,
+      tags: ["exit"],
+      projectPath,
+    });
+    memId = mem.id;
+    console.log(`[summarizer] session #${sessionId}: project_context ${mem.action} #${mem.id}`);
+  } catch (memErr) {
+    console.error(`[summarizer] session #${sessionId}: failed to save memory:`, memErr);
+  }
 
-  // 6-8. Save memory, archive messages/tool calls, and mark session terminated atomically
+  // 6-8. Archive messages/tool calls and mark session terminated atomically
   try {
     await sql.begin(async (tx) => {
-      // 6. Save to memories (type='project_context', session_id=NULL)
-      const [mem] = await tx`
-        INSERT INTO memories (source, session_id, chat_id, type, content, tags, project_path, embedding)
-        VALUES (
-          'work_session',
-          NULL,
-          '',
-          'project_context',
-          ${summary},
-          ${["exit"]},
-          ${projectPath},
-          ${embeddingStr}::vector
-        )
-        RETURNING id
-      `;
-
-      // 7. Mark messages and permission_requests archived
+      // 6. Mark messages and permission_requests archived
       await tx`
         UPDATE messages SET archived_at = now()
         WHERE session_id = ${sessionId} AND archived_at IS NULL
@@ -318,10 +315,10 @@ export async function summarizeWork(sessionId: number): Promise<boolean> {
         WHERE session_id = ${sessionId} AND archived_at IS NULL
       `;
 
-      // 8. Set session status = 'terminated'
+      // 7. Set session status = 'terminated'
       await tx`UPDATE sessions SET status = 'terminated', last_active = now() WHERE id = ${sessionId}`;
 
-      console.log(`[summarizer] session #${sessionId}: work summary saved id=${mem?.id}, messages archived`);
+      console.log(`[summarizer] session #${sessionId}: messages archived, status=terminated, memory=#${memId}`);
     });
   } catch (txErr) {
     // Transaction failed — at minimum, mark session terminated

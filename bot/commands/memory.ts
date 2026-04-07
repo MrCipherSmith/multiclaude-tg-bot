@@ -1,5 +1,5 @@
 import type { Context } from "grammy";
-import { remember, recall, forget, listMemories } from "../../memory/long-term.ts";
+import { rememberSmart, recall, forget, listMemories } from "../../memory/long-term.ts";
 import { clearCache } from "../../memory/short-term.ts";
 import { forceSummarize } from "../../memory/summarizer.ts";
 import { sessionManager } from "../../sessions/manager.ts";
@@ -18,14 +18,15 @@ export async function handleRemember(ctx: Context): Promise<void> {
       const input = replyCtx.message?.text?.trim();
       if (!input) return;
       const session = await sessionManager.get(activeSessionId);
-      const m = await remember({ source: "telegram", sessionId: activeSessionId, projectPath: session?.projectPath, chatId, type: "note", content: input });
-      await replyCtx.reply(`Saved (#${m.id}, ${session?.name ?? "global"}): ${input.slice(0, 100)}${input.length > 100 ? "..." : ""}`);
+      const result = await rememberSmart({ source: "telegram", sessionId: activeSessionId, projectPath: session?.projectPath, chatId, type: "note", content: input });
+      const label = result.action === "added" ? `Saved (#${result.id})` : result.action === "updated" ? `Updated #${result.id}` : `Already known (#${result.id})`;
+      await replyCtx.reply(`${label}: ${result.content.slice(0, 100)}${result.content.length > 100 ? "..." : ""}`);
     });
     return;
   }
 
   const session = await sessionManager.get(activeSessionId);
-  const m = await remember({
+  const result = await rememberSmart({
     source: "telegram",
     sessionId: activeSessionId,
     projectPath: session?.projectPath,
@@ -34,7 +35,8 @@ export async function handleRemember(ctx: Context): Promise<void> {
     content,
   });
 
-  await ctx.reply(`Saved (#${m.id}, ${session?.name ?? "global"}): ${content.slice(0, 100)}${content.length > 100 ? "..." : ""}`);
+  const label = result.action === "added" ? `Saved (#${result.id})` : result.action === "updated" ? `Updated #${result.id}` : `Already known (#${result.id})`;
+  await ctx.reply(`${label}: ${result.content.slice(0, 100)}${result.content.length > 100 ? "..." : ""}`);
 }
 
 export async function handleRecall(ctx: Context): Promise<void> {

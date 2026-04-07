@@ -40,4 +40,8 @@ export const CONFIG = {
   SHORT_TERM_WINDOW: Number(process.env.SHORT_TERM_WINDOW ?? "20"),
   IDLE_TIMEOUT_MS: Number(process.env.IDLE_TIMEOUT_MS ?? "900000"), // 15 min
   ARCHIVE_TTL_DAYS: Number(process.env.ARCHIVE_TTL_DAYS ?? "30") || 30,
+
+  // Smart memory reconciliation
+  MEMORY_SIMILARITY_THRESHOLD: Number(process.env.MEMORY_SIMILARITY_THRESHOLD ?? "0.35") || 0.35,
+  MEMORY_RECONCILE_TOP_K: Number(process.env.MEMORY_RECONCILE_TOP_K ?? "5") || 5,
 } as const;
