@@ -19,6 +19,7 @@ export interface Memory {
   tags?: string[];
   createdAt?: Date;
   updatedAt?: Date;
+  archivedAt?: Date;
   distance?: number;
 }
 
@@ -67,6 +68,7 @@ export async function recall(
       embedding <=> ${embeddingStr}::vector AS distance
     FROM memories
     WHERE 1=1
+      AND archived_at IS NULL
       ${projectPath ? sql`AND (project_path = ${projectPath} OR project_path IS NULL)` : sessionId !== undefined ? sql`AND (session_id = ${sessionId} OR session_id IS NULL)` : sql``}
       ${type ? sql`AND type = ${type}` : sql``}
       ${tags && tags.length > 0 ? sql`AND tags && ${tags}` : sql``}
@@ -85,6 +87,7 @@ export async function recall(
     tags: r.tags,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    archivedAt: r.archived_at,
     distance: r.distance,
   }));
 }
@@ -244,6 +247,14 @@ export async function forget(id: number): Promise<boolean> {
   return result.length > 0;
 }
 
+export async function archiveMemory(id: number): Promise<boolean> {
+  const result = await sql`
+    UPDATE memories SET archived_at = now() WHERE id = ${id} AND archived_at IS NULL
+    RETURNING id
+  `;
+  return result.length > 0;
+}
+
 export async function listMemories(
   options: {
     type?: string;
@@ -257,9 +268,10 @@ export async function listMemories(
   const { type, tags, projectPath, sessionId, limit = 20, offset = 0 } = options;
 
   const rows = await sql`
-    SELECT id, source, session_id, project_path, chat_id, type, content, tags, created_at, updated_at
+    SELECT id, source, session_id, project_path, chat_id, type, content, tags, created_at, updated_at, archived_at
     FROM memories
     WHERE 1=1
+      AND archived_at IS NULL
       ${projectPath ? sql`AND (project_path = ${projectPath} OR project_path IS NULL)` : sessionId !== undefined ? sql`AND (session_id = ${sessionId} OR session_id IS NULL)` : sql``}
       ${type ? sql`AND type = ${type}` : sql``}
       ${tags && tags.length > 0 ? sql`AND tags && ${tags}` : sql``}
@@ -278,5 +290,6 @@ export async function listMemories(
     tags: r.tags,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    archivedAt: r.archived_at,
   }));
 }

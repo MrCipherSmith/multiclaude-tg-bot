@@ -317,6 +317,14 @@ const migrations: Migration[] = [
       await tx`CREATE INDEX IF NOT EXISTS idx_memories_type_project ON memories(type, project_path)`;
     },
   },
+  {
+    version: 9,
+    name: "memories archived_at for TTL",
+    up: async (tx) => {
+      await tx`ALTER TABLE memories ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_memories_archived_at ON memories(archived_at) WHERE archived_at IS NOT NULL`;
+    },
+  },
 ];
 
 // --- Public API ---
