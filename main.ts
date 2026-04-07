@@ -27,12 +27,6 @@ function startCleanupTimer() {
       await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
       await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE status = 'disconnected' AND id != 0)`;
-      // Stop SSE monitors for disconnected opencode sessions before deleting them
-      const disconnectedOC = await sql`SELECT id FROM sessions WHERE status = 'disconnected' AND cli_type = 'opencode' AND id != 0`;
-      if (disconnectedOC.length > 0) {
-        const { opencodeMonitor } = await import("./adapters/opencode-monitor.ts");
-        for (const s of disconnectedOC) opencodeMonitor.stop(s.id);
-      }
       const cliJunk = await sql`DELETE FROM sessions WHERE status = 'disconnected' AND id != 0`;
       // Clean up stale idle timers for disconnected sessions
       await cleanupStaleTimers();
@@ -65,15 +59,8 @@ async function main() {
   // 2. Create Telegram bot
   const bot = createBot();
 
-  // 3. Init opencode monitor BEFORE HTTP server starts (prevents race on /api/sessions/register)
-  const { opencodeMonitor } = await import("./adapters/opencode-monitor.ts");
-  opencodeMonitor.setBot(bot);
-
-  // 4. Start MCP HTTP server
+  // 3. Start MCP HTTP server
   const httpServer = startMcpHttpServer(bot);
-
-  // 4c. Start persistent SSE monitors for existing opencode sessions
-  await opencodeMonitor.startAll();
 
   // 5. Start cleanup timer
   const cleanupTimer = startCleanupTimer();

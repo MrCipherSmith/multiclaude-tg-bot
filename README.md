@@ -436,11 +436,9 @@ Connect:
   claude-bot start [dir] [--claude|--opencode]  Register + launch in current terminal
   claude-bot connect [dir] [-t] [--provider]    Start single CLI session
 
-Providers:
-  claude-bot add ~/project --provider opencode   Register OpenCode TUI project
-  claude-bot add ~/project --provider claude     Register Claude Code project
-  claude-bot run ~/project --opencode            Launch as OpenCode TUI
-  claude-bot run ~/project --claude              Launch as Claude Code
+Connect:
+  claude-bot start [dir]            Launch Claude Code in current terminal
+  claude-bot connect [dir] [-t]     Start single CLI session
 ```
 
 ## Telegram Commands
@@ -475,9 +473,8 @@ Providers:
 | `/commands` | Custom commands — inline buttons, click to execute |
 | `/hooks` | Configured Hookify rules (event matchers + commands) |
 | `/rules` | Coding rules from knowledge base |
-| `/add` | Register project — choose Claude Code or opencode as CLI backend |
-| `/model` | Select model for current session (inline buttons; opencode fetches live model list) |
-| `/connections` | opencode provider API key status with Configure buttons (opencode sessions only) |
+| `/add` | Register project as Claude Code session (prompts for path if not in session) |
+| `/model` | Select Claude model for current session (inline buttons) |
 
 ## Skills, Commands & Hooks
 
@@ -528,43 +525,17 @@ Lists configured hooks from `settings.json`:
 - `Stop` — when agent stops
 - `Notification` — on bot notification
 
-## Session CLI Types
-
-Each registered session has a **CLI backend type** — either Claude Code or opencode. This determines how messages are delivered and how responses are received.
-
-| CLI Type | Transport | Response path |
-|----------|-----------|---------------|
-| `claude` | DB `message_queue` → `channel.ts` stdio | MCP `reply` tool call |
-| `opencode` | HTTP `POST /session/:id/prompt_async` | SSE `/event` stream → Telegram |
+## Session Management
 
 ### `/add` — Register Project
 
-Shows inline keyboard to choose the CLI backend:
+Register a directory as a Claude Code session. If you're in an active session, the project path is auto-detected. Otherwise the bot prompts for the path.
 
-```
-[Claude Code]  [opencode]
-```
-
-- **Claude Code** — full MCP integration, permission forwarding, tmux progress
-- **opencode** — sends via HTTP REST to `opencode serve :4096`, receives via SSE monitor
-
-If you're in an active session, the project path is auto-detected. Otherwise the bot asks for the path.
+Registered sessions are immediately switchable via `/switch`. To launch the Claude Code CLI, use `claude-bot start <path>` from the terminal.
 
 ### `/model` — Select Model
 
-Shows inline keyboard with available models:
-
-- **Claude Code session** — static list of Claude models (opus/sonnet/haiku)
-- **opencode session** — fetches live model list from `opencode serve /model` API
-
-Selected model stored in `cli_config.model` in the sessions table.
-
-### `/connections` — opencode Provider Status
-
-**Only available for opencode sessions.** Fetches provider list from `opencode serve /provider`:
-
-- ✅ / ❌ status per provider API key
-- **Configure** button for unconfigured providers → shows `opencode auth <provider>` instructions
+Shows inline keyboard with available Claude models (opus/sonnet/haiku). Selected model stored in `cli_config.model` on the session and passed to Claude Code on next launch.
 
 ### Adapter Architecture
 
@@ -572,21 +543,10 @@ The bot uses a registry-based adapter pattern (`adapters/`):
 
 ```
 CliAdapter interface
-├── ClaudeAdapter   — message_queue INSERT → channel.ts picks up → MCP notify
-└── OpencodeAdapter — HTTP POST /prompt_async + SSE monitor forwards responses
+└── ClaudeAdapter — message_queue INSERT → channel.ts picks up → MCP notify
 ```
 
-Adapters are registered at startup (`adapters/index.ts`) and selected by `cli_type` field on the session. The `sessions/router.ts` resolves the active session to one of three modes: `standalone`, `cli`, or `disconnected`.
-
-### CLI Provider Support
-
-When adding a project via CLI, specify the backend:
-```bash
-claude-bot add ~/my-project --provider opencode   # Register as opencode project
-claude-bot add ~/my-project --provider claude     # Register as Claude Code project
-claude-bot run ~/my-project --opencode            # Launch as opencode
-claude-bot run ~/my-project --claude              # Launch as Claude Code
-```
+Adapters are registered at startup (`adapters/index.ts`). The `sessions/router.ts` resolves the active session to one of three modes: `standalone`, `cli`, or `disconnected`.
 
 ## MCP Tools
 
@@ -616,35 +576,6 @@ claude-bot run ~/my-project --claude              # Launch as Claude Code
 ```
 GET http://localhost:3847/health
 → { "status": "ok", "db": "connected", "uptime": 3600, "sessions": 5 }
-```
-
-## OpenCode Integration
-
-Claude Bot can connect to [OpenCode](https://opencode.ai) — a TUI-based AI coding tool with advanced reasoning:
-
-### Connect OpenCode Project
-
-```bash
-# Start OpenCode in background (persistent tmux session)
-claude-bot add ~/my-project --provider opencode
-
-# Or connect existing OpenCode instance
-claude-bot attach <opencode-url>
-```
-
-### Features
-
-- **SSE Monitor** — real-time monitoring of OpenCode operations
-- **Message Forwarding** — TUI responses automatically forwarded to Telegram
-- **Session Persistence** — shared session state between TUI and Telegram
-- **Status Updates** — live progress from OpenCode ("Exploring files...", "Running tests...", etc.)
-- **Two-Way Control** — send messages from Telegram, monitor output in TUI
-
-### Setup
-
-The bot auto-detects OpenCode via port 8000. Ensure OpenCode is running:
-```bash
-opencode serve --hostname 0.0.0.0 --port 8000
 ```
 
 ## Setup Guide
@@ -769,19 +700,11 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 - **Deferred input** — Tools requiring args prompt user then enqueue
 - **Icon support** — 38+ emojis for quick visual identification
 
-### CLI Backend & Model Selection
-- **`/add`** — Register project, choose CLI backend: Claude Code or opencode (inline buttons)
-- **`/model`** — Select model with inline buttons; opencode sessions fetch live model list from API
-- **`/connections`** — opencode-only: provider API key status, Configure buttons
-- **Adapter pattern** — `adapters/ClaudeAdapter` (message_queue) and `adapters/OpencodeAdapter` (HTTP REST)
+### Session Management Commands
+- **`/add`** — Register project as Claude Code session (prompts for path, auto-switches)
+- **`/model`** — Select Claude model via inline buttons (stored in `cli_config.model`)
+- **Adapter pattern** — `adapters/ClaudeAdapter` (message_queue), extensible registry
 - **Session router** — `sessions/router.ts` typed routing: standalone / cli / disconnected
-
-### OpenCode TUI Integration
-- **Persistent SSE monitor** — Real-time message forwarding to Telegram
-- **Session sharing** — Shared state between TUI and Telegram
-- **Auto-start** — Bot launches `opencode serve` automatically
-- **Status updates** — Live progress from OpenCode operations
-- **Two-way control** — Send from Telegram, monitor in TUI
 
 ### CLI Refactoring
 - **`start [dir]`** — Register + launch project in current terminal (replaces old start = docker-only)
@@ -802,7 +725,7 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 - [x] Stream-json output parsing for non-tmux progress monitoring
 - [x] Web dashboard for statistics and session management
 - [x] Skills & commands integration from local Claude config
-- [x] Multi-backend CLI sessions (/add Claude Code or opencode, /model, /connections)
+- [x] Session management commands (/add, /model) with model selection
 - [x] OpenCode TUI integration with SSE monitoring
 - [ ] Multi-user support with separate session namespaces
 - [ ] Inline mode — respond in any Telegram chat via @bot

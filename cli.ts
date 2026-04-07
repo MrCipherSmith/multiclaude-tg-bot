@@ -292,34 +292,6 @@ Keep status messages short (under 50 chars). The status is automatically deleted
     console.log(` ${c.yellow("exists, skipping")}`);
   }
 
-  // opencode: install + start serve
-  console.log();
-  const setupOpencode = askChoice("opencode (AI coding CLI for opencode sessions):", [
-    "Install opencode-ai and start opencode serve",
-    "Skip (I'll set it up later)",
-  ]);
-
-  if (setupOpencode === 0) {
-    // Install opencode-ai globally if not present
-    const hasOpencode = (await run(["which", "opencode"], { silent: true })).ok;
-    if (!hasOpencode) {
-      step("Installing opencode-ai");
-      const install = await run(["npm", "install", "-g", "opencode-ai"]);
-      install.ok ? done() : fail("try manually: npm i -g opencode-ai");
-    } else {
-      console.log(`  ${c.green("✓")} opencode already installed`);
-    }
-
-    const opencodePort = ask("opencode serve port", "4096");
-
-    step("Starting opencode serve in tmux");
-    await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
-    await run(["tmux", "send-keys", "-t", "opencode-serve",
-      `opencode serve --port ${opencodePort} --hostname 0.0.0.0`, "Enter"]);
-    done();
-    console.log(`  ${c.dim(`Logs: tmux attach -t opencode-serve`)}\n`);
-  }
-
   // Register projects
   console.log(`  ${c.bold("Add projects (optional)")}`);
   console.log(`  You can register project directories now, or later with ${c.cyan("claude-bot add .")}\n`);
@@ -334,22 +306,15 @@ Keep status messages short (under 50 chars). The status is automatically deleted
       continue;
     }
 
-    const providerChoice = askChoice(`Provider for ${basename(absPath)}:`, [
-      "Claude Code (default)",
-      "opencode",
-    ]);
-    const provider = providerChoice === 1 ? "opencode" : "claude";
-
     // Run registration inside the container — avoids Docker bridge NAT causing 401/403
     const result = await run([
       "docker", "compose", "exec", "-T", "bot",
       "bun", "/app/cli.ts", "_register",
-      "--provider", provider,
       "--path", absPath,
       "--name", basename(absPath),
     ]);
     if (!result.ok) {
-      console.log(c.yellow(`  Add later with: claude-bot add --provider ${provider} ${absPath}`));
+      console.log(c.yellow(`  Add later with: claude-bot add ${absPath}`));
     }
 
     const again = ask("Add another project? (y/N)", "N");
@@ -386,87 +351,12 @@ async function start(dir?: string) {
     return;
   }
 
-  const name = basename(projectDir);
-
-  // Determine provider: from flag, then from projects file, then ask
-  let provider: "claude" | "opencode" | undefined;
-  if (process.argv.includes("--claude")) provider = "claude";
-  else if (process.argv.includes("--opencode")) provider = "opencode";
-
-  if (!provider) {
-    const projects = await loadProjects();
-    const project = projects.find(p => p.path === projectDir);
-    if (project?.provider) {
-      provider = project.provider as "claude" | "opencode";
-      console.log(`  ${c.dim(`Provider from config: ${provider}`)}`);
-    }
-  }
-
-  if (!provider) {
-    const choice = askChoice("Provider:", ["claude (Claude Code — full MCP integration)", "opencode (opencode TUI)"]);
-    provider = choice === 1 ? "opencode" : "claude";
-  }
-
-  if (provider === "claude") {
-    console.log(`  ${c.green("Starting claude...")} ${c.dim("(Ctrl+C to stop)")}\n`);
-    const proc = Bun.spawn(
-      ["bash", `${BOT_DIR}/scripts/run-cli.sh`, projectDir],
-      { stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir },
-    );
-    await proc.exited;
-    return;
-  }
-
-  // --- opencode: open TUI with shared session ---
-  const opencodePort = "4096";
-  await ensureOpencodeServe(opencodePort);
-
-  let opencodeSessionId: string | undefined;
-  const getResult = await run([
-    "docker", "compose", "exec", "-T", "bot",
-    "bun", "/app/cli.ts", "_get-opencode-session", "--path", projectDir,
-  ], { silent: true });
-  opencodeSessionId = getResult.output?.trim() || undefined;
-
-  if (!opencodeSessionId) {
-    try {
-      const res = await fetch(`http://localhost:${opencodePort}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json() as { id?: string };
-      opencodeSessionId = data.id;
-    } catch (err: any) {
-      console.log(`  ${c.red("Failed to create opencode session:")} ${err.message}`);
-    }
-  }
-
-  if (opencodeSessionId) {
-    await run([
-      "docker", "compose", "exec", "-T", "bot",
-      "bun", "/app/cli.ts", "_set-opencode-session",
-      "--path", projectDir, "--session-id", opencodeSessionId,
-    ], { silent: true });
-  }
-
-  console.log(`\n  ${c.cyan("opencode TUI")} — ${c.dim("Ctrl+C or q to exit (session → disconnected)")}\n`);
-  const tuiArgs = ["opencode", "attach", `http://localhost:${opencodePort}`];
-  if (opencodeSessionId) tuiArgs.push("--session", opencodeSessionId);
-  const tui = Bun.spawn(tuiArgs, {
-    cwd: projectDir,
-    stdout: "inherit",
-    stderr: "inherit",
-    stdin: "inherit",
-  });
-  await tui.exited;
-
-  await run([
-    "docker", "compose", "exec", "-T", "bot",
-    "bun", "/app/cli.ts", "_disconnect",
-    "--path", projectDir,
-  ], { silent: true });
-  console.log(`\n  ${c.dim("Session disconnected.")}`);
+  console.log(`  ${c.green("Starting Claude Code...")} ${c.dim("(Ctrl+C to stop)")}\n`);
+  const proc = Bun.spawn(
+    ["bash", `${BOT_DIR}/scripts/run-cli.sh`, projectDir],
+    { stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir },
+  );
+  await proc.exited;
 }
 
 async function stop() {
@@ -674,7 +564,7 @@ async function prune() {
 const TMUX_SESSION = "bots";
 const TMUX_PROJECTS_FILE = `${BOT_DIR}/tmux-projects.json`;
 
-type Project = { name: string; path: string; provider?: "claude" | "opencode" };
+type Project = { name: string; path: string };
 
 async function loadProjects(): Promise<Project[]> {
   if (existsSync(TMUX_PROJECTS_FILE)) {
@@ -688,28 +578,7 @@ async function saveProjects(projects: Project[]) {
 }
 
 function windowName(p: Project): string {
-  const prov = p.provider ?? "claude";
-  return `[${prov}] ${p.name}`;
-}
-
-async function ensureOpencodeServe(port = "4096"): Promise<void> {
-  const isAlive = (await run(["curl", "-sf", `http://localhost:${port}/session`], { silent: true })).ok;
-  if (isAlive) {
-    console.log(`  ${c.green("✓")} opencode serve on :${port}`);
-    return;
-  }
-  step("Starting opencode serve");
-  // Kill stale session if exists
-  await run(["tmux", "kill-session", "-t", "opencode-serve"], { silent: true });
-  await run(["tmux", "new-session", "-d", "-s", "opencode-serve", "-x", "220", "-y", "50"], { silent: true });
-  await run(["tmux", "send-keys", "-t", "opencode-serve",
-    `opencode serve --port ${port} --hostname 0.0.0.0`, "Enter"]);
-  for (let i = 0; i < 10; i++) {
-    await new Promise(r => setTimeout(r, 1000));
-    if ((await run(["curl", "-sf", `http://localhost:${port}/session`], { silent: true })).ok) break;
-  }
-  done();
-  console.log(`  ${c.dim(`Stop: tmux kill-session -t opencode-serve`)}`);
+  return p.name;
 }
 
 async function tmuxStart() {
@@ -735,11 +604,6 @@ async function tmuxStart() {
 
   console.log(`\n  ${c.bold("Starting tmux session")} ${c.cyan(TMUX_SESSION)}${usePanes ? " (split panes)" : ""}\n`);
 
-  // Ensure opencode serve is running if any project uses opencode
-  const opencodePort = "4096";
-  const hasOpencode = projects.some(p => (p.provider ?? "claude") === "opencode" && existsSync(p.path));
-  if (hasOpencode) await ensureOpencodeServe(opencodePort);
-
   let first = true;
   let paneCount = 0;
   for (const p of projects) {
@@ -748,23 +612,8 @@ async function tmuxStart() {
       continue;
     }
 
-    const provider = p.provider ?? "claude";
     const wname = windowName(p);
-
-    // For opencode: get the shared session ID from bot DB
-    let opencodeSessionArg = "";
-    if (provider === "opencode") {
-      const r = await run([
-        "docker", "compose", "exec", "-T", "bot",
-        "bun", "/app/cli.ts", "_get-opencode-session", "--path", p.path,
-      ], { silent: true });
-      const sid = r.output?.trim();
-      if (sid) opencodeSessionArg = sid;
-    }
-
-    const cmd = provider === "opencode"
-      ? `${BOT_DIR}/scripts/run-opencode.sh ${p.path} ${opencodePort} ${opencodeSessionArg}`
-      : `${BOT_DIR}/scripts/run-cli.sh ${p.path}`;
+    const cmd = `${BOT_DIR}/scripts/run-cli.sh ${p.path}`;
 
     if (first) {
       await run(["tmux", "new-session", "-d", "-s", TMUX_SESSION, "-n", wname, "-c", p.path]);
@@ -816,28 +665,8 @@ async function tmuxAttach(dir?: string) {
   }
 
   const name = basename(projectDir);
-
-  // Determine provider from flag, projects file, or ask
-  let provider: "claude" | "opencode" | undefined;
-  if (process.argv.includes("--claude")) provider = "claude";
-  else if (process.argv.includes("--opencode")) provider = "opencode";
-
-  if (!provider) {
-    const projects = await loadProjects();
-    const project = projects.find(p => p.path === projectDir);
-    if (project?.provider) {
-      provider = project.provider as "claude" | "opencode";
-      console.log(`  ${c.dim(`Provider from config: ${provider}`)}`);
-    }
-  }
-
-  if (!provider) {
-    const choice = askChoice("Provider:", ["claude (Claude Code — full MCP integration)", "opencode (opencode TUI)"]);
-    provider = choice === 1 ? "opencode" : "claude";
-  }
-
-  const p: Project = { name, path: projectDir, provider };
-  const wname = windowName(p);
+  const wname = windowName({ name, path: projectDir });
+  const cmd = `${BOT_DIR}/scripts/run-cli.sh ${projectDir}`;
 
   // Check if window already exists
   const winExists = await run(["tmux", "has-session", "-t", `${TMUX_SESSION}:${wname}`], { silent: true });
@@ -851,25 +680,6 @@ async function tmuxAttach(dir?: string) {
     }
     return;
   }
-
-  // Setup opencode serve if needed
-  const opencodePort = "4096";
-  if (provider === "opencode") await ensureOpencodeServe(opencodePort);
-
-  // Get opencode session ID if needed
-  let opencodeSessionArg = "";
-  if (provider === "opencode") {
-    const r = await run([
-      "docker", "compose", "exec", "-T", "bot",
-      "bun", "/app/cli.ts", "_get-opencode-session", "--path", projectDir,
-    ], { silent: true });
-    const sid = r.output?.trim();
-    if (sid) opencodeSessionArg = sid;
-  }
-
-  const cmd = provider === "opencode"
-    ? `${BOT_DIR}/scripts/run-opencode.sh ${projectDir} ${opencodePort} ${opencodeSessionArg}`
-    : `${BOT_DIR}/scripts/run-cli.sh ${projectDir}`;
 
   // Add new window to existing session
   await run(["tmux", "new-window", "-t", TMUX_SESSION, "-n", wname, "-c", projectDir]);
@@ -910,7 +720,7 @@ async function tmuxAdd(dir?: string) {
 
   // Ask for path interactively if not given
   let resolvedDir = dir;
-  if (!resolvedDir || resolvedDir === "--name" || resolvedDir === "--provider") {
+  if (!resolvedDir || resolvedDir === "--name") {
     resolvedDir = ask("Project path", ".");
   }
   const projectDir = resolve(resolvedDir);
@@ -924,31 +734,22 @@ async function tmuxAdd(dir?: string) {
   const customName = nameIdx >= 0 ? process.argv[nameIdx + 1] : undefined;
   const name = customName ?? basename(projectDir);
 
-  // Ask provider interactively (or from --provider flag)
-  const providerIdx = process.argv.indexOf("--provider");
-  let provider = (providerIdx >= 0 ? process.argv[providerIdx + 1] : undefined) as "claude" | "opencode" | undefined;
-  if (!provider) {
-    const choice = askChoice("Provider:", ["claude (Claude Code — full MCP integration)", "opencode (opencode TUI)"]);
-    provider = choice === 1 ? "opencode" : "claude";
-  }
-
   // Save to projects file (add or update)
   const projects = await loadProjects();
   const existing = projects.find(p => p.path === projectDir);
   if (existing) {
     existing.name = name;
-    existing.provider = provider;
   } else {
-    projects.push({ name, path: projectDir, provider });
+    projects.push({ name, path: projectDir });
   }
   await saveProjects(projects);
-  console.log(`  ${c.green("✓")} Saved: ${windowName({ name, path: projectDir, provider })}`);
+  console.log(`  ${c.green("✓")} Saved: ${windowName({ name, path: projectDir })}`);
 
   // Register in bot DB
   const result = await run([
     "docker", "compose", "exec", "-T", "bot",
     "bun", "/app/cli.ts", "_register",
-    "--provider", provider, "--path", projectDir, "--name", name,
+    "--path", projectDir, "--name", name,
   ], { silent: false });
   if (result.output) console.log(result.output);
   if (!result.ok) console.log(`  ${c.yellow("Warning:")} bot not running — session will register on next start`);
@@ -966,96 +767,12 @@ async function tmuxRun(dir?: string) {
     return;
   }
 
-  // Determine provider: from flag, then from projects file, then ask
-  let provider: "claude" | "opencode" | undefined;
-  if (process.argv.includes("--claude")) provider = "claude";
-  else if (process.argv.includes("--opencode")) provider = "opencode";
-
-  if (!provider) {
-    const projects = await loadProjects();
-    const project = projects.find(p => p.path === projectDir);
-    if (project?.provider) {
-      provider = project.provider as "claude" | "opencode";
-      console.log(`  ${c.dim(`Provider from config: ${provider}`)}`);
-    }
-  }
-
-  if (!provider) {
-    const choice = askChoice("Provider:", ["claude (Claude Code — full MCP integration)", "opencode (opencode TUI)"]);
-    provider = choice === 1 ? "opencode" : "claude";
-  }
-
-  const name = basename(projectDir);
-
-  if (provider === "claude") {
-    console.log(`  ${c.green("Starting claude...")} ${c.dim("(Ctrl+C to stop)")}\n`);
-    const proc = Bun.spawn(
-      ["bash", `${BOT_DIR}/scripts/run-cli.sh`, projectDir],
-      { stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir },
-    );
-    await proc.exited;
-    return;
-  }
-
-  // --- opencode: open TUI with shared session ---
-  const opencodePort = "4096";
-
-  // Ensure opencode serve is running
-  await ensureOpencodeServe(opencodePort);
-
-  // Get or create a shared opencode session ID (so TUI and bot use the same session)
-  let opencodeSessionId: string | undefined;
-
-  // Try to get existing session ID from bot DB
-  const getResult = await run([
-    "docker", "compose", "exec", "-T", "bot",
-    "bun", "/app/cli.ts", "_get-opencode-session", "--path", projectDir,
-  ], { silent: true });
-  opencodeSessionId = getResult.output?.trim() || undefined;
-
-  if (!opencodeSessionId) {
-    // Create new opencode session on the host
-    try {
-      const res = await fetch(`http://localhost:${opencodePort}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const data = await res.json() as { id?: string };
-      opencodeSessionId = data.id;
-    } catch (err: any) {
-      console.log(`  ${c.red("Failed to create opencode session:")} ${err.message}`);
-    }
-  }
-
-  if (opencodeSessionId) {
-    // Store session ID in bot DB so bot uses the same session
-    await run([
-      "docker", "compose", "exec", "-T", "bot",
-      "bun", "/app/cli.ts", "_set-opencode-session",
-      "--path", projectDir, "--session-id", opencodeSessionId,
-    ], { silent: true });
-  }
-
-  // Open TUI attached to the shared session
-  console.log(`\n  ${c.cyan("opencode TUI")} — ${c.dim("Ctrl+C or q to exit (session → disconnected)")}\n`);
-  const tuiArgs = ["opencode", "attach", `http://localhost:${opencodePort}`];
-  if (opencodeSessionId) tuiArgs.push("--session", opencodeSessionId);
-  const tui = Bun.spawn(tuiArgs, {
-    cwd: projectDir,
-    stdout: "inherit",
-    stderr: "inherit",
-    stdin: "inherit",
-  });
-  await tui.exited;
-
-  // Mark session as disconnected when TUI exits
-  await run([
-    "docker", "compose", "exec", "-T", "bot",
-    "bun", "/app/cli.ts", "_disconnect",
-    "--path", projectDir,
-  ], { silent: true });
-  console.log(`\n  ${c.dim("Session disconnected.")}`);
+  console.log(`  ${c.green("Starting Claude Code...")} ${c.dim("(Ctrl+C to stop)")}\n`);
+  const proc = Bun.spawn(
+    ["bash", `${BOT_DIR}/scripts/run-cli.sh`, projectDir],
+    { stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir },
+  );
+  await proc.exited;
 }
 
 async function tmuxRemove(name?: string) {
@@ -1322,94 +1039,26 @@ async function internalDisconnect() {
   } catch { /* bot may be unavailable, ignore */ }
 }
 
-// --- Internal: get opencode session ID for a project path ---
-
-async function internalGetOpencodeSession() {
-  const args = process.argv.slice(3);
-  const get = (flag: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
-  const projectPath = get("--path");
-  if (!projectPath) { process.exit(1); }
-
-  // Direct DB access (runs inside container)
-  const { sql } = await import("./memory/db.ts");
-  const rows = await sql`
-    SELECT cli_config FROM sessions
-    WHERE project_path = ${projectPath} AND cli_type = 'opencode'
-    ORDER BY id DESC LIMIT 1
-  `;
-  await sql.end();
-  if (!rows[0]) { process.exit(0); }
-  const raw = rows[0].cli_config;
-  // Normalize (handle array or object)
-  let config: Record<string, unknown> = {};
-  if (Array.isArray(raw)) {
-    for (const item of raw) {
-      try { Object.assign(config, typeof item === "string" ? JSON.parse(item) : item); } catch {}
-    }
-  } else if (raw && typeof raw === "object") {
-    config = raw as Record<string, unknown>;
-  }
-  const id = config.opencodeSessionId;
-  if (typeof id === "string") process.stdout.write(id);
-}
-
-// --- Internal: set opencode session ID for a project path ---
-
-async function internalSetOpencodeSession() {
-  const args = process.argv.slice(3);
-  const get = (flag: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
-  const projectPath = get("--path");
-  const sessionId = get("--session-id");
-  if (!projectPath || !sessionId) { process.exit(1); }
-
-  const { sql } = await import("./memory/db.ts");
-  // Read-merge-write to preserve existing fields (port, tmuxSession, autostart, etc.)
-  const rows = await sql`SELECT cli_config FROM sessions WHERE project_path = ${projectPath} AND cli_type = 'opencode' ORDER BY id DESC LIMIT 1`;
-  let current: Record<string, unknown> = {};
-  if (rows[0]?.cli_config) {
-    const raw = rows[0].cli_config;
-    if (Array.isArray(raw)) {
-      for (const item of raw) {
-        try { Object.assign(current, typeof item === "string" ? JSON.parse(item) : item); } catch {}
-      }
-    } else if (typeof raw === "string") {
-      try { current = JSON.parse(raw); } catch {}
-    } else if (typeof raw === "object") {
-      current = raw as Record<string, unknown>;
-    }
-  }
-  const updated = { ...current, opencodeSessionId: sessionId };
-  await sql`
-    UPDATE sessions
-    SET cli_config = ${JSON.stringify(updated)}::jsonb
-    WHERE project_path = ${projectPath} AND cli_type = 'opencode'
-  `;
-  await sql.end();
-}
-
 // --- Internal: register session via HTTP (runs inside container where localhost=127.0.0.1) ---
 
 async function internalRegister() {
   const args = process.argv.slice(3);
   const get = (flag: string) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : undefined; };
   const projectPath = get("--path");
-  const provider = (get("--provider") ?? "claude") as "claude" | "opencode";
   const name = get("--name");
-  const opencodePort = Number(get("--port") ?? "4096");
 
   if (!projectPath) { console.error("_register: --path required"); process.exit(1); }
 
   const port = process.env.PORT ?? "3847";
-  const cliConfig = provider === "opencode" ? { port: opencodePort, autostart: false } : {};
   try {
     const res = await fetch(`http://localhost:${port}/api/sessions/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectPath, cliType: provider, cliConfig, name }),
+      body: JSON.stringify({ projectPath, cliType: "claude", cliConfig: {}, name }),
     });
     const data = await res.json() as { ok?: boolean; sessionId?: number; name?: string; error?: string };
     if (res.ok) {
-      console.log(`  ${c.green("✓")} ${data.name ?? name ?? projectPath} [${provider}] — session #${data.sessionId}`);
+      console.log(`  ${c.green("✓")} ${data.name ?? name ?? projectPath} — session #${data.sessionId}`);
     } else {
       console.error(`  ${c.red("Registration failed:")} ${data.error ?? res.status}`);
       process.exit(1);
@@ -1457,14 +1106,13 @@ function help() {
     up [-a] [-s]    Start all projects in tmux (-a attach, -s split panes)
     down            Stop all tmux sessions + clean DB
     ps              List configured projects and status
-    add [dir]       Add project (interactive: path + provider)
-    run [dir]       Launch project in terminal (--claude / --opencode)
-    attach [dir]    Add project window to running tmux session (--claude / --opencode)
+    add [dir]       Add project (saves to config + registers in bot DB)
+    run [dir]       Launch project in current terminal
+    attach [dir]    Add project window to running tmux session
     remove <name>   Remove project from tmux config
-    opencode-stop   Kill opencode serve tmux session
 
   ${c.bold("Connect:")}
-    start [dir]          Register + launch CLI/TUI in terminal (--claude / --opencode)
+    start [dir]          Launch Claude Code in current terminal
     connect [dir]        Start single CLI session (default: current dir)
     connect [dir] --tmux Start in standalone tmux (not managed)
 `);
@@ -1496,16 +1144,7 @@ switch (command) {
   case "run":         await tmuxRun(process.argv[3]); break;
   case "attach":      await tmuxAttach(process.argv[3]); break;
   case "remove":      await tmuxRemove(process.argv[3]); break;
-  case "opencode-stop": {
-    const res = await run(["tmux", "kill-session", "-t", "opencode-serve"], { silent: true });
-    console.log(res.ok
-      ? `  ${c.green("✓")} opencode-serve stopped`
-      : `  ${c.yellow("opencode-serve not running")}`);
-    break;
-  }
-  case "_register":              await internalRegister(); break;
-  case "_disconnect":            await internalDisconnect(); break;
-  case "_get-opencode-session":  await internalGetOpencodeSession(); break;
-  case "_set-opencode-session":  await internalSetOpencodeSession(); break;
-  default:            help(); break;
+  case "_register":    await internalRegister(); break;
+  case "_disconnect":  await internalDisconnect(); break;
+  default:             help(); break;
 }

@@ -3,7 +3,7 @@ import type { CliConfig } from "../adapters/types.ts";
 
 export type RouteTarget =
   | { mode: "standalone"; sessionId: 0; projectPath?: null }
-  | { mode: "cli"; sessionId: number; clientId: string; cliType: "claude" | "opencode"; cliConfig: CliConfig; projectPath?: string | null }
+  | { mode: "cli"; sessionId: number; clientId: string; cliConfig: CliConfig; projectPath?: string | null }
   | { mode: "disconnected"; sessionId: number; sessionName: string | null; projectPath?: string | null };
 
 export async function routeMessage(chatId: string): Promise<RouteTarget> {
@@ -29,7 +29,6 @@ export async function routeMessage(chatId: string): Promise<RouteTarget> {
     mode: "cli",
     sessionId,
     clientId: session.clientId,
-    cliType: session.cliType,
     cliConfig: session.cliConfig as CliConfig,
     projectPath: session.projectPath,
   };

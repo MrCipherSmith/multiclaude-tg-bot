@@ -12,8 +12,8 @@ const CLAUDE_MODELS = [
 ];
 
 /**
- * /model — select model for the current active session.
- * Works for both Claude Code and opencode sessions.
+ * /model — select Claude model for the current active session.
+ * Stores selection in cli_config.model.
  */
 export async function handleModel(ctx: Context): Promise<void> {
   const chatId = String(ctx.chat!.id);
@@ -29,47 +29,18 @@ export async function handleModel(ctx: Context): Promise<void> {
     return;
   }
 
-  const { cliType, cliConfig } = route;
-  const currentModel = (cliConfig as any).model ?? "default";
+  const currentModel = (route.cliConfig as any).model ?? "default";
 
-  if (cliType === "opencode") {
-    // Fetch models from opencode HTTP API
-    const { opencodeAdapter } = await import("../../adapters/opencode.ts");
-    const models = await opencodeAdapter.listModels(cliConfig);
-
-    if (models.length === 0) {
-      await ctx.reply(
-        `opencode is not running or returned no models.\n` +
-        `Current model: <code>${currentModel}</code>\n\n` +
-        `Start opencode: <code>opencode serve</code>`,
-        { parse_mode: "HTML" },
-      );
-      return;
-    }
-
-    const keyboard = new InlineKeyboard();
-    for (const model of models.slice(0, 20)) {
-      const label = model === currentModel ? `✓ ${model}` : model;
-      keyboard.text(label, `set_model:${model}`).row();
-    }
-
-    await ctx.reply(
-      `Current model: <code>${currentModel}</code>\nSelect a model:`,
-      { parse_mode: "HTML", reply_markup: keyboard },
-    );
-  } else {
-    // Claude Code — show available models from config
-    const keyboard = new InlineKeyboard();
-    for (const model of CLAUDE_MODELS) {
-      const label = model === currentModel ? `✓ ${model}` : model;
-      keyboard.text(label, `set_model:${model}`).row();
-    }
-
-    await ctx.reply(
-      `Current model: <code>${currentModel}</code>\nSelect a Claude model:`,
-      { parse_mode: "HTML", reply_markup: keyboard },
-    );
+  const keyboard = new InlineKeyboard();
+  for (const model of CLAUDE_MODELS) {
+    const label = model === currentModel ? `✓ ${model}` : model;
+    keyboard.text(label, `set_model:${model}`).row();
   }
+
+  await ctx.reply(
+    `Current model: <code>${currentModel}</code>\nSelect a Claude model:`,
+    { parse_mode: "HTML", reply_markup: keyboard },
+  );
 }
 
 /**
@@ -85,7 +56,6 @@ export async function handleSetModelCallback(ctx: Context, model: string): Promi
     return;
   }
 
-  // Update cli_config.model in sessions table
   await sessionManager.updateCliConfig(route.sessionId, { model });
 
   await ctx.editMessageText(

@@ -261,33 +261,13 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
           res.end(JSON.stringify({ error: "projectPath required" }));
           return;
         }
-        // Validate cliType against allowed values
-        if (!["claude", "opencode"].includes(cliType)) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "cliType must be 'claude' or 'opencode'" }));
-          return;
-        }
-        // Validate and sanitize cliConfig — only allow known safe fields
-        const port = Number(rawConfig.port ?? 4096);
-        if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "cliConfig.port must be an integer between 1024 and 65535" }));
-          return;
-        }
-        const cliConfig: Record<string, unknown> = { port };
-        if (rawConfig.autostart === true) cliConfig.autostart = true;
-        if (typeof rawConfig.tmuxSession === "string" && /^[a-zA-Z0-9_\-]{1,64}$/.test(rawConfig.tmuxSession)) {
-          cliConfig.tmuxSession = rawConfig.tmuxSession;
-        }
         const { basename } = await import("path");
-        const sessionName = name ?? `${basename(projectPath)} · ${cliType}`;
-        const clientId = `${cliType}-${basename(projectPath)}-${Date.now()}`;
-        const session = await sessionManager.register(clientId, sessionName, projectPath, undefined, cliType, cliConfig);
-        // Start persistent SSE monitor for opencode sessions
-        if (cliType === "opencode") {
-          const { opencodeMonitor } = await import("../adapters/opencode-monitor.ts");
-          opencodeMonitor.start(session.id);
-        }
+        const sessionName = name ?? basename(projectPath);
+        const clientId = `claude-${basename(projectPath)}-${Date.now()}`;
+        // Sanitize optional model from cliConfig
+        const cliConfig: Record<string, unknown> = {};
+        if (typeof rawConfig.model === "string") cliConfig.model = rawConfig.model;
+        const session = await sessionManager.register(clientId, sessionName, projectPath, cliConfig);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true, sessionId: session.id, name: session.name }));
       } catch (err: any) {
@@ -297,29 +277,6 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
       return;
     }
 
-    // API: disconnect session when opencode TUI exits (local only)
-    if (url.pathname === "/api/sessions/disconnect" && req.method === "POST") {
-      if (!isLocalRequest(req)) { res.writeHead(403); res.end(); return; }
-      try {
-        const body = await new Promise<string>((resolve, reject) => {
-          let d = ""; req.on("data", c => d += c); req.on("end", () => resolve(d)); req.on("error", reject);
-        });
-        const { projectPath } = JSON.parse(body);
-        if (projectPath) {
-          const updated = await sql`
-            UPDATE sessions SET status = 'disconnected'
-            WHERE project_path = ${projectPath} AND cli_type = 'opencode'
-            RETURNING id
-          `;
-          if (updated.length > 0) {
-            const { opencodeMonitor } = await import("../adapters/opencode-monitor.ts");
-            for (const row of updated) opencodeMonitor.stop(row.id);
-          }
-        }
-        res.writeHead(200); res.end(JSON.stringify({ ok: true }));
-      } catch (err: any) { res.writeHead(500); res.end(JSON.stringify({ error: err?.message })); }
-      return;
-    }
 
     // Telegram webhook endpoint
     if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {

@@ -5,19 +5,15 @@ export interface MessageMeta {
 }
 
 export interface CliConfig {
-  port?: number;        // opencode: default 4096
-  autostart?: boolean;  // default false
-  tmuxSession?: string; // optional tmux session for autostart spawn
-  model?: string;       // selected model override
+  model?: string;       // selected Claude model override
 }
 
 export interface CliAdapter {
-  readonly type: "claude" | "opencode";
+  readonly type: "claude";
 
   /**
    * Send a user message to the CLI session.
-   * ClaudeAdapter: INSERT INTO message_queue
-   * OpencodeAdapter: POST /session/:id/prompt_async
+   * ClaudeAdapter: INSERT INTO message_queue → channel.ts picks up via stdio MCP
    */
   send(sessionId: number, text: string, meta: MessageMeta): Promise<void>;
 
@@ -37,6 +33,6 @@ export function registerAdapter(adapter: CliAdapter): void {
 
 export function getAdapter(cliType: string): CliAdapter {
   const adapter = registry.get(cliType);
-  if (!adapter) throw new Error(`No adapter registered for cli_type: ${cliType}`);
+  if (!adapter) throw new Error(`No adapter registered for cli_type: ${cliType}. Only "claude" is supported.`);
   return adapter;
 }

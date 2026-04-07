@@ -65,7 +65,6 @@ import { handleRemember, handleRecall, handleMemories, handleForget, handleSumma
 import { handleStats, handleLogs, handleStatus, handlePending, handleTools, handleSkills, handleCommands, handleHooks, handleRules } from "./commands/admin.ts";
 import { handleAdd } from "./commands/add.ts";
 import { handleModel } from "./commands/model.ts";
-import { handleConnections } from "./commands/connections.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
 import { handleCallbackQuery } from "./callbacks.ts";
 import { handleText } from "./text-handler.ts";
@@ -103,10 +102,9 @@ export function registerHandlers(b: Bot): void {
   b.command("hooks", handleHooks);
   b.command("rules", handleRules);
 
-  // Provider commands
+  // Session CLI commands
   b.command("add", handleAdd);
   b.command("model", handleModel);
-  b.command("connections", handleConnections);
 
   // Inline keyboard callbacks (permissions, session switch)
   b.on("callback_query:data", handleCallbackQuery);

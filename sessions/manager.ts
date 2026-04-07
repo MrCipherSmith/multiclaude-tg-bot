@@ -10,7 +10,7 @@ export interface Session {
   metadata: Record<string, unknown>;
   connectedAt: Date;
   lastActive: Date;
-  cliType: "claude" | "opencode";
+  cliType: "claude";
   cliConfig: Record<string, unknown>;
 }
 
@@ -23,7 +23,6 @@ export class SessionManager {
     name?: string,
     projectPath?: string,
     metadata?: Record<string, unknown>,
-    cliType?: "claude" | "opencode",
     cliConfig?: Record<string, unknown>,
   ): Promise<Session> {
     // Deduplicate: if a session with the same name and project_path already exists, adopt it
@@ -39,7 +38,7 @@ export class SessionManager {
         const [row] = await sql`
           UPDATE sessions
           SET client_id = ${clientId}, status = 'active', last_active = now(),
-              cli_type = ${cliType ?? "claude"}, cli_config = ${JSON.stringify(cliConfig ?? {})}::jsonb
+              cli_type = 'claude', cli_config = ${JSON.stringify(cliConfig ?? {})}::jsonb
           WHERE id = ${old.id}
           RETURNING id, name, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
         `;
@@ -58,7 +57,7 @@ export class SessionManager {
         ${clientId},
         'active',
         ${JSON.stringify(metadata ?? {})}::jsonb,
-        ${cliType ?? "claude"},
+        'claude',
         ${JSON.stringify(cliConfig ?? {})}::jsonb
       )
       ON CONFLICT (client_id) DO UPDATE SET
@@ -260,7 +259,7 @@ export class SessionManager {
       metadata: r.metadata ?? {},
       connectedAt: r.connected_at,
       lastActive: r.last_active,
-      cliType: (r.cli_type ?? "claude") as "claude" | "opencode",
+      cliType: "claude" as const,
       cliConfig: normalizeCLIConfig(r.cli_config),
     };
   }
