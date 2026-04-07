@@ -9,7 +9,8 @@ export interface Session {
   source: "remote" | "local" | "standalone";
   projectPath: string | null;
   clientId: string;
-  status: "active" | "disconnected";
+  status: "active" | "inactive" | "terminated" | "disconnected";
+  projectId: number | null;
   metadata: Record<string, unknown>;
   connectedAt: Date;
   lastActive: Date;
@@ -58,12 +59,42 @@ export class SessionManager {
         cli_type = EXCLUDED.cli_type,
         cli_config = EXCLUDED.cli_config,
         last_active = now()
-      RETURNING id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+      RETURNING id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
     `;
 
     const session = this.rowToSession(row);
     this.activeClients.set(clientId, session.id);
     console.log(`[session] registered: ${session.id} (${session.name ?? clientId})`);
+    return session;
+  }
+
+  async registerRemote(
+    projectId: number,
+    projectPath: string,
+    name: string,
+  ): Promise<Session> {
+    const [row] = await sql`
+      INSERT INTO sessions (name, project, source, project_path, project_id, client_id, status, metadata, cli_type, cli_config)
+      VALUES (
+        ${name},
+        ${name},
+        'remote',
+        ${projectPath},
+        ${projectId},
+        ${'remote-' + projectId},
+        'inactive',
+        '{}'::jsonb,
+        'claude',
+        '{}'::jsonb
+      )
+      ON CONFLICT (project_id) WHERE source = 'remote' DO UPDATE SET
+        name = EXCLUDED.name,
+        project_path = EXCLUDED.project_path,
+        last_active = now()
+      RETURNING id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+    `;
+    const session = this.rowToSession(row);
+    console.log(`[session] remote registered: #${session.id} (${name})`);
     return session;
   }
 
@@ -110,7 +141,7 @@ export class SessionManager {
         UPDATE sessions
         SET client_id = ${currentClientId}, status = 'active', last_active = now()
         WHERE id = ${targetId}
-        RETURNING id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+        RETURNING id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       `;
 
       if (!row) throw new Error(`[session] adoptOrRename: session #${targetId} not found`);
@@ -129,7 +160,7 @@ export class SessionManager {
           source = 'local',
           project_path = COALESCE(${projectPath ?? null}, project_path)
       WHERE client_id = ${currentClientId}
-      RETURNING id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+      RETURNING id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
     `;
     if (!row) throw new Error(`[session] adoptOrRename: session not found for clientId ${currentClientId}`);
     const session = this.rowToSession(row);
@@ -138,7 +169,7 @@ export class SessionManager {
   }
 
   async disconnect(clientId: string): Promise<void> {
-    const rows = await sql`SELECT id, name, source FROM sessions WHERE client_id = ${clientId}`;
+    const rows = await sql`SELECT id, name, source, project FROM sessions WHERE client_id = ${clientId}`;
     if (rows.length === 0) { this.activeClients.delete(clientId); return; }
 
     const { id, name, source, project } = rows[0];
@@ -150,9 +181,10 @@ export class SessionManager {
       await this.resetSequence();
       console.log(`[session] removed ephemeral session: ${clientId}`);
     } else {
-      // Named/channel session — keep as disconnected so it shows in /sessions
-      await sql`UPDATE sessions SET status = 'disconnected', last_active = now() WHERE id = ${id}`;
-      console.log(`[session] disconnected: #${id} (${name ?? source})`);
+      // Named/channel session — set status based on source
+      const newStatus = source === 'remote' ? 'inactive' : 'terminated';
+      await sql`UPDATE sessions SET status = ${newStatus}, last_active = now() WHERE id = ${id}`;
+      console.log(`[session] disconnected: #${id} (${name ?? source}) -> ${newStatus}`);
     }
     this.activeClients.delete(clientId);
   }
@@ -161,7 +193,8 @@ export class SessionManager {
     const result = await sql`
       DELETE FROM sessions
       WHERE id != 0
-        AND status = 'disconnected'
+        AND source != 'remote'
+        AND status IN ('disconnected', 'terminated')
       RETURNING id
     `;
     return result.length;
@@ -174,7 +207,7 @@ export class SessionManager {
   async markStale(maxAgeSeconds: number = 600): Promise<number> {
     // Get all DB-active sessions
     const rows = await sql`
-      SELECT id, client_id FROM sessions
+      SELECT id, client_id, source FROM sessions
       WHERE status = 'active' AND id != 0
         AND last_active < now() - make_interval(secs => ${maxAgeSeconds})
     `;
@@ -182,8 +215,9 @@ export class SessionManager {
     for (const row of rows) {
       // If client is not tracked in-memory, it's a zombie
       if (!this.activeClients.has(row.client_id)) {
-        await sql`UPDATE sessions SET status = 'disconnected' WHERE id = ${row.id}`;
-        console.log(`[session] marked stale: #${row.id} (${row.client_id.slice(0, 8)})`);
+        const newStatus = row.source === 'remote' ? 'inactive' : 'terminated';
+        await sql`UPDATE sessions SET status = ${newStatus} WHERE id = ${row.id}`;
+        console.log(`[session] marked stale: #${row.id} (${row.client_id.slice(0, 8)}) -> ${newStatus}`);
         count++;
       }
     }
@@ -209,11 +243,11 @@ export class SessionManager {
   async list(includeUnnamed = false): Promise<Session[]> {
     const rows = includeUnnamed
       ? await sql`
-          SELECT id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+          SELECT id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions ORDER BY id
         `
       : await sql`
-          SELECT id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+          SELECT id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
           FROM sessions
           WHERE id = 0 OR (name NOT LIKE 'cli-%' OR project IS NOT NULL)
           ORDER BY id
@@ -223,7 +257,7 @@ export class SessionManager {
 
   async get(sessionId: number): Promise<Session | null> {
     const rows = await sql`
-      SELECT id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+      SELECT id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       FROM sessions WHERE id = ${sessionId}
     `;
     return rows.length > 0 ? this.rowToSession(rows[0]) : null;
@@ -251,7 +285,7 @@ export class SessionManager {
 
   async getByClientId(clientId: string): Promise<Session | null> {
     const rows = await sql`
-      SELECT id, name, project, source, project_path, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
+      SELECT id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
       FROM sessions WHERE client_id = ${clientId}
     `;
     return rows.length > 0 ? this.rowToSession(rows[0]) : null;
@@ -274,6 +308,7 @@ export class SessionManager {
       project: r.project ?? null,
       source: (r.source as Session["source"]) ?? "standalone",
       projectPath: r.project_path,
+      projectId: r.project_id ?? null,
       clientId: r.client_id,
       status: r.status,
       metadata: r.metadata ?? {},

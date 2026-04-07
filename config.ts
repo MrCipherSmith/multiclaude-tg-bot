@@ -39,4 +39,5 @@ export const CONFIG = {
   PORT: Number(process.env.PORT ?? "3847"),
   SHORT_TERM_WINDOW: Number(process.env.SHORT_TERM_WINDOW ?? "20"),
   IDLE_TIMEOUT_MS: Number(process.env.IDLE_TIMEOUT_MS ?? "900000"), // 15 min
+  ARCHIVE_TTL_DAYS: Number(process.env.ARCHIVE_TTL_DAYS ?? "30") || 30,
 } as const;

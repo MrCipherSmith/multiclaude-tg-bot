@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { remember, recall, forget, listMemories, type Memory } from "../memory/long-term.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { sql } from "../memory/db.ts";
+import { embedSafe } from "../memory/embeddings.ts";
 import { chunkText } from "../utils/chunk.ts";
 
 // Tool definitions for MCP registration
@@ -153,6 +154,28 @@ export const TOOL_DEFINITIONS = [
         project_path: { type: "string", description: "Working directory path" },
       },
       required: ["name"],
+    },
+  },
+  {
+    name: "search_project_context",
+    description: "Semantic search over long-term project context and work summaries. Use when you need knowledge from prior sessions about this project.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Natural language search query",
+        },
+        project_path: {
+          type: "string",
+          description: "Project path to search in. Defaults to current session project_path.",
+        },
+        limit: {
+          type: "number",
+          description: "Number of results to return (default: 5, max: 20)",
+        },
+      },
+      required: ["query"],
     },
   },
 ];
@@ -317,6 +340,54 @@ export async function executeTool(
       if (!clientId) return text("No session context");
       const session = await sessionManager.adoptOrRename(clientId, sessionName, projectPath);
       return text(`Session #${session.id} named "${sessionName}"`);
+    }
+
+    case "search_project_context": {
+      const query = String(args.query ?? "");
+      if (!query) return text("query is required");
+
+      // Resolve session for default project_path
+      let session: Awaited<ReturnType<typeof sessionManager.get>> | undefined;
+      if (clientId) {
+        const sid = sessionManager.getSessionIdByClient(clientId);
+        if (sid !== undefined) {
+          session = await sessionManager.get(sid);
+        }
+      }
+
+      const searchPath = String(args.project_path ?? session?.projectPath ?? "");
+      if (!searchPath) return text("no project_path available — pass it explicitly or switch to a project session");
+
+      const limit = Math.min(Number(args.limit ?? 5), 20);
+
+      const embedding = await embedSafe(query);
+      if (!embedding) return text("embedding service unavailable");
+
+      const rows = await sql`
+        SELECT content, type, created_at,
+               1 - (embedding <=> ${JSON.stringify(embedding)}::vector) AS score
+        FROM memories
+        WHERE project_path = ${searchPath}
+          AND type IN ('project_context', 'summary')
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> ${JSON.stringify(embedding)}::vector
+        LIMIT ${limit}
+      `;
+
+      console.log(`[search] project_context query="${query.slice(0, 50)}" project=${searchPath} → ${rows.length} results`);
+
+      return text(
+        rows.length === 0
+          ? "No project context found."
+          : JSON.stringify({
+              results: rows.map((r) => ({
+                content: r.content as string,
+                type: r.type as string,
+                score: Number(r.score).toFixed(3),
+                date: (r.created_at as Date).toISOString(),
+              })),
+            }, null, 2),
+      );
     }
 
     default:

@@ -7,9 +7,9 @@
 
 [Dashboard](examples/dashboard.md) | [Usage Patterns](examples/usage-patterns.md) | [Cloudflare Tunnel](guides/cloudflare-tunnel-setup.md) | [CLAUDE.md Guide](CLAUDE_MD_GUIDE.md)
 
-> **Control Claude Code from Telegram.** Multi-session bot with dual-layer memory, voice transcription, image analysis, and real-time CLI progress monitoring.
+> **Control Claude Code from Telegram.** Multi-session bot with persistent projects, dual-layer memory, voice transcription, image analysis, and real-time CLI progress monitoring.
 
-Connect multiple Claude Code CLI instances to a single Telegram bot. Switch between projects, send voice messages, approve CLI permissions, and see what Claude is doing — all from your phone.
+Connect multiple Claude Code CLI instances to a single Telegram bot. Switch between projects with automatic context briefing, send voice messages, approve CLI permissions, and see what Claude is doing — all from your phone.
 
 ## Quick Start
 
@@ -60,12 +60,19 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
 
+### Session Lifecycle
+- **Persistent Projects** — `projects` table as permanent registry; added via `/project_add`, never deleted
+- **Remote Sessions** — one persistent session per project (`source=remote`), started/stopped from bot or terminal; status: 🟢 active / ⚪ inactive
+- **Local Sessions** — temporary, multiple per project, live while Claude process runs; on exit: work summary generated and archived
+- **Work Summary on Exit** — AI-optimized structured summary ([DECISIONS][FILES][PROBLEMS][PENDING][CONTEXT]) vectorized and saved to long-term memory; raw messages archived with TTL
+- **Switch Briefing** — switching to a session shows its last project-context summary and injects it as system context for the next message
+
 ### Memory
 - **Short-Term** — sliding window of recent messages per session (in-memory cache + PostgreSQL)
 - **Long-Term** — semantic search via pgvector embeddings powered by Ollama (nomic-embed-text, 768 dims)
-- **Project-Scoped** — memories are shared across all sessions in the same project directory
+- **Project-Scoped** — memories and project context shared across all sessions in the same project
 - **Cross-Session History** — new CLI sessions automatically load prior conversation context from previous sessions in the same project
-- **Auto-Summarization** — conversations are summarized on session disconnect and after 15 min idle
+- **Auto-Summarization** — remote session conversations summarized on idle/overflow; messages archived with configurable TTL (default 30 days)
 
 ### Telegram UX
 - **Markdown Rendering** — responses formatted with HTML (bold, italic, code blocks with syntax highlighting, links)
@@ -448,13 +455,17 @@ Connect:
 | **Sessions** | |
 | `/start` | Welcome message and quick help |
 | `/help` | Show available commands |
-| `/sessions` | List all sessions |
-| `/switch [id]` | Switch session (shows context + last messages) |
+| `/sessions` | List all sessions (🟢 active / ⚪ inactive / 💀 terminated) |
+| `/switch [id]` | Switch session — shows project context briefing + last messages |
 | `/session` | Current session info |
 | `/standalone` | Switch to standalone mode |
 | `/rename <id> <name>` | Rename a session |
 | `/remove <id>` | Delete session and all its data |
-| `/cleanup` | Remove disconnected and orphaned sessions |
+| `/cleanup` | Remove terminated and orphaned sessions |
+| **Projects** | |
+| `/projects` | List projects with status and Start/Stop buttons |
+| `/project_add` | Add project to persistent registry (creates remote session) |
+| `/remote_control` | tmux bots status with Kill/Start/Refresh controls |
 | **Memory** | |
 | `/remember [text]` | Save to long-term memory (bound to session) |
 | `/recall [query]` | Semantic search through memory |
@@ -562,6 +573,7 @@ Adapters are registered at startup (`adapters/index.ts`). The `sessions/router.t
 | `edit_message` | Edit bot's message |
 | `list_sessions` / `session_info` | Session management |
 | `set_session_name` | Name the current session |
+| `search_project_context` | Semantic search over project work summaries and prior session context |
 
 ### Channel Adapter (stdio, per-session)
 
@@ -570,6 +582,7 @@ Adapters are registered at startup (`adapters/index.ts`). The `sessions/router.t
 | `reply` | Send to Telegram with HTML rendering |
 | `update_status` | Update live status message |
 | `remember` / `recall` / `forget` / `list_memories` | Direct DB memory access |
+| `search_project_context` | Semantic search over long-term project context |
 
 ### Health Endpoint
 
@@ -613,7 +626,7 @@ ollama pull nomic-embed-text
 | `SECURE_COOKIES` | No | Force Secure flag on cookies (`true`/`false`, auto-detected) |
 | `KNOWLEDGE_BASE` | No | Path to knowledge base for `/skills` and `/rules` |
 | `HOST_CLAUDE_CONFIG` | No | Mount point for ~/.claude in Docker (default: `/host-claude-config`) |
-| `OPENCODE_PORT` | No | OpenCode serve port (default: `8000`) |
+| `ARCHIVE_TTL_DAYS` | No | Days before archived messages/permissions are deleted (default: `30`) |
 
 ### Manual Setup (without Docker)
 
@@ -691,6 +704,18 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
 
+## Recent Changes (v1.9.0)
+
+### Session Management Redesign
+- **Persistent Projects** — `projects` DB table, `/project_add` saves to DB (not JSON file)
+- **Remote/Local Sessions** — one remote session per project (persistent), multiple local (temporary per process)
+- **Work Summary on Exit** — local session exit triggers AI summary of work done ([DECISIONS][FILES][PROBLEMS][PENDING][CONTEXT]), vectorized to long-term memory
+- **Session Switch Briefing** — switching sessions shows last project context summary, injected as system context
+- **Semantic Search** — `search_project_context` MCP tool + `search_context` command
+- **Archival TTL** — messages and permission_requests archived on summarize, deleted after `ARCHIVE_TTL_DAYS` (default 30)
+- **Status vocab** — `active | inactive | terminated` (was `active | disconnected`)
+- **DB migrations v6-v8** — projects table, archived_at columns, project_id FK, unique remote-per-project
+
 ## Recent Changes (v1.8.0)
 
 ### Skills & Commands Integration
@@ -726,7 +751,11 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 - [x] Web dashboard for statistics and session management
 - [x] Skills & commands integration from local Claude config
 - [x] Session management commands (/add, /model) with model selection
-- [x] OpenCode TUI integration with SSE monitoring
+- [x] Persistent projects with remote/local session lifecycle
+- [x] Work summary on session exit with vectorized long-term memory
+- [x] Session switch briefing from project context
+- [x] Semantic search via MCP tool and bot command
+- [ ] Dashboard UI for project and session management
 - [ ] Multi-user support with separate session namespaces
 - [ ] Inline mode — respond in any Telegram chat via @bot
 

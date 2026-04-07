@@ -7,7 +7,7 @@ export interface Memory {
   sessionId?: number | null;
   projectPath?: string | null;
   chatId?: string | null;
-  type: "fact" | "summary" | "decision" | "note";
+  type: "fact" | "summary" | "decision" | "note" | "project_context";
   content: string;
   tags?: string[];
   createdAt?: Date;

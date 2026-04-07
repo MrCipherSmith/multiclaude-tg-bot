@@ -92,7 +92,13 @@ async function resolveSession(): Promise<number> {
       if (lockResult[0].locked) {
         sessionId = existing[0].id;
         hasPollingLock = true;
-        await sql`UPDATE sessions SET status = 'active', last_active = now() WHERE id = ${sessionId}`;
+        // Also update project_id in case it wasn't set before
+        let reattachProjectId: number | null = null;
+        if (projectPath) {
+          const [proj] = await sql`SELECT id FROM projects WHERE path = ${projectPath}`;
+          reattachProjectId = proj?.id ?? null;
+        }
+        await sql`UPDATE sessions SET status = 'active', last_active = now(), project_id = ${reattachProjectId} WHERE id = ${sessionId}`;
         process.stderr.write(`[channel] attached to session #${sessionId} (${sessionName})\n`);
         return sessionId;
       }
@@ -102,16 +108,29 @@ async function resolveSession(): Promise<number> {
       }
     }
 
-    // Lock failed — another instance is running, create a parallel session with instance suffix
+    // Lock failed — another instance is running
+    if (channelSource === 'remote') {
+      process.stderr.write(`[channel] remote session for project already active, exiting\n`);
+      process.exit(0);
+    }
+
+    // Local session: create a parallel session with instance suffix
     const displacedSessionId = existing[0].id;
     const instanceNum = (Date.now() % 10000);
     sessionName = `${projectName} · ${channelSource} #${instanceNum}`;
     const clientId = `channel-${projectName}-${channelSource}-${Date.now()}`;
     process.stderr.write(`[channel] session busy, creating parallel: "${sessionName}"\n`);
 
+    // Look up project_id from projects table
+    let projectId: number | null = null;
+    if (projectPath) {
+      const [proj] = await sql`SELECT id FROM projects WHERE path = ${projectPath}`;
+      projectId = proj?.id ?? null;
+    }
+
     const [row] = await sql`
-      INSERT INTO sessions (name, project, source, project_path, client_id, status)
-      VALUES (${sessionName}, ${projectName}, ${channelSource}, ${projectPath}, ${clientId}, 'active')
+      INSERT INTO sessions (name, project, source, project_path, project_id, client_id, status)
+      VALUES (${sessionName}, ${projectName}, ${channelSource}, ${projectPath}, ${projectId}, ${clientId}, 'active')
       RETURNING id
     `;
     sessionId = row.id;
@@ -129,9 +148,17 @@ async function resolveSession(): Promise<number> {
 
   // No existing session — create one
   const clientId = `channel-${projectName}-${channelSource}-${Date.now()}`;
+
+  // Look up project_id from projects table
+  let projectId: number | null = null;
+  if (projectPath) {
+    const [proj] = await sql`SELECT id FROM projects WHERE path = ${projectPath}`;
+    projectId = proj?.id ?? null;
+  }
+
   const [row] = await sql`
-    INSERT INTO sessions (name, project, source, project_path, client_id, status)
-    VALUES (${sessionName}, ${projectName}, ${channelSource}, ${projectPath}, ${clientId}, 'active')
+    INSERT INTO sessions (name, project, source, project_path, project_id, client_id, status)
+    VALUES (${sessionName}, ${projectName}, ${channelSource}, ${projectPath}, ${projectId}, ${clientId}, 'active')
     RETURNING id
   `;
   sessionId = row.id;
@@ -175,12 +202,23 @@ function touchIdleTimer(): void {
 async function triggerSummarize(): Promise<void> {
   if (sessionId === null) return;
   try {
-    process.stderr.write(`[channel] triggering summarization for session #${sessionId}\n`);
-    await fetch(`${BOT_API_URL}/api/summarize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId, project_path: projectPath }),
-    });
+    if (channelSource === "local") {
+      // Work session summary — endpoint handles status='terminated' and archival
+      process.stderr.write(`[channel] triggering work summary for local session #${sessionId}\n`);
+      await fetch(`${BOT_API_URL}/api/sessions/${sessionId}/summarize-work`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+    } else {
+      // Remote session — Telegram conversation summary
+      process.stderr.write(`[channel] triggering summarization for session #${sessionId}\n`);
+      await fetch(`${BOT_API_URL}/api/summarize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId, project_path: projectPath }),
+      });
+    }
   } catch (err) {
     process.stderr.write(`[channel] summarize request failed: ${err}\n`);
   }
@@ -192,11 +230,12 @@ async function markDisconnected(): Promise<void> {
   // Summarize before disconnect so context is preserved
   await triggerSummarize();
   try {
+    const newStatus = channelSource === "remote" ? "inactive" : "terminated";
     await sql`
-      UPDATE sessions SET status = 'disconnected', last_active = now()
+      UPDATE sessions SET status = ${newStatus}, last_active = now()
       WHERE id = ${sessionId}
     `;
-    process.stderr.write(`[channel] session #${sessionId} marked disconnected\n`);
+    process.stderr.write(`[channel] session #${sessionId} marked ${newStatus}\n`);
     if (hasPollingLock) {
       await releasePollingLock();
       process.stderr.write(`[channel] released polling lock\n`);
@@ -564,6 +603,19 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
       },
     },
+    {
+      name: "search_project_context",
+      description: "Semantic search over long-term project context and work summaries. Use when you need knowledge from prior sessions about this project.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Natural language search query" },
+          project_path: { type: "string", description: "Project path to search in. Defaults to current session project_path." },
+          limit: { type: "number", description: "Number of results to return (default: 5, max: 20)" },
+        },
+        required: ["query"],
+      },
+    },
   ],
 }));
 
@@ -742,6 +794,42 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       `;
       if (rows.length === 0) return text("No memories found.");
       return text(rows.map((r: any) => `#${r.id} [${r.type}] ${r.content.slice(0, 100)}`).join("\n"));
+    }
+
+    case "search_project_context": {
+      const query = String(args!.query ?? "");
+      if (!query) return text("query is required");
+
+      const searchPath = String(args!.project_path ?? projectPath ?? "");
+      if (!searchPath) return text("no project_path available — pass it explicitly");
+
+      const limit = Math.min(Number(args!.limit ?? 5), 20);
+
+      const queryEmb = await embed(query);
+      const embStr = `[${queryEmb.join(",")}]`;
+
+      const rows = await sql`
+        SELECT content, type, created_at,
+               1 - (embedding <=> ${embStr}::vector) AS score
+        FROM memories
+        WHERE project_path = ${searchPath}
+          AND type IN ('project_context', 'summary')
+          AND embedding IS NOT NULL
+        ORDER BY embedding <=> ${embStr}::vector
+        LIMIT ${limit}
+      `;
+
+      process.stderr.write(`[search] project_context query="${query.slice(0, 50)}" project=${searchPath} → ${rows.length} results\n`);
+
+      if (rows.length === 0) return text("No project context found.");
+      return text(JSON.stringify({
+        results: rows.map((r: any) => ({
+          content: r.content as string,
+          type: r.type as string,
+          score: Number(r.score).toFixed(3),
+          date: (r.created_at as Date).toISOString(),
+        })),
+      }, null, 2));
     }
 
     default:

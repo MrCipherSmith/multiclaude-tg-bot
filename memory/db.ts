@@ -268,6 +268,55 @@ const migrations: Migration[] = [
       await tx`CREATE INDEX IF NOT EXISTS idx_admin_commands_status ON admin_commands(status, created_at)`;
     },
   },
+  {
+    version: 6,
+    name: "projects table",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE IF NOT EXISTS projects (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          path TEXT NOT NULL UNIQUE,
+          tmux_session_name TEXT NOT NULL,
+          config JSONB NOT NULL DEFAULT '{}',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS idx_projects_path ON projects(path)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)`;
+    },
+  },
+  {
+    version: 7,
+    name: "archival TTL + session project_id + status vocab",
+    up: async (tx) => {
+      // Soft-delete columns for archival
+      await tx`ALTER TABLE messages ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_messages_archived ON messages(archived_at) WHERE archived_at IS NOT NULL`;
+
+      await tx`ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_permission_requests_archived ON permission_requests(archived_at) WHERE archived_at IS NOT NULL`;
+
+      // Link sessions to projects
+      await tx`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS project_id INT REFERENCES projects(id)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id)`;
+
+      // Enforce one remote session per project
+      await tx`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_project_remote ON sessions(project_id) WHERE source = 'remote'`;
+
+      // Migrate old 'disconnected' status to new vocabulary:
+      // remote sessions: inactive, local sessions: terminated
+      await tx`UPDATE sessions SET status = 'inactive'   WHERE source = 'remote' AND status = 'disconnected'`;
+      await tx`UPDATE sessions SET status = 'terminated' WHERE source = 'local'  AND status = 'disconnected'`;
+    },
+  },
+  {
+    version: 8,
+    name: "memories type index",
+    up: async (tx) => {
+      await tx`CREATE INDEX IF NOT EXISTS idx_memories_type_project ON memories(type, project_path)`;
+    },
+  },
 ];
 
 // --- Public API ---

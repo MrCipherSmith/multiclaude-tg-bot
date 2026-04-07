@@ -1,7 +1,8 @@
 import type { Context } from "grammy";
 import { basename } from "path";
 import { setPendingInput } from "../handlers.ts";
-import { loadProjects, saveProjects } from "./projects.ts";
+import { sql } from "../../memory/db.ts";
+import { sessionManager } from "../../sessions/manager.ts";
 
 export async function handleProjectAdd(ctx: Context): Promise<void> {
   const text = ctx.message?.text ?? "";
@@ -25,14 +26,27 @@ async function addProject(ctx: Context, path: string): Promise<void> {
     return;
   }
 
-  const projects = await loadProjects();
-  if (projects.find((p) => p.path === path)) {
-    await ctx.reply(`Project already exists: ${basename(path)}`);
-    return;
+  const name = basename(path);
+
+  let rows: any[];
+  try {
+    rows = await sql`
+      INSERT INTO projects (name, path, tmux_session_name)
+      VALUES (${name}, ${path}, ${name})
+      ON CONFLICT (path) DO UPDATE SET
+        tmux_session_name = EXCLUDED.tmux_session_name,
+        config = EXCLUDED.config
+      RETURNING id, name, path, tmux_session_name
+    `;
+  } catch (err: any) {
+    if (err.code === '23505') { // unique_violation
+      await ctx.reply(`Project already exists with that name or path.`);
+      return;
+    }
+    throw err;
   }
 
-  const name = basename(path);
-  projects.push({ name, path });
-  await saveProjects(projects);
-  await ctx.reply(`✅ Added: ${name}\n${path}\n\nUse /projects to start it.`);
+  const project = rows[0];
+  await sessionManager.registerRemote(project.id as number, project.path as string, project.name as string);
+  await ctx.reply(`Added: ${project.name}\n${project.path}\n\nUse /projects to start it.`);
 }

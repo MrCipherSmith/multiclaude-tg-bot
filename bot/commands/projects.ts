@@ -1,26 +1,24 @@
 import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { sql } from "../../memory/db.ts";
-import { basename } from "path";
 
 interface Project {
+  id: number;
   name: string;
   path: string;
-  provider?: string;
+  tmuxSessionName: string;
+  config: Record<string, unknown>;
 }
 
-const PROJECTS_FILE = "/app/tmux-projects.json";
-
-export async function loadProjects(): Promise<Project[]> {
-  try {
-    return JSON.parse(await Bun.file(PROJECTS_FILE).text());
-  } catch {
-    return [];
-  }
-}
-
-export async function saveProjects(projects: Project[]): Promise<void> {
-  await Bun.write(PROJECTS_FILE, JSON.stringify(projects, null, 2) + "\n");
+async function loadProjects(): Promise<Project[]> {
+  const rows = await sql`SELECT id, name, path, tmux_session_name, config FROM projects ORDER BY name`;
+  return rows.map(r => ({
+    id: r.id as number,
+    name: r.name as string,
+    path: r.path as string,
+    tmuxSessionName: r.tmux_session_name as string,
+    config: r.config as Record<string, unknown>,
+  }));
 }
 
 export async function handleProjects(ctx: Context): Promise<void> {
@@ -31,18 +29,19 @@ export async function handleProjects(ctx: Context): Promise<void> {
     return;
   }
 
-  // Get active remote sessions for status check
-  const active = await sql`
-    SELECT project FROM sessions WHERE source = 'remote' AND status = 'active'
+  // Get remote session status keyed by project_id
+  const remoteSessions = await sql`
+    SELECT project_id, status FROM sessions WHERE source = 'remote'
   `;
-  const activeProjects = new Set(active.map((r: any) => r.project));
+  const statusMap = new Map(remoteSessions.map(r => [r.project_id as number, r.status as string]));
 
   const kb = new InlineKeyboard();
   const lines: string[] = ["Projects:\n"];
 
   for (const p of projects) {
-    const isActive = activeProjects.has(p.name);
-    const icon = isActive ? "🟢" : "⚫";
+    const sessionStatus = statusMap.get(p.id);
+    const isActive = sessionStatus === "active";
+    const icon = isActive ? "🟢" : "⚪";
     lines.push(`${icon} ${p.name}  (${p.path})`);
     if (isActive) {
       kb.text(`⏹ Stop ${p.name}`, `proj:stop:${p.name}`).row();

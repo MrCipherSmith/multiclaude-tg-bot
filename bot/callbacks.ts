@@ -5,6 +5,7 @@ import { appendLog } from "../utils/stats.ts";
 import { readSkills, readCommands, toolIcon } from "../utils/tools-reader.ts";
 import { setPendingTool } from "./handlers.ts";
 import { enqueueToolCommand } from "./text-handler.ts";
+import { doSwitch } from "./commands/session.ts";
 
 export async function handleCallbackQuery(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
@@ -64,30 +65,29 @@ async function handleToolCallback(ctx: Context): Promise<void> {
 
 async function handleSwitchCallback(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
-  const targetId = Number(data?.split(":")[1]);
+  const targetSessionId = Number(data?.split(":")[1]);
   const chatId = String(ctx.chat?.id);
 
-  if (isNaN(targetId)) {
+  if (isNaN(targetSessionId)) {
     await ctx.answerCallbackQuery({ text: "Invalid session" });
     return;
   }
 
-  const session = await sessionManager.get(targetId);
+  const session = await sessionManager.get(targetSessionId);
   if (!session) {
     await ctx.answerCallbackQuery({ text: "Session not found" });
     return;
   }
 
-  await sessionManager.switchSession(chatId, targetId);
-  appendLog(targetId, chatId, "switch", `switched via inline button`);
+  appendLog(targetSessionId, chatId, "switch", `switched via inline button`);
 
   // Remove the button from the message
   try {
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
   } catch {}
 
-  await ctx.answerCallbackQuery({ text: `Switched to ${session.name}` });
-  await ctx.reply(`Switched to ${session.name}. Send a message — it will go there.`);
+  await ctx.answerCallbackQuery({ text: `Switching to ${session.name ?? session.project ?? String(targetSessionId)}` });
+  await doSwitch(ctx, targetSessionId);
 }
 
 async function handlePermissionCallback(ctx: Context): Promise<void> {

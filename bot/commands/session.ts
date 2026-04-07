@@ -3,6 +3,7 @@ import { sessionManager, sessionDisplayName } from "../../sessions/manager.ts";
 import { deleteSessionCascade } from "../../sessions/delete.ts";
 import { sql } from "../../memory/db.ts";
 import { setPendingInput } from "../handlers.ts";
+import { setSwitchContext, clearSwitchContext } from "../switch-cache.ts";
 
 export async function handleStart(ctx: Context): Promise<void> {
   await ctx.reply(
@@ -53,7 +54,13 @@ export async function handleSessions(ctx: Context): Promise<void> {
 
   const lines = sessions.map((s) => {
     const marker = s.id === activeId ? " ✓" : "";
-    const status = s.id === 0 ? "" : s.status === "active" ? ` (active)` : ` (disconnected)`;
+    let status = "";
+    if (s.id !== 0) {
+      if (s.status === "active") status = " 🟢 active";
+      else if (s.status === "terminated") status = " 💀 terminated";
+      else if (s.status === "inactive") status = " ⚪ inactive";
+      else status = " ⚪ inactive"; // disconnected or unknown
+    }
     const display = sessionDisplayName(s);
     return `${s.id}. ${display}${status}${marker}`;
   });
@@ -74,7 +81,13 @@ export async function handleSwitch(ctx: Context): Promise<void> {
     const activeId = await sessionManager.getActiveSession(chatId);
     const lines = sessions.map((s) => {
       const marker = s.id === activeId ? " ✓" : "";
-      const status = s.id === 0 ? "" : s.status === "active" ? " (active)" : " (disconnected)";
+      let status = "";
+      if (s.id !== 0) {
+        if (s.status === "active") status = " 🟢 active";
+        else if (s.status === "terminated") status = " 💀 terminated";
+        else if (s.status === "inactive") status = " ⚪ inactive";
+        else status = " ⚪ inactive"; // disconnected or unknown
+      }
       return `${s.id}. ${sessionDisplayName(s)}${status}${marker}`;
     });
     await ctx.reply("Enter session ID:\n\n" + lines.join("\n"));
@@ -93,8 +106,17 @@ export async function handleSwitch(ctx: Context): Promise<void> {
   await handleSwitchTo(ctx, sessionId);
 }
 
-export async function handleSwitchTo(ctx: Context, sessionId: number): Promise<void> {
-  const session = await sessionManager.get(sessionId);
+function formatBriefing(raw: string): string {
+  return raw
+    .replace(/\[DECISIONS\]/g, "**Key Decisions:**")
+    .replace(/\[FILES\]/g, "**Files Changed:**")
+    .replace(/\[PROBLEMS\]/g, "**Problems Solved:**")
+    .replace(/\[PENDING\]/g, "**Pending:**")
+    .replace(/\[CONTEXT\]/g, "**Context:**");
+}
+
+export async function doSwitch(ctx: Context, targetSessionId: number): Promise<void> {
+  const session = await sessionManager.get(targetSessionId);
 
   if (!session) {
     await ctx.reply("Session not found.");
@@ -102,44 +124,42 @@ export async function handleSwitchTo(ctx: Context, sessionId: number): Promise<v
   }
 
   const chatId = String(ctx.chat!.id);
-  await sessionManager.switchSession(chatId, sessionId);
+  const currentId = await sessionManager.getActiveSession(chatId);
 
-  if (sessionId === 0) {
-    await ctx.reply("Switched to *standalone* mode\\.", {
-      parse_mode: "MarkdownV2",
-    });
-  } else {
-    const name = sessionDisplayName(session);
-    const statusIcon = session.status === "active" ? "🟢" : "🔴";
-
-    // Get last 5 messages (full content, up to 300 chars each)
-    const recentMsgs = await sql`
-      SELECT role, LEFT(content, 300) as content FROM messages
-      WHERE session_id = ${sessionId} AND chat_id = ${chatId}
-      ORDER BY created_at DESC LIMIT 5
+  if (session.projectPath) {
+    const [mem] = await sql`
+      SELECT content FROM memories
+      WHERE project_path = ${session.projectPath}
+        AND type IN ('project_context', 'summary')
+        AND embedding IS NOT NULL
+      ORDER BY created_at DESC
+      LIMIT 1
     `;
 
-    // Check pending queue messages
-    const pending = await sql`
-      SELECT count(*)::int as cnt FROM message_queue
-      WHERE session_id = ${sessionId} AND delivered = false
-    `;
-    const pendingCount = pending[0]?.cnt ?? 0;
-
-    let context = "";
-    if (recentMsgs.length > 0) {
-      const preview = recentMsgs.reverse().map((m) => {
-        const icon = m.role === "user" ? "👤" : "🤖";
-        const text = m.content.trim();
-        return `${icon} ${text}${text.length >= 300 ? "..." : ""}`;
-      }).join("\n\n");
-      context = `\n\nRecent messages:\n${preview}`;
+    if (mem) {
+      const formattedBriefing = formatBriefing(mem.content);
+      await ctx.reply(`📋 *Context: ${session.project ?? sessionDisplayName(session)}*\n\n${formattedBriefing}`, {
+        parse_mode: "Markdown",
+      });
+      setSwitchContext(chatId, {
+        summary: mem.content,
+        sessionId: targetSessionId,
+        projectPath: session.projectPath,
+        loadedAt: new Date(),
+      });
+      console.log(`[switch] session #${currentId} → #${targetSessionId}: briefing loaded from memories`);
+    } else {
+      console.log(`[switch] session #${currentId} → #${targetSessionId}: no briefing available`);
+      clearSwitchContext(chatId);
     }
-
-    const pendingText = pendingCount > 0 ? `\n\n⏳ In queue: ${pendingCount} messages` : "";
-    const path = session.projectPath ? `\n📁 ${session.projectPath}` : "";
-    await ctx.reply(`${statusIcon} Switched to: ${name}${path}${pendingText}${context}`);
   }
+
+  await sessionManager.switchSession(chatId, targetSessionId);
+  await ctx.reply(`Switched to ${sessionDisplayName(session)}.`);
+}
+
+export async function handleSwitchTo(ctx: Context, sessionId: number): Promise<void> {
+  await doSwitch(ctx, sessionId);
 }
 
 export async function handleRename(ctx: Context): Promise<void> {
@@ -226,10 +246,12 @@ async function cleanupSession(id: number): Promise<void> {
 }
 
 export async function handleCleanup(ctx: Context): Promise<void> {
-  // Find sessions to remove
+  // Find sessions to remove (exclude remote sessions — they are managed by channel.ts)
   const toRemove = await sql`
     SELECT id, name, project, source FROM sessions
-    WHERE id != 0 AND (name LIKE 'cli-%' OR status = 'disconnected')
+    WHERE id != 0
+      AND source != 'remote'
+      AND (name LIKE 'cli-%' OR status IN ('disconnected', 'terminated'))
   `;
 
   if (toRemove.length === 0) {

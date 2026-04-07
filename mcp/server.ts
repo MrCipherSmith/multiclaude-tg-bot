@@ -10,7 +10,7 @@ import { handleDashboardRequest } from "./dashboard-api.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { sql } from "../memory/db.ts";
-import { summarizeOnDisconnect } from "../memory/summarizer.ts";
+import { summarizeOnDisconnect, summarizeWork } from "../memory/summarizer.ts";
 import { verifyJwt } from "../dashboard/auth.ts";
 import { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
@@ -151,6 +151,17 @@ function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => s
     },
     async (args) => exec("set_session_name", args),
   );
+
+  server.tool(
+    "search_project_context",
+    "Semantic search over long-term project context and work summaries. Use when you need knowledge from prior sessions about this project.",
+    {
+      query: z.string().describe("Natural language search query"),
+      project_path: z.string().optional().describe("Project path to search in. Defaults to current session project_path."),
+      limit: z.number().optional().describe("Number of results to return (default: 5, max: 20)"),
+    },
+    async (args) => exec("search_project_context", args),
+  );
 }
 
 function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined): McpServer {
@@ -277,6 +288,27 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
       return;
     }
 
+
+    // POST /api/sessions/:id/summarize-work
+    const workSumMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/summarize-work$/);
+    if (req.method === "POST" && workSumMatch) {
+      if (!isLocalRequest(req) && !(await isAuthenticated(req))) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
+      const sessionId = parseInt(workSumMatch[1], 10);
+      try {
+        const ok = await summarizeWork(sessionId);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true, skipped: !ok }));
+      } catch (err: any) {
+        console.error("[api] summarize-work error:", err.message);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
 
     // Telegram webhook endpoint
     if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
