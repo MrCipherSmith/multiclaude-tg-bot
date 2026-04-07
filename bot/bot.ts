@@ -39,6 +39,10 @@ export function createBot(): Bot {
     { command: "skills", description: "Skills from goodai-base" },
     { command: "rules", description: "Rules from goodai-base" },
     { command: "tools", description: "MCP tools" },
+    // Remote control
+    { command: "remote_control", description: "tmux bots status (Kill/Start)" },
+    { command: "projects", description: "List projects (Start/Stop)" },
+    { command: "project_add", description: "Add project to config" },
     // Maintenance
     { command: "clear", description: "Clear context" },
     { command: "summarize", description: "Summarize conversation" },
