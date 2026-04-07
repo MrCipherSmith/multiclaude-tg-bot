@@ -292,6 +292,11 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
     // POST /api/sessions/:id/summarize-work
     const workSumMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/summarize-work$/);
     if (req.method === "POST" && workSumMatch) {
+      if (!isLocalRequest(req) && !(await isAuthenticated(req))) {
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
+        return;
+      }
       const sessionId = parseInt(workSumMatch[1], 10);
       try {
         const ok = await summarizeWork(sessionId);

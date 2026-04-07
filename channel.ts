@@ -108,7 +108,13 @@ async function resolveSession(): Promise<number> {
       }
     }
 
-    // Lock failed — another instance is running, create a parallel session with instance suffix
+    // Lock failed — another instance is running
+    if (channelSource === 'remote') {
+      process.stderr.write(`[channel] remote session for project already active, exiting\n`);
+      process.exit(0);
+    }
+
+    // Local session: create a parallel session with instance suffix
     const displacedSessionId = existing[0].id;
     const instanceNum = (Date.now() % 10000);
     sessionName = `${projectName} · ${channelSource} #${instanceNum}`;

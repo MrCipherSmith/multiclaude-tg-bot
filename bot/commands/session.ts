@@ -3,7 +3,7 @@ import { sessionManager, sessionDisplayName } from "../../sessions/manager.ts";
 import { deleteSessionCascade } from "../../sessions/delete.ts";
 import { sql } from "../../memory/db.ts";
 import { setPendingInput } from "../handlers.ts";
-import { setSwitchContext } from "../switch-cache.ts";
+import { setSwitchContext, clearSwitchContext } from "../switch-cache.ts";
 
 export async function handleStart(ctx: Context): Promise<void> {
   await ctx.reply(
@@ -150,6 +150,7 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
       console.log(`[switch] session #${currentId} → #${targetSessionId}: briefing loaded from memories`);
     } else {
       console.log(`[switch] session #${currentId} → #${targetSessionId}: no briefing available`);
+      clearSwitchContext(chatId);
     }
   }
 

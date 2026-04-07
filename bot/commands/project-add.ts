@@ -28,16 +28,22 @@ async function addProject(ctx: Context, path: string): Promise<void> {
 
   const name = basename(path);
 
-  const rows = await sql`
-    INSERT INTO projects (name, path, tmux_session_name)
-    VALUES (${name}, ${path}, ${name})
-    ON CONFLICT (path) DO NOTHING
-    RETURNING id, name, path, tmux_session_name
-  `;
-
-  if (rows.length === 0) {
-    await ctx.reply(`Project already exists: ${name}`);
-    return;
+  let rows: any[];
+  try {
+    rows = await sql`
+      INSERT INTO projects (name, path, tmux_session_name)
+      VALUES (${name}, ${path}, ${name})
+      ON CONFLICT (path) DO UPDATE SET
+        tmux_session_name = EXCLUDED.tmux_session_name,
+        config = EXCLUDED.config
+      RETURNING id, name, path, tmux_session_name
+    `;
+  } catch (err: any) {
+    if (err.code === '23505') { // unique_violation
+      await ctx.reply(`Project already exists with that name or path.`);
+      return;
+    }
+    throw err;
   }
 
   const project = rows[0];

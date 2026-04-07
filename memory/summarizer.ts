@@ -289,35 +289,47 @@ export async function summarizeWork(sessionId: number): Promise<boolean> {
   const embedding = await embedSafe(summary);
   const embeddingStr = embedding ? `[${embedding.join(",")}]` : null;
 
-  // 6. Save to memories (type='project_context', session_id=NULL)
-  const [mem] = await sql`
-    INSERT INTO memories (source, session_id, chat_id, type, content, tags, project_path, embedding)
-    VALUES (
-      'work_session',
-      NULL,
-      '',
-      'project_context',
-      ${summary},
-      ${["exit"]},
-      ${projectPath},
-      ${embeddingStr}::vector
-    )
-    RETURNING id
-  `;
+  // 6-8. Save memory, archive messages/tool calls, and mark session terminated atomically
+  try {
+    await sql.begin(async (tx) => {
+      // 6. Save to memories (type='project_context', session_id=NULL)
+      const [mem] = await tx`
+        INSERT INTO memories (source, session_id, chat_id, type, content, tags, project_path, embedding)
+        VALUES (
+          'work_session',
+          NULL,
+          '',
+          'project_context',
+          ${summary},
+          ${["exit"]},
+          ${projectPath},
+          ${embeddingStr}::vector
+        )
+        RETURNING id
+      `;
 
-  // 7. Mark messages and permission_requests archived
-  await sql`
-    UPDATE messages SET archived_at = now()
-    WHERE session_id = ${sessionId} AND archived_at IS NULL
-  `;
-  await sql`
-    UPDATE permission_requests SET archived_at = now()
-    WHERE session_id = ${sessionId} AND archived_at IS NULL
-  `;
+      // 7. Mark messages and permission_requests archived
+      await tx`
+        UPDATE messages SET archived_at = now()
+        WHERE session_id = ${sessionId} AND archived_at IS NULL
+      `;
+      await tx`
+        UPDATE permission_requests SET archived_at = now()
+        WHERE session_id = ${sessionId} AND archived_at IS NULL
+      `;
 
-  // 8. Set session status = 'terminated'
-  await sql`UPDATE sessions SET status = 'terminated', last_active = now() WHERE id = ${sessionId}`;
+      // 8. Set session status = 'terminated'
+      await tx`UPDATE sessions SET status = 'terminated', last_active = now() WHERE id = ${sessionId}`;
 
-  console.log(`[summarizer] session #${sessionId}: work summary saved id=${mem?.id}, messages archived`);
+      console.log(`[summarizer] session #${sessionId}: work summary saved id=${mem?.id}, messages archived`);
+    });
+  } catch (txErr) {
+    // Transaction failed — at minimum, mark session terminated
+    console.error(`[summarizer] session #${sessionId}: transaction failed, forcing termination:`, txErr);
+    await sql`UPDATE sessions SET status = 'terminated', last_active = now() WHERE id = ${sessionId}`.catch(() => {});
+    await sql`UPDATE messages SET archived_at = now() WHERE session_id = ${sessionId} AND archived_at IS NULL`.catch(() => {});
+    await sql`UPDATE permission_requests SET archived_at = now() WHERE session_id = ${sessionId} AND archived_at IS NULL`.catch(() => {});
+  }
+
   return true;
 }

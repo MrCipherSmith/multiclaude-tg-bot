@@ -7,6 +7,7 @@ import { touchIdleTimer, checkOverflow } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
 import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, getBotRef } from "./handlers.ts";
+import { getSwitchContext, clearSwitchContext } from "./switch-cache.ts";
 
 export async function enqueueToolCommand(
   chatId: string,
@@ -125,8 +126,16 @@ export async function handleText(ctx: Context): Promise<void> {
     },
   });
 
+  // Inject switch context briefing if available (once, then clear)
+  const switchCtx = getSwitchContext(chatId);
+  let effectiveText = text;
+  if (switchCtx) {
+    effectiveText = `[Project context from prior session]\n${switchCtx.summary}\n\n[User message]\n${text}`;
+    clearSwitchContext(chatId);
+  }
+
   // Compose prompt with memory context
-  const { system, messages } = await composePrompt(sessionId, chatId, text);
+  const { system, messages } = await composePrompt(sessionId, chatId, effectiveText);
 
   // Stream response
   try {

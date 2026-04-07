@@ -17,17 +17,17 @@ function startCleanupTimer() {
       const stats = await sql`DELETE FROM api_request_stats WHERE created_at < now() - interval '30 days'`;
       // Mark stale "active" sessions that have no live transport (10 min threshold)
       const stale = await sessionManager.markStale(600);
-      // Clear chat_sessions referencing disconnected local sessions, then delete them
+      // Clear chat_sessions referencing disconnected/terminated local sessions, then delete them
       // Must delete child rows first to satisfy FK constraints
-      await sql`DELETE FROM chat_sessions WHERE active_session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM memories WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM permission_requests WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM message_queue WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0)`;
-      const cliJunk = await sql`DELETE FROM sessions WHERE source = 'local' AND status = 'disconnected' AND id != 0`;
+      await sql`DELETE FROM chat_sessions WHERE active_session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM memories WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM permission_requests WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM message_queue WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM request_logs WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM api_request_stats WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      await sql`DELETE FROM transcription_stats WHERE session_id IN (SELECT id FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0)`;
+      const cliJunk = await sql`DELETE FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0`;
       // Delete orphaned cli-xxx sessions with no project (leftover from crashed processes)
       await sessionManager.deleteOrphanCliSessions();
       // Clean up stale idle timers for disconnected sessions
