@@ -45,6 +45,8 @@ function isLocalRequest(req: IncomingMessage): boolean {
 // Track active transports by session
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
+import { pendingExpects, pushExpect, tryAutoLink } from "./pending-expects.ts";
+
 function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => string | undefined): void {
   const exec = (name: string, args: Record<string, unknown>) =>
     executeTool(name, { ...args, _clientId: getClientId?.() }, bot);
@@ -289,6 +291,37 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
     }
 
 
+    // API: pre-register an expected HTTP MCP connection from channel.ts (local only)
+    if (url.pathname === "/api/sessions/expect" && req.method === "POST") {
+      if (!isLocalRequest(req)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Forbidden" }));
+        return;
+      }
+      try {
+        const body = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          req.on("data", (chunk) => (data += chunk));
+          req.on("end", () => resolve(data));
+          req.on("error", reject);
+        });
+        const { session_id } = JSON.parse(body);
+        if (!session_id || typeof session_id !== "number") {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "session_id required" }));
+          return;
+        }
+        pushExpect(session_id);
+        console.log(`[mcp] pending expect registered: session #${session_id} (queue: ${pendingExpects.length})`);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err?.message }));
+      }
+      return;
+    }
+
     // POST /api/sessions/:id/summarize-work
     const workSumMatch = url.pathname.match(/^\/api\/sessions\/(\d+)\/summarize-work$/);
     if (req.method === "POST" && workSumMatch) {
@@ -365,13 +398,14 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
 
       transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
-        onsessioninitialized: async (id: string) => {
+        onsessioninitialized: (id: string) => {
           transports.set(id, transport!);
           registerMcpSession(id, mcpServer);
-          const name = req.headers["x-session-name"] as string | undefined;
           transportSessionId = id;
-          const session = await sessionManager.register(id, name ?? `cli-${id.slice(0, 8)}`);
-          console.log(`[mcp] session initialized: ${id} (db #${session.id})`);
+          sessionManager.trackTransport(id);
+          console.log(`[mcp] transport initialized: ${id.slice(0, 12)}`);
+          // Try auto-link immediately (if channel.ts registered expect before us)
+          tryAutoLink(id).catch((err) => console.error("[mcp] auto-link failed:", err?.message));
         },
       });
 
@@ -380,8 +414,12 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         if (sid) {
           transports.delete(sid);
           unregisterMcpSession(sid);
-          await sessionManager.disconnect(sid);
-          console.log(`[mcp] session closed: ${sid}`);
+          const hasDbSession = sessionManager.getSessionIdByClient(sid) !== undefined;
+          sessionManager.untrackTransport(sid);
+          if (hasDbSession) {
+            await sessionManager.disconnect(sid);
+          }
+          console.log(`[mcp] transport closed: ${sid.slice(0, 12)}${hasDbSession ? " (db session cleaned up)" : ""}`);
         }
       };
 

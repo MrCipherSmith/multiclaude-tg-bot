@@ -27,8 +27,29 @@ export function sessionDisplayName(s: Pick<Session, "id" | "project" | "source" 
 }
 
 export class SessionManager {
-  // Map of SSE client_id -> session_id for quick lookup
+  // Map of SSE client_id -> session_id for quick lookup (only named/registered sessions)
   private activeClients = new Map<string, number>();
+  // Set of all live HTTP MCP transport client_ids (including anonymous, pre-DB-creation)
+  private liveTransports = new Set<string>();
+
+  /** Called when HTTP MCP transport initializes — before any DB session is created */
+  trackTransport(clientId: string): void {
+    this.liveTransports.add(clientId);
+  }
+
+  /** Link an HTTP MCP transport to an already-existing DB session (auto-registration path) */
+  async linkClientToSession(clientId: string, sessionId: number): Promise<void> {
+    await sql`UPDATE sessions SET client_id = ${clientId}, status = 'active', last_active = now() WHERE id = ${sessionId}`;
+    this.activeClients.set(clientId, sessionId);
+    console.log(`[session] auto-linked transport ${clientId.slice(0, 12)} to session #${sessionId}`);
+    try { broadcast("session-state", { id: sessionId, status: "active" }); } catch {}
+  }
+
+  /** Called when HTTP MCP transport closes */
+  untrackTransport(clientId: string): void {
+    this.liveTransports.delete(clientId);
+    this.activeClients.delete(clientId);
+  }
 
   async register(
     clientId: string,
@@ -155,15 +176,24 @@ export class SessionManager {
       return session;
     }
 
-    // No channel.ts session found — this is a manual (standalone) Claude launch.
-    // Leave the cli-xxx session ephemeral so it doesn't appear in the bot.
-    const [row] = await sql`
-      SELECT id, name, project, source, project_path, project_id, client_id, status, metadata, connected_at, last_active, cli_type, cli_config
-      FROM sessions WHERE client_id = ${currentClientId}
-    `;
-    if (!row) throw new Error(`[session] adoptOrRename: session not found for clientId ${currentClientId}`);
-    const session = this.rowToSession(row);
-    console.log(`[session] manual launch, keeping ephemeral: ${currentClientId.slice(0, 12)}`);
+    // No channel.ts session found — standalone Claude launch (not via claude-bot CLI).
+    // Don't create any DB record. Return an in-memory stub so the tool works but bot stays unaware.
+    console.log(`[session] standalone launch, no DB record created (${name})`);
+    const session: Session = {
+      id: -1,
+      name,
+      project: projectPath ? basename(projectPath) : null,
+      source: "standalone",
+      projectPath: projectPath ?? null,
+      projectId: null,
+      clientId: currentClientId,
+      status: "active",
+      metadata: {},
+      connectedAt: new Date(),
+      lastActive: new Date(),
+      cliType: "claude",
+      cliConfig: {},
+    };
     return session;
   }
 
@@ -213,8 +243,8 @@ export class SessionManager {
     `;
     let count = 0;
     for (const row of rows) {
-      // If client is not tracked in-memory, it's a zombie
-      if (!this.activeClients.has(row.client_id)) {
+      // If client has no live transport in-memory, it's a zombie
+      if (!this.liveTransports.has(row.client_id) && !this.activeClients.has(row.client_id)) {
         const newStatus = row.source === 'remote' ? 'inactive' : 'terminated';
         await sql`UPDATE sessions SET status = ${newStatus} WHERE id = ${row.id}`;
         console.log(`[session] marked stale: #${row.id} (${row.client_id.slice(0, 8)}) -> ${newStatus}`);

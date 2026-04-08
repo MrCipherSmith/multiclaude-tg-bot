@@ -1183,6 +1183,26 @@ async function pollMessages() {
 // --- Main ---
 async function main() {
   await resolveSession();
+
+  // Notify the HTTP MCP server that an HTTP transport is expected for this session.
+  // This allows the server to auto-link the transport without LLM calling set_session_name.
+  if (sessionId !== null) {
+    try {
+      const res = await fetch(`${BOT_API_URL}/api/sessions/expect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (res.ok) {
+        process.stderr.write(`[channel] registered expect for session #${sessionId}\n`);
+      } else {
+        process.stderr.write(`[channel] expect registration failed: ${res.status}\n`);
+      }
+    } catch (err: any) {
+      process.stderr.write(`[channel] expect registration error: ${err?.message}\n`);
+    }
+  }
+
   await loadAutoApproveRules();
 
   const transport = new StdioServerTransport();

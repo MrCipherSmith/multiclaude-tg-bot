@@ -416,8 +416,12 @@ export async function handleDashboardRequest(
     return true;
   }
 
-  // CLI registration endpoint — protected by isLocalRequest in server.ts, not JWT
-  if (pathname === "/api/sessions/register" || pathname === "/api/sessions/disconnect") return false;
+  // CLI registration endpoints — protected by isLocalRequest in server.ts, not JWT
+  if (
+    pathname === "/api/sessions/register" ||
+    pathname === "/api/sessions/disconnect" ||
+    pathname === "/api/sessions/expect"
+  ) return false;
 
   // SSE endpoint — requires auth cookie but uses streaming response
   if (pathname === "/api/events" && method === "GET") {

@@ -4,6 +4,7 @@ import { sessionManager } from "../sessions/manager.ts";
 import { sql } from "../memory/db.ts";
 import { embedSafe } from "../memory/embeddings.ts";
 import { chunkText } from "../utils/chunk.ts";
+import { tryAutoLink } from "./pending-expects.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -186,8 +187,13 @@ export async function executeTool(
   args: Record<string, unknown>,
   bot: Bot | null,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-  // Touch session activity on every tool call
+  // Auto-link to channel session if not yet linked (handles race condition on startup)
   const clientId = args._clientId as string | undefined;
+  if (clientId) {
+    await tryAutoLink(clientId).catch(() => {});
+  }
+
+  // Touch session activity on every tool call
   if (clientId) {
     const sessionId = sessionManager.getSessionIdByClient(clientId);
     if (sessionId !== undefined) {
@@ -340,7 +346,8 @@ export async function executeTool(
       const clientId = args._clientId as string | undefined;
       if (!clientId) return text("No session context");
       const session = await sessionManager.adoptOrRename(clientId, sessionName, projectPath);
-      return text(`Session #${session.id} named "${sessionName}"`);
+      const label = session.id === -1 ? "standalone" : `#${session.id}`;
+      return text(`Session ${label} named "${sessionName}"`);
     }
 
     case "search_project_context": {
