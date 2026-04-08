@@ -8,6 +8,10 @@ export interface Session {
   last_active: string;
 }
 
+export interface SessionDetail extends Session {
+  connected_at: string;
+}
+
 export interface GitCommit {
   hash: string;
   short: string;
@@ -30,11 +34,14 @@ export interface PermissionRequest {
 }
 
 const BASE = "";
+let _token = "";
 
 async function req<T>(path: string, opts?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (_token) headers["Authorization"] = `Bearer ${_token}`;
   const r = await fetch(BASE + path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(opts?.headers ?? {}) },
+    headers: { ...headers, ...(opts?.headers as Record<string, string> ?? {}) },
     ...opts,
   });
   if (!r.ok) throw new Error(await r.text());
@@ -43,13 +50,17 @@ async function req<T>(path: string, opts?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  authWebApp: (initData: string) =>
-    req<{ ok: boolean; user: { id: number; first_name: string } }>("/api/auth/webapp", {
+  authWebApp: async (initData: string) => {
+    const data = await req<{ ok: boolean; user: { id: number; first_name: string }; token: string }>("/api/auth/webapp", {
       method: "POST",
       body: JSON.stringify({ initData }),
-    }),
+    });
+    if (data.token) _token = data.token;
+    return data;
+  },
 
   sessions: () => req<Session[]>("/api/sessions"),
+  session: (id: number) => req<SessionDetail>(`/api/sessions/${id}`),
 
   git: {
     tree: (sessionId: number) =>

@@ -1,18 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { api, type Session } from "../api";
+import { api, type Session, type SessionDetail } from "../api";
 
 interface Props { session: Session }
-
-interface SessionDetail {
-  id: number;
-  name: string | null;
-  project: string | null;
-  project_path: string | null;
-  source: string;
-  status: string;
-  last_active: string;
-  connected_at: string;
-}
 
 export function SessionMonitor({ session }: Props) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
@@ -22,7 +11,7 @@ export function SessionMonitor({ session }: Props) {
   const load = useCallback(async () => {
     try {
       const [det, pList] = await Promise.all([
-        fetch(`/api/sessions/${session.id}`, { credentials: "include" }).then((r) => r.json()),
+        api.session(session.id),
         api.permissions.list(session.id),
       ]);
       setDetail(det);

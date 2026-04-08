@@ -57,10 +57,17 @@ export function App() {
   async function loadSessions() {
     try {
       const list = await api.sessions();
-      setSessions(list.filter((s) => s.id !== 0));
-      const active = list.find((s) => s.status === "active" && s.id !== 0);
-      if (active) setSelectedSession(active);
-    } catch {}
+      const nonStandalone = list.filter((s) => s.id !== 0);
+      setSessions(nonStandalone);
+      const active = nonStandalone.find((s) => s.status === "active");
+      if (active) {
+        setSelectedSession(active);
+      } else if (nonStandalone.length > 0) {
+        setSidebarOpen(true);
+      }
+    } catch (e: any) {
+      setAuthError(`Sessions error: ${e.message}`);
+    }
   }
 
   if (authError) {

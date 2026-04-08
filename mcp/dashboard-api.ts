@@ -79,6 +79,11 @@ function clearCookie(res: ServerResponse, name: string): void {
 }
 
 async function getUser(req: IncomingMessage): Promise<AuthPayload | null> {
+  // Check Authorization: Bearer header first (webapp uses this)
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return verifyJwt(authHeader.slice(7));
+  }
   const token = parseCookie(req, "token");
   if (!token) return null;
   return verifyJwt(token);
@@ -382,7 +387,7 @@ async function handleDeleteProject(res: ServerResponse, id: number): Promise<voi
 
 async function gitExec(projectPath: string, args: string[]): Promise<{ ok: boolean; out: string }> {
   const cwd = hostToContainerPath(projectPath);
-  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(["git", "-c", "safe.directory=*", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
   const out = await new Response(proc.stdout).text();
   const err = await new Response(proc.stderr).text();
   const code = await proc.exited;
@@ -475,7 +480,7 @@ async function handleGitCommitDiff(res: ServerResponse, sessionId: number, hash:
 
 async function handleGetPermissions(res: ServerResponse, sessionId: number): Promise<void> {
   const rows = await sql`
-    SELECT id, tool_name, description, request_id, created_at
+    SELECT id, tool_name, description, created_at
     FROM permission_requests
     WHERE session_id = ${sessionId} AND response IS NULL
     ORDER BY created_at ASC
@@ -531,17 +536,29 @@ async function handleAlwaysAllowPermission(req: IncomingMessage, res: ServerResp
 
 async function handleAuthWebApp(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const { initData } = await parseBody(req);
-  if (!initData || typeof initData !== "string") { sendError(res, "initData required"); return; }
+  if (!initData || typeof initData !== "string") {
+    console.log("[webapp-auth] missing initData");
+    sendError(res, "initData required"); return;
+  }
+
+  const params = new URLSearchParams(initData);
+  const authDate = Number(params.get("auth_date"));
+  const age = Math.round(Date.now() / 1000 - authDate);
+  console.log(`[webapp-auth] initData received, auth_date age=${age}s, hash=${params.get("hash")?.slice(0, 8)}...`);
+
   const user = verifyWebAppInitData(initData);
-  if (!user) { sendError(res, "Invalid initData", 401); return; }
+  if (!user) {
+    console.log(`[webapp-auth] verification failed — age=${age}s (limit=3600), token=${CONFIG.TELEGRAM_BOT_TOKEN.slice(0, 10)}...`);
+    sendError(res, "Invalid initData", 401); return;
+  }
 
   const allowed = CONFIG.ALLOWED_USERS.map(Number);
+  console.log(`[webapp-auth] user=${user.id} (${user.username}), allowed=${allowed.join(",")}`);
   if (!allowed.includes(user.id)) { sendError(res, "Forbidden", 403); return; }
 
   const token = await signJwt(user);
-  const secure = process.env.SECURE_COOKIES !== "false";
-  res.setHeader("Set-Cookie", `auth=${token}; HttpOnly; Path=/; Max-Age=604800; SameSite=None${secure ? "; Secure" : ""}`);
-  sendJson(res, { ok: true, user });
+  console.log(`[webapp-auth] success for user=${user.id}`);
+  sendJson(res, { ok: true, user, token });
 }
 
 // --- Static file serving ---
@@ -681,6 +698,7 @@ export async function handleDashboardRequest(
       return true;
     }
     if (pathname === "/api/sessions" && method === "GET") {
+      console.log(`[sessions] cookie=${req.headers.cookie?.slice(0, 40) ?? "none"}`);
       await handleSessions(req, res);
       return true;
     }
@@ -791,6 +809,14 @@ export async function handleDashboardRequest(
     }
 
     sendError(res, "Not found", 404);
+    return true;
+  }
+
+  // Redirect legacy /telegram/webapp/* → /webapp/*
+  if (method === "GET" && pathname.startsWith("/telegram/webapp")) {
+    const rest = pathname.slice("/telegram/webapp".length) || "/";
+    res.writeHead(301, { Location: `/webapp${rest}` });
+    res.end();
     return true;
   }
 

@@ -31,6 +31,9 @@ COPY --from=dashboard-build /app/dashboard/dist dashboard/dist
 # Copy webapp build output from stage 1b
 COPY --from=webapp-build /app/dashboard/webapp/dist dashboard/webapp/dist
 
+# Install git for webapp git API
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 # Ensure downloads dir exists and is writable
 RUN mkdir -p /app/downloads
 

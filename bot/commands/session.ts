@@ -156,6 +156,11 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
   const chatId = String(ctx.chat!.id);
   const currentId = await sessionManager.getActiveSession(chatId);
 
+  // Switch first — always happens regardless of briefing errors
+  await sessionManager.switchSession(chatId, targetSessionId);
+  await ctx.reply(`Switched to ${sessionDisplayName(session)}.`);
+
+  // Send briefing after switch (non-critical, errors don't affect the switch)
   if (session.projectPath) {
     const [mem] = await sql`
       SELECT content FROM memories
@@ -167,10 +172,6 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
     `;
 
     if (mem) {
-      const formattedBriefing = formatBriefing(mem.content);
-      await ctx.reply(`📋 *Context: ${session.project ?? sessionDisplayName(session)}*\n\n${formattedBriefing}`, {
-        parse_mode: "Markdown",
-      });
       setSwitchContext(chatId, {
         summary: mem.content,
         sessionId: targetSessionId,
@@ -178,14 +179,20 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
         loadedAt: new Date(),
       });
       console.log(`[switch] session #${currentId} → #${targetSessionId}: briefing loaded from memories`);
+      try {
+        const formattedBriefing = formatBriefing(mem.content);
+        await ctx.reply(`📋 *Context: ${session.project ?? sessionDisplayName(session)}*\n\n${formattedBriefing}`, {
+          parse_mode: "Markdown",
+        });
+      } catch {
+        // Markdown parse error — send as plain text
+        await ctx.reply(`📋 Context: ${session.project ?? sessionDisplayName(session)}\n\n${mem.content}`);
+      }
     } else {
       console.log(`[switch] session #${currentId} → #${targetSessionId}: no briefing available`);
       clearSwitchContext(chatId);
     }
   }
-
-  await sessionManager.switchSession(chatId, targetSessionId);
-  await ctx.reply(`Switched to ${sessionDisplayName(session)}.`);
 }
 
 export async function handleSwitchTo(ctx: Context, sessionId: number): Promise<void> {

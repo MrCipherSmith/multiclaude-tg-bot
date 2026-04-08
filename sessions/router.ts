@@ -21,7 +21,7 @@ export async function routeMessage(chatId: string): Promise<RouteTarget> {
     return { mode: "standalone", sessionId: 0 };
   }
 
-  if (session.status === "disconnected") {
+  if (session.status !== "active") {
     return { mode: "disconnected", sessionId, sessionName: session.name, projectPath: session.projectPath };
   }
 

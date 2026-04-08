@@ -59,9 +59,10 @@ export async function handleText(ctx: Context): Promise<void> {
   appendLog(route.sessionId, chatId, "route", `mode=${route.mode}, session=#${route.sessionId}`);
 
   if (route.mode === "disconnected") {
-    appendLog(route.sessionId, chatId, "route", `session "${route.sessionName}" disconnected`, "warn");
+    appendLog(route.sessionId, chatId, "route", `session "${route.sessionName}" not active`, "warn");
     await ctx.reply(
-      `Session "${route.sessionName}" disconnected.\n/switch 0 for standalone or /sessions for list.`,
+      `⚠️ Session <b>${route.sessionName ?? `#${route.sessionId}`}</b> is not active.\n\n/switch 0 — standalone mode\n/sessions — list all sessions`,
+      { parse_mode: "HTML" },
     );
     return;
   }
