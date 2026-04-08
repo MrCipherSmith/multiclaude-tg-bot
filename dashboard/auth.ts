@@ -34,6 +34,46 @@ export async function verifyJwt(token: string): Promise<AuthPayload | null> {
   }
 }
 
+/**
+ * Verify Telegram Mini App initData string.
+ * Algorithm: HMAC-SHA256(data_check_string, HMAC-SHA256("WebAppData", bot_token))
+ */
+export function verifyWebAppInitData(initData: string): AuthPayload | null {
+  const params = new URLSearchParams(initData);
+  const hash = params.get("hash");
+  if (!hash) return null;
+
+  // Check auth_date freshness (1 hour for Mini App)
+  const authDate = Number(params.get("auth_date"));
+  if (!authDate || Date.now() / 1000 - authDate > 3600) return null;
+
+  // Build data-check-string: sorted key=value pairs (excluding hash)
+  params.delete("hash");
+  const checkString = Array.from(params.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+
+  // Secret key = HMAC-SHA256("WebAppData", bot_token)
+  const secretKey = createHmac("sha256", "WebAppData").update(CONFIG.TELEGRAM_BOT_TOKEN).digest();
+  const computed = createHmac("sha256", secretKey).update(checkString).digest("hex");
+
+  try {
+    if (!timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(hash, "hex"))) return null;
+  } catch {
+    return null;
+  }
+
+  const userStr = params.get("user");
+  if (!userStr) return null;
+  try {
+    const user = JSON.parse(userStr);
+    return { id: user.id, first_name: user.first_name, username: user.username, photo_url: user.photo_url };
+  } catch {
+    return null;
+  }
+}
+
 export function verifyTelegramLogin(data: Record<string, string>): boolean {
   const { hash, ...rest } = data;
   if (!hash) return false;

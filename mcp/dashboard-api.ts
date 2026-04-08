@@ -1,15 +1,26 @@
 import { IncomingMessage, ServerResponse } from "http";
-import { readFile, access } from "fs/promises";
+import { readFile, access, writeFile } from "fs/promises";
 import { join, extname, resolve } from "path";
+import { homedir } from "os";
 import { sql } from "../memory/db.ts";
 import { deleteSessionCascade } from "../sessions/delete.ts";
 import { CONFIG } from "../config.ts";
-import { signJwt, verifyJwt, verifyTelegramLogin, type AuthPayload } from "../dashboard/auth.ts";
+import { signJwt, verifyJwt, verifyTelegramLogin, verifyWebAppInitData, type AuthPayload } from "../dashboard/auth.ts";
 import { getApiStats, getTranscriptionStats, getMessageStats, getRecentErrors } from "../utils/stats.ts";
 import { isIndexing } from "../memory/long-term.ts";
 import { addSSEClient, removeSSEClient, getSSEClientCount } from "./notification-broadcaster.ts";
 
 const DIST_DIR = join(import.meta.dirname, "../dashboard/dist");
+const WEBAPP_DIST_DIR = join(import.meta.dirname, "../dashboard/webapp/dist");
+
+// Map host project_path to container-accessible path via /host-home mount
+const HOST_HOME = process.env.HOST_HOME ?? homedir();
+function hostToContainerPath(hostPath: string): string {
+  if (hostPath.startsWith(HOST_HOME)) {
+    return "/host-home" + hostPath.slice(HOST_HOME.length);
+  }
+  return hostPath; // fallback: same path (manual/non-Docker runs)
+}
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -367,7 +378,188 @@ async function handleDeleteProject(res: ServerResponse, id: number): Promise<voi
   sendJson(res, { ok: true });
 }
 
+// --- Git API ---
+
+async function gitExec(projectPath: string, args: string[]): Promise<{ ok: boolean; out: string }> {
+  const cwd = hostToContainerPath(projectPath);
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const out = await new Response(proc.stdout).text();
+  const err = await new Response(proc.stderr).text();
+  const code = await proc.exited;
+  return { ok: code === 0, out: code === 0 ? out : err };
+}
+
+async function getSessionPath(sessionId: number): Promise<string | null> {
+  const [row] = await sql`SELECT project_path FROM sessions WHERE id = ${sessionId}`;
+  return row?.project_path ?? null;
+}
+
+async function handleGitTree(res: ServerResponse, sessionId: number): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const { ok, out } = await gitExec(path, ["ls-tree", "--name-only", "-r", "HEAD"]);
+  if (!ok) { sendError(res, out || "Not a git repo"); return; }
+  sendJson(res, { files: out.trim().split("\n").filter(Boolean) });
+}
+
+async function handleGitFile(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const file = url.searchParams.get("path");
+  if (!file) { sendError(res, "path required"); return; }
+  // Prevent path traversal
+  if (file.includes("..")) { sendError(res, "Invalid path", 400); return; }
+  const ref = url.searchParams.get("ref") ?? "HEAD";
+  const { ok, out } = await gitExec(path, ["show", `${ref}:${file}`]);
+  if (!ok) { sendError(res, out || "File not found", 404); return; }
+  sendJson(res, { content: out });
+}
+
+async function handleGitDiff(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const ref = url.searchParams.get("ref") ?? "HEAD~1";
+  const file = url.searchParams.get("path");
+  const args = file ? ["diff", ref, "--", file] : ["diff", ref];
+  const { ok, out } = await gitExec(path, args);
+  if (!ok) { sendError(res, out || "Git error"); return; }
+  sendJson(res, { diff: out });
+}
+
+async function handleGitLog(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+  const { ok, out } = await gitExec(path, ["log", `--pretty=format:%H|%h|%s|%an|%ar`, `-${limit}`]);
+  if (!ok) { sendError(res, out || "Git error"); return; }
+  const commits = out.trim().split("\n").filter(Boolean).map((line) => {
+    const [hash, short, subject, author, date] = line.split("|");
+    return { hash, short, subject, author, date };
+  });
+  sendJson(res, { commits });
+}
+
+async function handleGitStatus(res: ServerResponse, sessionId: number): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const { ok, out } = await gitExec(path, ["status", "--porcelain"]);
+  if (!ok) { sendError(res, out || "Git error"); return; }
+  const files = out.trim().split("\n").filter(Boolean).map((line) => ({
+    status: line.slice(0, 2).trim(),
+    file: line.slice(3),
+  }));
+  sendJson(res, { files });
+}
+
+async function handleGitBranches(res: ServerResponse, sessionId: number): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const { ok, out } = await gitExec(path, ["branch", "-a", "--format=%(refname:short)|%(HEAD)"]);
+  if (!ok) { sendError(res, out || "Git error"); return; }
+  const branches = out.trim().split("\n").filter(Boolean).map((line) => {
+    const [name, current] = line.split("|");
+    return { name, current: current === "*" };
+  });
+  sendJson(res, { branches });
+}
+
+async function handleGitCommitDiff(res: ServerResponse, sessionId: number, hash: string): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+  const { ok, out } = await gitExec(path, ["show", hash, "--stat", "--patch"]);
+  if (!ok) { sendError(res, out || "Commit not found", 404); return; }
+  sendJson(res, { diff: out });
+}
+
+// --- Permissions API ---
+
+async function handleGetPermissions(res: ServerResponse, sessionId: number): Promise<void> {
+  const rows = await sql`
+    SELECT id, tool_name, description, request_id, created_at
+    FROM permission_requests
+    WHERE session_id = ${sessionId} AND response IS NULL
+    ORDER BY created_at ASC
+  `;
+  sendJson(res, rows);
+}
+
+async function handleRespondPermission(req: IncomingMessage, res: ServerResponse, id: number): Promise<void> {
+  const { response } = await parseBody(req);
+  if (!["allow", "deny"].includes(response)) { sendError(res, "response must be allow or deny"); return; }
+  const rows = await sql`
+    UPDATE permission_requests SET response = ${response} WHERE id = ${id} AND response IS NULL RETURNING id, session_id
+  `;
+  if (rows.length === 0) { sendError(res, "Permission request not found or already answered", 404); return; }
+  sendJson(res, { ok: true });
+}
+
+async function handleAlwaysAllowPermission(req: IncomingMessage, res: ServerResponse, id: number): Promise<void> {
+  const [perm] = await sql`SELECT id, tool_name, session_id FROM permission_requests WHERE id = ${id}`;
+  if (!perm) { sendError(res, "Not found", 404); return; }
+
+  const [session] = await sql`SELECT project_path FROM sessions WHERE id = ${perm.session_id}`;
+  if (!session?.project_path) { sendError(res, "Session has no project path", 400); return; }
+
+  // Determine settings.local.json path (project-scoped or global)
+  const hostClaudeConfig = process.env.HOST_CLAUDE_CONFIG ?? "/host-claude-config";
+  const encodedPath = session.project_path.replace(/\//g, "%2F");
+  const projectSettings = join(hostClaudeConfig, "projects", encodedPath, "settings.local.json");
+  const globalSettings = join(hostClaudeConfig, "settings.local.json");
+
+  // Use project-scoped if it exists, else global
+  const settingsPath = await access(projectSettings).then(() => projectSettings, () => globalSettings);
+
+  let settings: any = { permissions: { allow: [] } };
+  try {
+    settings = JSON.parse(await readFile(settingsPath, "utf8"));
+    settings.permissions ??= { allow: [] };
+    settings.permissions.allow ??= [];
+  } catch {}
+
+  const pattern = `${perm.tool_name}(*)`;
+  if (!settings.permissions.allow.includes(pattern)) {
+    settings.permissions.allow.push(pattern);
+    await writeFile(settingsPath, JSON.stringify(settings, null, 2));
+  }
+
+  // Also mark as allowed
+  await sql`UPDATE permission_requests SET response = 'allow' WHERE id = ${id}`;
+  sendJson(res, { ok: true });
+}
+
+// --- WebApp auth ---
+
+async function handleAuthWebApp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const { initData } = await parseBody(req);
+  if (!initData || typeof initData !== "string") { sendError(res, "initData required"); return; }
+  const user = verifyWebAppInitData(initData);
+  if (!user) { sendError(res, "Invalid initData", 401); return; }
+
+  const allowed = CONFIG.ALLOWED_USERS.map(Number);
+  if (!allowed.includes(user.id)) { sendError(res, "Forbidden", 403); return; }
+
+  const token = await signJwt(user);
+  const secure = process.env.SECURE_COOKIES !== "false";
+  res.setHeader("Set-Cookie", `auth=${token}; HttpOnly; Path=/; Max-Age=604800; SameSite=None${secure ? "; Secure" : ""}`);
+  sendJson(res, { ok: true, user });
+}
+
 // --- Static file serving ---
+
+async function serveWebApp(res: ServerResponse, subpath: string): Promise<boolean> {
+  let filePath = resolve(join(WEBAPP_DIST_DIR, subpath));
+  if (!filePath.startsWith(WEBAPP_DIST_DIR)) return false;
+  const exists = await access(filePath).then(() => true, () => false);
+  if (!exists || !subpath || subpath === "/") filePath = join(WEBAPP_DIST_DIR, "index.html");
+  const indexExists = await access(filePath).then(() => true, () => false);
+  if (!indexExists) return false;
+  const ext = extname(filePath);
+  const contentType = MIME_TYPES[ext] || "application/octet-stream";
+  const content = await readFile(filePath);
+  res.writeHead(200, { "Content-Type": contentType });
+  res.end(content);
+  return true;
+}
 
 async function serveStatic(res: ServerResponse, pathname: string): Promise<boolean> {
   let filePath = resolve(join(DIST_DIR, pathname));
@@ -403,6 +595,10 @@ export async function handleDashboardRequest(
   const method = req.method ?? "GET";
 
   // Auth endpoints (no JWT required)
+  if (pathname === "/api/auth/webapp" && method === "POST") {
+    await handleAuthWebApp(req, res);
+    return true;
+  }
   if (pathname === "/api/auth/telegram" && method === "POST") {
     await handleAuthTelegram(req, res);
     return true;
@@ -567,8 +763,41 @@ export async function handleDashboardRequest(
       return true;
     }
 
+    // Git API
+    const gitMatch = pathname.match(/^\/api\/git\/(\d+)\/(tree|file|diff|log|status|branches|commit\/([a-f0-9]+))$/);
+    if (gitMatch && method === "GET") {
+      const sessionId = Number(gitMatch[1]);
+      const action = gitMatch[2];
+      if (action === "tree") { await handleGitTree(res, sessionId); return true; }
+      if (action === "file") { await handleGitFile(res, sessionId, url); return true; }
+      if (action === "diff") { await handleGitDiff(res, sessionId, url); return true; }
+      if (action === "log") { await handleGitLog(res, sessionId, url); return true; }
+      if (action === "status") { await handleGitStatus(res, sessionId); return true; }
+      if (action === "branches") { await handleGitBranches(res, sessionId); return true; }
+      if (gitMatch[3]) { await handleGitCommitDiff(res, sessionId, gitMatch[3]); return true; }
+    }
+
+    // Permissions API
+    const permMatch = pathname.match(/^\/api\/permissions\/(\d+)$/);
+    if (permMatch) {
+      const id = Number(permMatch[1]);
+      if (method === "GET") { await handleGetPermissions(res, id); return true; }
+    }
+    const permActionMatch = pathname.match(/^\/api\/permissions\/(\d+)\/(respond|always)$/);
+    if (permActionMatch && method === "POST") {
+      const id = Number(permActionMatch[1]);
+      if (permActionMatch[2] === "respond") { await handleRespondPermission(req, res, id); return true; }
+      if (permActionMatch[2] === "always") { await handleAlwaysAllowPermission(req, res, id); return true; }
+    }
+
     sendError(res, "Not found", 404);
     return true;
+  }
+
+  // WebApp static files
+  if (method === "GET" && pathname.startsWith("/webapp")) {
+    const subpath = pathname.slice("/webapp".length) || "/";
+    if (await serveWebApp(res, subpath)) return true;
   }
 
   // Static files (dashboard SPA)

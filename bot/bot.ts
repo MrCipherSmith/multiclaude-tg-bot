@@ -52,6 +52,15 @@ export function createBot(): Bot {
     { command: "help", description: "Help" },
   ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
 
+  // Set WebApp menu button (requires HTTPS URL for production)
+  const webAppUrl = (CONFIG.TELEGRAM_WEBHOOK_URL || "")
+    .replace(/\/$/, "")
+    .replace(/\/[^/]*$/, "") + "/webapp/";
+  if (CONFIG.TELEGRAM_WEBHOOK_URL) {
+    bot.api.setChatMenuButton({ menu_button: { type: "web_app", text: "Dev Hub", web_app: { url: webAppUrl } } })
+      .catch((err) => console.error("[bot] failed to set menu button:", err.message));
+  }
+
   // Error handler
   bot.catch((err) => {
     console.error("[bot] error:", err.message);

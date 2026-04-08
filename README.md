@@ -82,6 +82,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Auto-Approve Permissions** — configure allowed tools in `settings.local.json` (`permissions.allow` patterns like `"Edit(*)"`, `"Bash(*)"`) to skip Telegram approval for trusted operations
 - **Statistics & Logging** — `/stats` for API usage and tokens, `/logs` for per-session request logs
 - **Web Dashboard** — real-time stats (by provider, project, operation, session), token charts, cost estimation, error drill-down with slide panel, log viewer with full message detail; **Projects page** for creating, starting, and stopping projects from the browser
+- **Telegram Mini App** — mobile WebApp (Dev Hub button) with git browser (files/log/status/diffs), permission manager (Allow/Deny/Always), and session monitor; auto-themed to Telegram's light/dark mode
 
 ### Operations
 - **Health Endpoint** — `GET /health` with DB status, uptime, active sessions
@@ -701,6 +702,38 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
+
+## Recent Changes (v1.13.0)
+
+### Telegram Mini App — Claude Dev Hub
+
+A mobile-first WebApp embedded in the bot, accessible via the **Dev Hub** menu button in Telegram.
+
+**Git Browser (📁):**
+- File tree (`git ls-tree`) with fuzzy search and file viewer
+- Commit log (`git log`) with one-click diff viewer
+- Working tree status (`git status`) with per-file diffs
+- Color-coded unified diff view (green/red/blue)
+
+**Permission Manager (🔑):**
+- Real-time list of pending Claude permission requests (auto-polls every 3s)
+- ✅ Allow / ❌ Deny / ♾️ Always Allow per request
+- Always Allow writes pattern to `settings.local.json` directly from mobile
+
+**Session Monitor (📊):**
+- Live status: Working (pulsing) / Idle / Inactive based on `last_active`
+- Session detail: project, source, path, connected time
+- Pending permission count at a glance
+
+**Auth:** Telegram `initData` HMAC-SHA256 verification (separate from desktop Login Widget), same JWT cookie mechanism.
+
+**Infrastructure:**
+- Separate Vite app (`dashboard/webapp/`) built to `dashboard/webapp/dist/`, served at `/webapp/`
+- `${HOME}:/host-home:ro` Docker volume for git access to host project paths
+- `webapp-build` Dockerfile stage (parallel to dashboard build)
+- Bot menu button auto-configured via `setChatMenuButton` when `TELEGRAM_WEBHOOK_URL` is set
+
+See full spec: [docs/requirements/telegram-webapp-2026-04-06/en/telegram-webapp.md](docs/requirements/telegram-webapp-2026-04-06/en/telegram-webapp.md)
 
 ## Recent Changes (v1.12.0)
 

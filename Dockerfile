@@ -8,6 +8,13 @@ RUN cd dashboard && bun install --frozen-lockfile
 COPY dashboard/ dashboard/
 RUN cd dashboard && bun run build
 
+# Stage 1b: Build webapp
+FROM base AS webapp-build
+COPY dashboard/webapp/package.json dashboard/webapp/bun.lock* ./dashboard/webapp/
+RUN cd dashboard/webapp && bun install --frozen-lockfile
+COPY dashboard/webapp/ dashboard/webapp/
+RUN cd dashboard/webapp && bun run build
+
 # Stage 2: Production
 FROM base AS production
 
@@ -20,6 +27,9 @@ COPY . .
 
 # Copy dashboard build output from stage 1
 COPY --from=dashboard-build /app/dashboard/dist dashboard/dist
+
+# Copy webapp build output from stage 1b
+COPY --from=webapp-build /app/dashboard/webapp/dist dashboard/webapp/dist
 
 # Ensure downloads dir exists and is writable
 RUN mkdir -p /app/downloads

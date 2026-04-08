@@ -1,0 +1,40 @@
+{
+  "phase": "EXECUTION",
+  "intent": "implement",
+  "job_name": "task--product-overview-planned",
+  "create_pr": true,
+  "context": {
+    "source": "PRD docs/requirements/product-overview-2026-04-07",
+    "project_dir": "/home/altsay/bots/claude-bot",
+    "base_branch": "main"
+  },
+  "branch": {
+    "name": "feature/product-overview-planned",
+    "worktree_path": "/home/altsay/bots/product-overview-planned",
+    "merge_base": null
+  },
+  "plan": {
+    "steps": [
+      {"id": "context",      "type": "context",   "agent": "context-collector", "status": "completed"},
+      {"id": "prepare",      "type": "prepare",   "agent": "orchestrator",      "status": "pending"},
+      {"id": "task-2-ttl",   "type": "implement", "agent": "task-implementer",  "status": "pending", "wave": 1},
+      {"id": "task-1-dash",  "type": "implement", "agent": "task-implementer",  "status": "pending", "wave": 2},
+      {"id": "task-3-notif", "type": "implement", "agent": "task-implementer",  "status": "pending", "wave": 3},
+      {"id": "sanity-check", "type": "check",     "agent": "orchestrator",      "status": "pending"},
+      {"id": "review",       "type": "review",    "agent": "code-review",       "status": "pending"},
+      {"id": "fix",          "type": "fix",       "agent": "task-implementer",  "status": "pending", "conditional": true},
+      {"id": "checks",       "type": "check",     "agent": "orchestrator",      "status": "pending"},
+      {"id": "report",       "type": "report",    "agent": "orchestrator",      "status": "pending"},
+      {"id": "pr",           "type": "pr",        "agent": "orchestrator",      "status": "pending", "conditional": true}
+    ],
+    "current_step": "prepare"
+  },
+  "implementation": {
+    "task_results": {},
+    "all_commits": [],
+    "all_files": []
+  },
+  "documentation": {
+    "job_path": "/home/altsay/bots/claude-bot/jobs/task--product-overview-planned"
+  }
+}

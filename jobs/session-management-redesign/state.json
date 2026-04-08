@@ -1,0 +1,32 @@
+{
+  "phase": "EXECUTION",
+  "intent": "implement",
+  "job_name": "session-management-redesign",
+  "jobs_root": "/home/altsay/bots/claude-bot/jobs",
+  "context": {
+    "project_dir": "/home/altsay/bots/claude-bot",
+    "base_branch": "main",
+    "prd_path": "docs/requirements/session-management-redesign-2026-04-07/ai/session-management-redesign.md"
+  },
+  "branch": {
+    "name": "feature/session-mgmt-redesign",
+    "worktree_path": "/home/altsay/bots/session-mgmt-redesign",
+    "merge_base": null
+  },
+  "plan": {
+    "current_step": "context",
+    "steps": [
+      {"id": "context",    "status": "in_progress"},
+      {"id": "prepare",    "status": "pending"},
+      {"id": "wave1",      "status": "pending"},
+      {"id": "wave2",      "status": "pending"},
+      {"id": "wave3",      "status": "pending"},
+      {"id": "sanity",     "status": "pending"},
+      {"id": "review",     "status": "pending"},
+      {"id": "fix",        "status": "pending"},
+      {"id": "checks",     "status": "pending"},
+      {"id": "report",     "status": "pending"},
+      {"id": "pr",         "status": "pending"}
+    ]
+  }
+}
