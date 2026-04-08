@@ -1,6 +1,5 @@
 import type { Context } from "grammy";
 import { basename, join } from "path";
-import { homedir } from "os";
 import { setPendingInput } from "../handlers.ts";
 import { sql } from "../../memory/db.ts";
 import { sessionManager } from "../../sessions/manager.ts";
@@ -13,7 +12,8 @@ export async function handleProjectAdd(ctx: Context): Promise<void> {
     await addProject(ctx, arg);
   } else {
     const chatId = String(ctx.chat!.id);
-    await ctx.reply(`Enter project path:\ne.g. ${join(homedir(), "my-project")}`);
+    const hostHome = process.env.HOST_HOME ?? "/home/user";
+    await ctx.reply(`Enter project path:\ne.g. ${join(hostHome, "my-project")}`);
     setPendingInput(chatId, async (replyCtx) => {
       const path = replyCtx.message?.text?.trim() ?? "";
       await addProject(replyCtx, path);

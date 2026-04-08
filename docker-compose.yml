@@ -14,6 +14,7 @@ services:
       HOST_DOWNLOADS_DIR: ${HOST_DOWNLOADS_DIR:-${PWD}/downloads}
       KNOWLEDGE_BASE: ${KNOWLEDGE_BASE:-}
       HOST_CLAUDE_CONFIG: /host-claude-config
+      HOST_HOME: ${HOME}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
