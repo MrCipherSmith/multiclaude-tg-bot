@@ -44,6 +44,8 @@ async function handleMedia(
     ? `${description}: ${caption}\n[file: ${hostPath}]`
     : `${description}\n[file: ${hostPath}]`;
 
+  logger.info({ route: route.mode, hostPath }, "media downloaded, routing");
+
   if (route.mode === "cli") {
     // Build attachment for forwarding to Claude
     const isImage = (mimeType ?? "").startsWith("image/") || description.startsWith("Photo");
@@ -155,6 +157,7 @@ export async function handlePhoto(ctx: Context): Promise<void> {
 export async function handleDocument(ctx: Context): Promise<void> {
   const doc = ctx.message?.document;
   if (!doc) return;
+  logger.info({ fileId: doc.file_id, fileName: doc.file_name, mime: doc.mime_type, size: doc.file_size }, "document received");
   await handleMedia(
     ctx,
     doc.file_id,
