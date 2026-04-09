@@ -2,6 +2,7 @@ import type { Bot } from "grammy";
 import { streamResponse, type MessageParam, type StreamContext } from "../claude/client.ts";
 import { chunkText } from "../utils/chunk.ts";
 import { markdownToTelegramHtml } from "./format.ts";
+import { logger } from "../logger.ts";
 
 const EDIT_INTERVAL_MS = 1500;
 const TYPING_INDICATOR = "...";
@@ -39,7 +40,7 @@ export async function streamToTelegram(
         try {
           await bot.api.editMessageText(Number(chatId), messageId, firstChunk);
         } catch (e) {
-          console.warn("[streaming] fallback edit failed:", (e as Error)?.message);
+          logger.warn({ err: e }, "streaming: fallback edit failed");
         }
       } else if (!err?.description?.includes("message is not modified")) {
         if (err?.error_code === 429) {
@@ -48,10 +49,10 @@ export async function streamToTelegram(
           try {
             await bot.api.editMessageText(Number(chatId), messageId, firstChunk);
           } catch (e) {
-            console.warn("[streaming] retry edit failed:", (e as Error)?.message);
+            logger.warn({ err: e }, "streaming: retry edit failed");
           }
         } else {
-          console.warn("[streaming] edit error:", err?.message);
+          logger.warn({ err }, "streaming: edit error");
         }
       }
     }
@@ -68,7 +69,7 @@ export async function streamToTelegram(
           try {
             await bot.api.sendMessage(Number(chatId), chunk);
           } catch (e) {
-            console.warn("[streaming] failed to send continuation chunk:", (e as Error)?.message);
+            logger.warn({ err: e }, "streaming: failed to send continuation chunk");
           }
         }
       }
@@ -84,7 +85,7 @@ export async function streamToTelegram(
       const snapshot = accumulated;
       // Sequential: wait for previous edit before starting next
       editInFlight = doEdit(snapshot)
-        .catch((err) => console.warn("[streaming] edit failed:", err?.message))
+        .catch((err) => logger.warn({ err }, "streaming: edit failed"))
         .finally(() => { editInFlight = null; });
     }
   }

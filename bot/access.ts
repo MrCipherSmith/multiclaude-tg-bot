@@ -1,5 +1,6 @@
 import type { Context, NextFunction } from "grammy";
 import { CONFIG } from "../config.ts";
+import { logger } from "../logger.ts";
 
 export async function accessMiddleware(
   ctx: Context,
@@ -19,5 +20,5 @@ export async function accessMiddleware(
   }
 
   // Silently drop unauthorized messages
-  console.log(`[access] denied user ${userId}`);
+  logger.warn({ userId }, "access denied");
 }

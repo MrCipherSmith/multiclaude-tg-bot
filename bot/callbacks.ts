@@ -7,6 +7,7 @@ import { setPendingTool } from "./handlers.ts";
 import { enqueueToolCommand } from "./text-handler.ts";
 import { doSwitch } from "./commands/session.ts";
 import { permissionService } from "../services/permission-service.ts";
+import { logger } from "../logger.ts";
 
 export async function handleCallbackQuery(ctx: Context): Promise<void> {
   const data = ctx.callbackQuery?.data;
@@ -164,10 +165,10 @@ async function handlePermissionCallback(ctx: Context): Promise<void> {
             const dir = settingsPath.split("/").slice(0, -1).join("/");
             await import("fs/promises").then((fs) => fs.mkdir(dir, { recursive: true }));
             await Bun.write(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-            console.log(`[perm] added ${pattern} to ${settingsPath}`);
+            logger.info({ pattern, path: settingsPath }, "auto-approve pattern added");
           }
         } catch (err) {
-          console.error(`[perm] failed to write ${settingsPath}:`, err);
+          logger.error({ err, path: settingsPath }, "failed to write auto-approve settings");
         }
       }
 

@@ -5,6 +5,7 @@ import { deleteSessionCascade } from "../../sessions/delete.ts";
 import { sql } from "../../memory/db.ts";
 import { setPendingInput } from "../handlers.ts";
 import { setSwitchContext, clearSwitchContext } from "../switch-cache.ts";
+import { logger } from "../../logger.ts";
 
 export async function handleStart(ctx: Context): Promise<void> {
   await ctx.reply(
@@ -178,7 +179,7 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
         projectPath: session.projectPath,
         loadedAt: new Date(),
       });
-      console.log(`[switch] session #${currentId} → #${targetSessionId}: briefing loaded from memories`);
+      logger.info({ from: currentId, to: targetSessionId }, "switch: briefing loaded from memories");
       try {
         const formattedBriefing = formatBriefing(mem.content);
         await ctx.reply(`📋 *Context: ${session.project ?? sessionDisplayName(session)}*\n\n${formattedBriefing}`, {
@@ -189,7 +190,7 @@ export async function doSwitch(ctx: Context, targetSessionId: number): Promise<v
         await ctx.reply(`📋 Context: ${session.project ?? sessionDisplayName(session)}\n\n${mem.content}`);
       }
     } else {
-      console.log(`[switch] session #${currentId} → #${targetSessionId}: no briefing available`);
+      logger.info({ from: currentId, to: targetSessionId }, "switch: no briefing available");
       clearSwitchContext(chatId);
     }
   }

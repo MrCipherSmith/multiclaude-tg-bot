@@ -8,6 +8,7 @@ import { downloadFile, toHostPath } from "../utils/files.ts";
 import { transcribe } from "../utils/transcribe.ts";
 import { touchIdleTimer } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
+import { logger } from "../logger.ts";
 import { appendLog } from "../utils/stats.ts";
 import { getBotRef } from "./handlers.ts";
 
@@ -30,7 +31,7 @@ async function handleMedia(
   try {
     filePath = await downloadFile(bot, fileId, filename);
   } catch (err) {
-    console.error("[handler] file download failed:", err);
+    logger.error({ err }, "file download failed");
     await ctx.reply("Failed to download file.");
     return;
   }
@@ -149,7 +150,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
     filePath = await downloadFile(bot, voice.file_id);
     appendLog(route.sessionId, chatId, "voice", `downloaded: ${filePath}`);
   } catch (err) {
-    console.error("[handler] voice download failed:", err);
+    logger.error({ err }, "voice download failed");
     appendLog(route.sessionId, chatId, "voice", `download failed: ${err}`, "error");
     await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "🎤 Failed to download voice message.");
     return;

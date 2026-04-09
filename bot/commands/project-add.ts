@@ -3,6 +3,7 @@ import { basename, join } from "path";
 import { setPendingInput } from "../handlers.ts";
 import { sql } from "../../memory/db.ts";
 import { sessionManager } from "../../sessions/manager.ts";
+import { logger } from "../../logger.ts";
 
 export async function handleProjectAdd(ctx: Context): Promise<void> {
   const text = ctx.message?.text ?? "";
@@ -54,6 +55,6 @@ async function addProject(ctx: Context, path: string): Promise<void> {
   // Trigger async project knowledge scan (non-blocking)
   const { scanProjectKnowledge } = await import("../../memory/project-scanner.ts");
   scanProjectKnowledge(project.path as string).catch((err) =>
-    console.error("[project-add] scan error:", err)
+    logger.error({ err, path: project.path }, "project-add: scan error")
   );
 }

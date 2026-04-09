@@ -3,6 +3,7 @@ import { autoRetry } from "@grammyjs/auto-retry";
 import { CONFIG } from "../config.ts";
 import { accessMiddleware } from "./access.ts";
 import { registerHandlers, setBotRef } from "./handlers.ts";
+import { logger } from "../logger.ts";
 
 export function createBot(): Bot {
   const bot = new Bot(CONFIG.TELEGRAM_BOT_TOKEN);
@@ -56,7 +57,7 @@ export function createBot(): Bot {
     { command: "cleanup", description: "Clean up inactive sessions" },
     // Help
     { command: "help", description: "Help" },
-  ]).catch((err) => console.error("[bot] failed to set commands:", err.message));
+  ]).catch((err) => logger.error({ err }, "failed to set bot commands"));
 
   // Set WebApp menu button (requires HTTPS URL for production)
   const webAppUrl = (CONFIG.TELEGRAM_WEBHOOK_URL || "")
@@ -64,12 +65,12 @@ export function createBot(): Bot {
     .replace(/\/[^/]*$/, "") + "/webapp/";
   if (CONFIG.TELEGRAM_WEBHOOK_URL) {
     bot.api.setChatMenuButton({ menu_button: { type: "web_app", text: "Dev Hub", web_app: { url: webAppUrl } } })
-      .catch((err) => console.error("[bot] failed to set menu button:", err.message));
+      .catch((err) => logger.error({ err }, "failed to set menu button"));
   }
 
   // Error handler
   bot.catch((err) => {
-    console.error("[bot] error:", err.message);
+    logger.error({ err }, "bot error");
   });
 
   return bot;
