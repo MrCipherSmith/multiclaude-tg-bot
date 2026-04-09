@@ -90,6 +90,31 @@ Live overview of all sessions.
 
 ---
 
+## Session Timeline (🕐)
+
+Chronological view of all messages and tool calls interleaved in one list.
+
+**Filter bar:**
+- **All** — messages and tool events together
+- **Messages** — only chat messages (user/assistant/system)
+- **Tools** — only tool call events
+
+**Message bubbles:**
+- User messages — right-aligned blue bubble
+- Assistant messages — left-aligned gray bubble
+- System messages — centered small gray text
+
+**Tool events:**
+- Compact row: `🔧 tool_name` + response dot (🟢 allow / 🔴 deny / 🟡 pending) + timestamp
+- Description shown below tool name (truncated)
+
+**Pagination:** "Load older" button at top — loads 100 earlier items, does not disrupt auto-refresh  
+**Auto-refresh:** every 5s, but only when viewing the latest page (pauses if you've navigated to older items)
+
+**Export:** Use `/session_export [id]` in Telegram to download the full session as a `.md` transcript file.
+
+---
+
 ## Authentication
 
 The app uses Telegram's built-in auth:

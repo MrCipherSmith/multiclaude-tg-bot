@@ -62,7 +62,7 @@ export function getBotRef(): Bot {
 
 import { handleSessions, handleSwitch, handleSwitchTo, handleSessionInfo, handleRename, handleRemove, handleCleanup, handleStart, handleHelp } from "./commands/session.ts";
 import { handleRemember, handleRecall, handleMemories, handleForget, handleSummarize, handleClear } from "./commands/memory.ts";
-import { handleStats, handleLogs, handleStatus, handlePending, handleTools, handleSkills, handleCommands, handleHooks, handleRules, handlePermissionStats } from "./commands/admin.ts";
+import { handleStats, handleLogs, handleStatus, handlePending, handleTools, handleSkills, handleCommands, handleHooks, handleRules, handlePermissionStats, handleSessionExport } from "./commands/admin.ts";
 import { handleAdd } from "./commands/add.ts";
 import { handleModel } from "./commands/model.ts";
 import { handleRemoteControl } from "./commands/remote-control.ts";
@@ -109,6 +109,7 @@ export function registerHandlers(b: Bot): void {
   b.command("logs", handleLogs);
   b.command("pending", handlePending);
   b.command("permission_stats", handlePermissionStats);
+  b.command("session_export", handleSessionExport);
   b.command("tools", handleTools);
   b.command("skills", handleSkills);
   b.command("commands", handleCommands);

@@ -38,6 +38,7 @@ export function createBot(): Bot {
     { command: "stats", description: "API stats, tokens, transcriptions" },
     { command: "logs", description: "Session logs" },
     { command: "status", description: "Bot health (DB, Ollama)" },
+    { command: "session_export", description: "Export session as markdown transcript" },
     // Knowledge base
     { command: "skills", description: "Skills from goodai-base" },
     { command: "rules", description: "Rules from goodai-base" },

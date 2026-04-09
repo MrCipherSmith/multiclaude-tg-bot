@@ -82,6 +82,14 @@ export const api = {
     req<{ messages: { id: number; role: string; content: string; created_at: string }[]; total: number }>(
       `/api/sessions/${id}/messages?limit=${limit}&offset=${offset}`
     ),
+  sessionTimeline: (id: number, limit = 100, offset = 0) =>
+    req<{
+      items: { kind: "message" | "tool"; id: number; actor: string; content: string; response: string | null; created_at: string }[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/api/sessions/${id}/timeline?limit=${limit}&offset=${offset}`),
+
   globalStats: () =>
     req<{
       api: Record<string, {

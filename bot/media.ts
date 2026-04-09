@@ -155,14 +155,34 @@ export async function handleVoice(ctx: Context): Promise<void> {
     return;
   }
 
-  // Transcribe
+  // Transcribe — with live elapsed-time progress updates
   await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "🎤 Transcribing speech...");
   const fileData = await Bun.file(filePath).arrayBuffer();
-  const text = await transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
-    sessionId: route.sessionId,
-    chatId,
-    audioDurationSec: voice.duration,
-  });
+
+  const transcribeStart = Date.now();
+  let progressTimer: ReturnType<typeof setInterval> | null = null;
+  let progressCancelled = false;
+
+  // Only start progress ticker for voice messages ≥10s (short ones resolve before first tick)
+  if (voice.duration >= 10) {
+    progressTimer = setInterval(() => {
+      if (progressCancelled) return;
+      const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
+      bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, `🎤 Transcribing... (${elapsed}s)`).catch(() => {});
+    }, 5000);
+  }
+
+  let text: string | null;
+  try {
+    text = await transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
+      sessionId: route.sessionId,
+      chatId,
+      audioDurationSec: voice.duration,
+    });
+  } finally {
+    progressCancelled = true;
+    if (progressTimer) clearInterval(progressTimer);
+  }
 
   if (text) {
     appendLog(route.sessionId, chatId, "voice", `transcribed: ${text.slice(0, 80)}`);
