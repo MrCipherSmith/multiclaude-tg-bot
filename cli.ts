@@ -1138,6 +1138,7 @@ function help() {
   ${c.bold("Tmux:")}
     up [-a] [-s]    Start all projects in tmux (-a attach, -s split panes)
     down            Stop all tmux sessions + clean DB
+    bounce [-a] [-s] Restart tmux (down + up in one command)
     ps              List configured projects and status
     add [dir]       Add project (saves to config + registers in bot DB)
     run [dir]       Launch project in current terminal
@@ -1172,6 +1173,7 @@ switch (command) {
   case "mcp-register": await mcpRegister(); break;
   case "up":          await tmuxStart(); break;
   case "down":        await tmuxStop(); break;
+  case "bounce":      await tmuxStop(); await tmuxStart(); break;
   case "ps":          await tmuxList(); break;
   case "add":         await tmuxAdd(process.argv[3]); break;
   case "run":         await tmuxRun(process.argv[3]); break;
