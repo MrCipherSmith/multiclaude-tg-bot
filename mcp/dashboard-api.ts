@@ -552,7 +552,7 @@ async function handleSessionTimeline(res: ServerResponse, sessionId: number, url
     FROM messages
     WHERE session_id = ${sessionId} AND archived_at IS NULL
     UNION ALL
-    SELECT 'tool', id::text, tool_name, description, response, created_at
+    SELECT 'tool', id::text, tool_name, description, COALESCE(status, response), created_at
     FROM permission_requests
     WHERE session_id = ${sessionId} AND archived_at IS NULL
     UNION ALL
@@ -578,9 +578,9 @@ async function handleSessionTimeline(res: ServerResponse, sessionId: number, url
 
 async function handleGetPermissions(res: ServerResponse, sessionId: number): Promise<void> {
   const rows = await sql`
-    SELECT id, tool_name, description, created_at
+    SELECT id, tool_name, description, status, created_at
     FROM permission_requests
-    WHERE session_id = ${sessionId} AND response IS NULL
+    WHERE session_id = ${sessionId} AND status = 'pending'
     ORDER BY created_at ASC
   `;
   sendJson(res, rows);
@@ -626,7 +626,9 @@ async function handleRespondPermission(req: IncomingMessage, res: ServerResponse
   const { response } = await parseBody(req);
   if (!["allow", "deny"].includes(response)) { sendError(res, "response must be allow or deny"); return; }
   const rows = await sql`
-    UPDATE permission_requests SET response = ${response} WHERE id = ${id} AND response IS NULL RETURNING id, session_id
+    UPDATE permission_requests SET response = ${response}, status = ${response === "allow" ? "approved" : "rejected"}
+    WHERE id = ${id} AND status = 'pending'
+    RETURNING id, session_id
   `;
   if (rows.length === 0) { sendError(res, "Permission request not found or already answered", 404); return; }
   sendJson(res, { ok: true });
@@ -662,7 +664,7 @@ async function handleAlwaysAllowPermission(req: IncomingMessage, res: ServerResp
   }
 
   // Also mark as allowed
-  await sql`UPDATE permission_requests SET response = 'allow' WHERE id = ${id}`;
+  await sql`UPDATE permission_requests SET response = 'allow', status = 'approved' WHERE id = ${id}`;
   sendJson(res, { ok: true });
 }
 

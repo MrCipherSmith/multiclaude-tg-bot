@@ -516,8 +516,9 @@ mcp.setNotificationHandler(
     }
 
     if (!resolved) {
-      // Timeout — deny
+      // Timeout — mark expired in DB, then deny
       process.stderr.write(`[channel] permission ${request_id}: timeout, denying\n`);
+      await sql`UPDATE permission_requests SET status = 'expired' WHERE id = ${request_id} AND status = 'pending'`;
       await mcp.notification({
         method: "notifications/claude/channel/permission",
         params: { request_id, behavior: "deny" },

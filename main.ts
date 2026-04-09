@@ -4,6 +4,7 @@ import { createBot } from "./bot/bot.ts";
 import { startMcpHttpServer } from "./mcp/server.ts";
 import { stopAllTimers } from "./memory/summarizer.ts";
 import { runCleanup } from "./cleanup/runner.ts";
+import { permissionService } from "./services/permission-service.ts";
 import "./adapters/index.ts"; // Register all CLI adapters at startup
 
 const DRY_RUN = process.env.DRY_RUN === "true";
@@ -19,6 +20,10 @@ async function main() {
 
   // 1. Database migrations
   await migrate();
+
+  // Recover stale pending permissions (process may have crashed mid-timeout)
+  const expired = await permissionService.expireStale(120_000);
+  if (expired > 0) console.log(`[main] expired ${expired} stale pending permission(s)`);
 
   // Security check — fail fast if no access control is configured
   if (CONFIG.ALLOWED_USERS.length === 0 && !CONFIG.ALLOW_ALL_USERS) {

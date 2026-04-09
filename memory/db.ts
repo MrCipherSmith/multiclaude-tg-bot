@@ -325,6 +325,19 @@ const migrations: Migration[] = [
       await tx`CREATE INDEX IF NOT EXISTS idx_memories_archived_at ON memories(archived_at) WHERE archived_at IS NOT NULL`;
     },
   },
+  {
+    version: 10,
+    name: "permission_requests status column",
+    up: async (tx) => {
+      await tx`ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`;
+      // Backfill from existing response column
+      await tx`UPDATE permission_requests SET status = 'approved' WHERE response = 'allow'`;
+      await tx`UPDATE permission_requests SET status = 'rejected' WHERE response = 'deny'`;
+      // Rows with no response older than 10 minutes are expired
+      await tx`UPDATE permission_requests SET status = 'expired' WHERE response IS NULL AND created_at < NOW() - INTERVAL '10 minutes'`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_permissions_status ON permission_requests(status)`;
+    },
+  },
 ];
 
 // --- Public API ---
