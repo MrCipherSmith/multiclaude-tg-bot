@@ -5,7 +5,7 @@
 [![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/lang-TypeScript-3178c6)](https://www.typescriptlang.org)
 
-[Dashboard](examples/dashboard.md) | [Usage Patterns](examples/usage-patterns.md) | [Cloudflare Tunnel](guides/cloudflare-tunnel-setup.md) | [CLAUDE.md Guide](CLAUDE_MD_GUIDE.md)
+[Dashboard](examples/dashboard.md) | [Usage Patterns](examples/usage-patterns.md) | [Cloudflare Tunnel](guides/cloudflare-tunnel-setup.md) | [Remote Laptop Setup](guides/remote-laptop-setup.md) | [CLAUDE.md Guide](CLAUDE_MD_GUIDE.md)
 
 > **Control Claude Code from Telegram.** Multi-session bot with persistent projects, dual-layer memory, voice transcription, image analysis, and real-time CLI progress monitoring.
 
@@ -404,6 +404,8 @@ claude-bot remote
 ```
 
 The wizard will guide you through SSH tunnel setup and MCP registration.
+
+See [Remote Laptop Setup](guides/remote-laptop-setup.md) for a full walkthrough of both connection methods (SSH tunnel and HTTP-only), manual setup steps, and troubleshooting.
 
 ### CLI Commands
 
