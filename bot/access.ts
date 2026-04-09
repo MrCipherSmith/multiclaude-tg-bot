@@ -9,8 +9,8 @@ export async function accessMiddleware(
 
   if (!userId) return;
 
-  // If no allowlist configured, allow everyone (dev mode)
-  if (CONFIG.ALLOWED_USERS.length === 0) {
+  // If explicitly opened to all users
+  if (CONFIG.ALLOW_ALL_USERS) {
     return next();
   }
 

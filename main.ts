@@ -97,9 +97,16 @@ async function main() {
   // 1. Database migrations
   await migrate();
 
-  // Security warnings
-  if (CONFIG.ALLOWED_USERS.length === 0) {
-    console.warn("[main] ⚠ WARNING: ALLOWED_USERS is empty — bot and dashboard are open to ALL Telegram users!");
+  // Security check — fail fast if no access control is configured
+  if (CONFIG.ALLOWED_USERS.length === 0 && !CONFIG.ALLOW_ALL_USERS) {
+    console.error(
+      "[main] FATAL: ALLOWED_USERS is not set and ALLOW_ALL_USERS is not 'true'.\n" +
+      "  Set ALLOWED_USERS=<your_telegram_id> in .env, or set ALLOW_ALL_USERS=true to explicitly allow all users."
+    );
+    process.exit(1);
+  }
+  if (CONFIG.ALLOW_ALL_USERS) {
+    console.warn("[main] ⚠ ALLOW_ALL_USERS=true — bot is open to ALL Telegram users");
   }
 
   // 2. Create Telegram bot

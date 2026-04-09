@@ -14,10 +14,15 @@ import { addSSEClient, removeSSEClient, getSSEClientCount } from "./notification
 const DIST_DIR = join(import.meta.dirname, "../dashboard/dist");
 const WEBAPP_DIST_DIR = join(import.meta.dirname, "../dashboard/webapp/dist");
 
-// Map host project_path to container-accessible path via /host-home mount
-const HOST_HOME = process.env.HOST_HOME ?? homedir();
+// Map host project_path to container-accessible path
+const HOST_PROJECTS_DIR = process.env.HOST_PROJECTS_DIR ?? (homedir() + "/bots");
 function hostToContainerPath(hostPath: string): string {
-  if (hostPath.startsWith(HOST_HOME)) {
+  if (hostPath.startsWith(HOST_PROJECTS_DIR)) {
+    return "/host-projects" + hostPath.slice(HOST_PROJECTS_DIR.length);
+  }
+  // Fallback for legacy HOST_HOME mount during transition
+  const HOST_HOME = process.env.HOST_HOME ?? homedir();
+  if (process.env.HOST_HOME && hostPath.startsWith(HOST_HOME)) {
     return "/host-home" + hostPath.slice(HOST_HOME.length);
   }
   return hostPath; // fallback: same path (manual/non-Docker runs)

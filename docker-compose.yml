@@ -14,7 +14,7 @@ services:
       HOST_DOWNLOADS_DIR: ${HOST_DOWNLOADS_DIR:-${PWD}/downloads}
       KNOWLEDGE_BASE: ${KNOWLEDGE_BASE:-}
       HOST_CLAUDE_CONFIG: /host-claude-config
-      HOST_HOME: ${HOME}
+      HOST_PROJECTS_DIR: ${HOST_PROJECTS_DIR:-${HOME}/bots}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
@@ -22,7 +22,7 @@ services:
       - ${HOME}/.claude:/host-claude-config
       - ${KNOWLEDGE_BASE_PATH:-./.empty}:/app/knowledge-base:ro
       - ./tmux-projects.json:/app/tmux-projects.json
-      - ${HOME}:/host-home:ro
+      - ${HOST_PROJECTS_DIR:-${HOME}/bots}:/host-projects:ro
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:${PORT:-3847}/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 15s
