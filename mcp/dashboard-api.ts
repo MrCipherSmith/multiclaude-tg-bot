@@ -703,6 +703,21 @@ export async function handleDashboardRequest(
       await handleSessions(req, res);
       return true;
     }
+    if (pathname === "/api/sessions/active" && method === "GET") {
+      const user = await getUser(req);
+      if (!user) { sendError(res, "Unauthorized", 401); return true; }
+      const chatId = String(user.id);
+      const [chatSess] = await sql`
+        SELECT active_session_id FROM chat_sessions WHERE chat_id = ${chatId}
+      `;
+      if (!chatSess?.active_session_id) { sendJson(res, null); return true; }
+      const [session] = await sql`
+        SELECT id, name, project, project_path, source, status, last_active
+        FROM sessions WHERE id = ${chatSess.active_session_id}
+      `;
+      sendJson(res, session ?? null);
+      return true;
+    }
     if (sessionMatch) {
       const id = Number(sessionMatch[1]);
       const sub = sessionMatch[2];
