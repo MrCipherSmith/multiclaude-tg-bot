@@ -51,13 +51,14 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Multi-Session MCP Server** — multiple Claude Code CLI instances connect via HTTP, each as a named session
 - **Session Switching** — `/switch` between CLI sessions and standalone mode, with context summary and last messages
 - **One Session Per Project** — reconnecting CLIs reuse existing sessions, preserving ID and memory
-- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications, with session lock retry, advisory locking, and graceful shutdown on stdin close
+- **Channel Adapter** — stdio bridge that forwards Telegram messages to Claude Code as channel notifications, with lease-based session ownership (TTL lease in DB, auto-expires on crash), and graceful shutdown on stdin close
 - **Auto-Named Sessions** — CLI sessions automatically named after the project directory, with source labels (tmux/cli)
 
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / Google AI / OpenRouter / Ollama) with automatic retry on 429/5xx
 - **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
+- **File Forwarding** — photos, documents, and videos forwarded to Claude via MCP with base64 (≤5 MB images) or file path; if sent without caption, bot asks what to do before forwarding
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
 
 ### Session Lifecycle
@@ -91,11 +92,12 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Docker-First** — bot + PostgreSQL in Docker Compose, Ollama on host
 
 ### Architecture Quality
-- **Service Layer** — `services/` directory with `SessionService`, `ProjectService`, `PermissionService`, `MemoryService`; typed wrappers over raw SQL with atomic operations
+- **Service Layer** — `services/` directory with `SessionService`, `ProjectService`, `PermissionService`, `MemoryService`, `MessageService`, `SummarizationService`; typed wrappers over raw SQL with atomic operations
 - **Zod Config Validation** — all env vars parsed and validated at startup via `config.ts`; bot exits immediately on missing required vars
 - **Structured Logging (Pino)** — JSON-structured logs throughout the codebase; `LOG_LEVEL` env var; `channelLogger` writes to stderr fd 2 for MCP stdio compatibility
 - **Unit Test Suite** — 43 pure unit tests in `tests/unit/` covering session lifecycle, permission state machine, and memory reconciliation; runs in ~24ms with `bun test tests/unit/`
-- **Security Defaults** — `ALLOWED_USERS` required at startup; `ALLOW_ALL_USERS=true` must be set explicitly for open access
+- **Security Defaults** — bot exits immediately at startup if `ALLOWED_USERS` is empty and `ALLOW_ALL_USERS=true` is not set; no silent open-access deployments
+- **Session State Machine** — `sessions/state-machine.ts` enforces valid status transitions (`active→inactive`, `active→terminated`, `inactive→active`); invalid transitions are blocked and logged
 
 ## Architecture
 
@@ -347,18 +349,19 @@ Setup:
   claude-bot remote             Connect laptop to remote server
   claude-bot mcp-register       Re-register MCP servers
 
-Manage:
-  claude-bot docker-start       Start Docker containers (docker compose up -d)
-  claude-bot stop               Stop Docker + tmux
-  claude-bot restart            Rebuild and restart bot
-  claude-bot status             Bot health, uptime, docker status
-  claude-bot logs               Follow bot logs
+Bot (Docker service):
+  claude-bot bot-start          Start Docker containers (docker compose up -d)
+  claude-bot bot-stop           Stop Docker + tmux
+  claude-bot bot-restart        Rebuild and restart bot
+  claude-bot bot-status         Bot health, uptime, docker status
+  claude-bot bot-logs           Follow bot logs
+  claude-bot bounce             Stop tmux + restart (quick reload)
 
 Data:
   claude-bot sessions           List active sessions
   claude-bot prune              Remove stale sessions (interactive)
   claude-bot backup             Database backup
-  claude-bot cleanup            Clean old queue, logs, stats
+  claude-bot cleanup [--dry-run]   Clean old queue, logs, stats (--dry-run to preview)
 
 Tmux:
   claude-bot up [-a] [-s]       Start all projects in tmux (-s split panes)
@@ -370,7 +373,7 @@ Tmux:
   claude-bot remove <name>          Remove project from config
 
 Connect:
-  claude-bot start [dir]            Launch Claude Code in current terminal
+  claude-bot open [dir]             Launch Claude Code in current terminal
   claude-bot connect [dir] [-t]     Start single CLI session
 ```
 
@@ -597,10 +600,11 @@ claude-bot connect . --tmux
 
 ### Docker Compose
 ```bash
-claude-bot docker-start   # docker compose up -d
-claude-bot restart        # rebuild and restart
-claude-bot logs           # follow logs
-claude-bot stop           # tmux down + docker compose down
+claude-bot bot-start      # docker compose up -d
+claude-bot bot-restart    # rebuild and restart
+claude-bot bot-logs       # follow logs
+claude-bot bot-stop       # tmux down + docker compose down
+claude-bot bounce         # quick reload (stop tmux → wait → start)
 ```
 
 ### Database Backup
@@ -624,6 +628,40 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
+
+## Recent Changes (v1.19.0)
+
+### Lease-Based Session Ownership (П.1)
+
+Replaced `pg_advisory_lock` with a `lease_owner` + `lease_expires_at` column in the `sessions` table (migration v12). The lease is renewed every 60 seconds; if the channel process crashes, the lease auto-expires after 3 minutes and another process can take over. Eliminates orphaned locks and connection-scope issues from PostgreSQL pool reconnects.
+
+### Session State Machine (П.5)
+
+`sessions/state-machine.ts` defines valid status transitions and enforces them atomically. Invalid transitions (e.g., `terminated → active`) are blocked with a warning log. All disconnects in `sessions/manager.ts` and `channel/session.ts` now route through `transitionSession()`.
+
+### File Intent Prompt
+
+Files and photos received without a caption now trigger a prompt: `📎 filename сохранён. Что с ним сделать?`. The bot waits up to 5 minutes for the user's reply, then forwards the file to Claude with that text as the caption. Files with a caption still forward immediately.
+
+### MessageService & SummarizationService (П.2)
+
+`services/message-service.ts` and `services/summarization-service.ts` wrap short-term memory and summarizer functions with a clean typed API, including `queue()` with attachments support and `pendingCount()`.
+
+### Centralized Telegram API Client (П.6)
+
+`channel/telegram.ts` now exposes a unified `telegramRequest()` with automatic retry on 429 (respects `retry_after`) and 5xx errors (3 retries with backoff). All tool calls and status updates route through it.
+
+### Cleanup Jobs with Dry-Run (П.3)
+
+`cleanup/jobs.ts` exposes `runAllCleanupJobs(dryRun)` with per-job row counts. `handleCleanup` in the bot and `claude-bot cleanup --dry-run` in the CLI use it to preview or apply cleanup.
+
+### Security Fail-Fast (П.4)
+
+Bot exits immediately at startup if `ALLOWED_USERS` is empty and `ALLOW_ALL_USERS=true` is not set. No silent open-access deployments.
+
+### Media Forwarding
+
+Photos, documents, and videos forwarded to Claude via MCP channel with structured `attachments` field (`base64` for images ≤5 MB, `path` for larger files). Migration v11 adds `attachments JSONB` to `message_queue`.
 
 ## Recent Changes (v1.18.0)
 
