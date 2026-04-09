@@ -30,8 +30,11 @@ export function clearPendingTool(chatId: string): void {
   if (t) { clearTimeout(t); pendingToolTimers.delete(chatId); }
 }
 
-export function setPendingInput(chatId: string, handler: (ctx: Context) => Promise<void>): void {
-  // Clear existing timer
+export function setPendingInput(
+  chatId: string,
+  handler: (ctx: Context) => Promise<void>,
+  ttlMs = 60_000,
+): void {
   const existing = pendingInputTimers.get(chatId);
   if (existing) clearTimeout(existing);
 
@@ -39,7 +42,7 @@ export function setPendingInput(chatId: string, handler: (ctx: Context) => Promi
   pendingInputTimers.set(chatId, setTimeout(() => {
     pendingInput.delete(chatId);
     pendingInputTimers.delete(chatId);
-  }, 60_000)); // 60s TTL
+  }, ttlMs));
 }
 
 export function clearPendingInput(chatId: string): void {

@@ -10,9 +10,100 @@ import { touchIdleTimer } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { logger } from "../logger.ts";
 import { appendLog } from "../utils/stats.ts";
-import { getBotRef } from "./handlers.ts";
+import { getBotRef, setPendingInput } from "./handlers.ts";
 
 const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — include base64 inline
+
+/** Deliver a downloaded file to Claude (cli queue or standalone LLM). */
+async function deliverMedia(
+  ctx: Context,
+  route: Awaited<ReturnType<typeof routeMessage>>,
+  filePath: string,
+  hostPath: string,
+  description: string,
+  caption: string,
+  fileId: string,
+  filename?: string,
+  mimeType?: string,
+  messageId?: number,
+): Promise<void> {
+  const bot = getBotRef();
+  const chatId = String(ctx.chat!.id);
+  const fromUser = ctx.from?.username ?? ctx.from?.first_name ?? "user";
+  const text = `${description}: ${caption}\n[file: ${hostPath}]`;
+
+  if (route.mode === "cli") {
+    const isImage = (mimeType ?? "").startsWith("image/") || description.startsWith("Photo");
+    let attachment: Record<string, unknown>;
+
+    if (isImage) {
+      const fileData = await Bun.file(filePath).arrayBuffer();
+      if (fileData.byteLength <= IMAGE_INLINE_MAX_BYTES) {
+        const base64 = Buffer.from(fileData).toString("base64");
+        attachment = { type: "image", base64, mime: mimeType ?? "image/jpeg", path: hostPath, caption };
+      } else {
+        attachment = { type: "image", path: hostPath, mime: mimeType ?? "image/jpeg", caption };
+      }
+    } else {
+      attachment = { type: "file", path: hostPath, name: filename ?? null, mime: mimeType ?? null, caption };
+    }
+
+    await addMessage({
+      sessionId: route.sessionId,
+      projectPath: route.projectPath,
+      chatId,
+      role: "user",
+      content: text,
+      metadata: { fileId, filePath, messageId },
+    });
+    await sql`
+      INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id, attachments)
+      VALUES (
+        ${route.sessionId}, ${chatId}, ${fromUser}, ${text},
+        ${String(messageId ?? "")}, ${JSON.stringify([attachment])}
+      )
+    `;
+    return;
+  }
+
+  // Standalone
+  const sessionId = route.sessionId;
+  const { provider } = getProviderInfo();
+
+  await addMessage({
+    sessionId,
+    projectPath: route.projectPath,
+    chatId,
+    role: "user",
+    content: text,
+    metadata: { fileId, filePath, messageId },
+  });
+
+  const isPhoto = description.startsWith("Photo");
+  if (provider === "anthropic" && isPhoto) {
+    try {
+      const fileData = await Bun.file(filePath).arrayBuffer();
+      const base64 = Buffer.from(fileData).toString("base64");
+      const imageMime = "image/jpeg";
+      const { system, messages } = await composePrompt(sessionId, chatId, caption);
+      const lastMsg = messages[messages.length - 1];
+      const imageBlocks: ContentBlock[] = [
+        { type: "image", source: { type: "base64", media_type: imageMime, data: base64 } },
+        { type: "text", text: caption },
+      ];
+      messages[messages.length - 1] = { role: lastMsg.role, content: imageBlocks };
+      appendLog(sessionId, chatId, "llm", "analyzing image...");
+      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
+      appendLog(sessionId, chatId, "reply", `image reply sent ${response.length} chars`);
+      await addMessage({ sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
+      return;
+    } catch (err: any) {
+      appendLog(sessionId, chatId, "llm", `image analysis failed: ${err?.message}`, "error");
+    }
+  }
+
+  await ctx.reply(`Received ${description}. File saved.`);
+}
 
 async function handleMedia(
   ctx: Context,
@@ -26,10 +117,8 @@ async function handleMedia(
   const chatId = String(ctx.chat!.id);
   const route = await routeMessage(chatId);
 
-  // Show typing indicator while downloading
   await ctx.replyWithChatAction("typing");
 
-  // Download file
   let filePath: string;
   try {
     filePath = await downloadFile(bot, fileId, filename);
@@ -40,110 +129,25 @@ async function handleMedia(
   }
 
   const hostPath = toHostPath(filePath);
-  const text = caption
-    ? `${description}: ${caption}\n[file: ${hostPath}]`
-    : `${description}\n[file: ${hostPath}]`;
+  logger.info({ route: route.mode, hostPath }, "media downloaded");
 
-  logger.info({ route: route.mode, hostPath }, "media downloaded, routing");
-
-  if (route.mode === "cli") {
-    // Build attachment for forwarding to Claude
-    const isImage = (mimeType ?? "").startsWith("image/") || description.startsWith("Photo");
-    let attachment: Record<string, unknown>;
-
-    if (isImage) {
-      const fileData = await Bun.file(filePath).arrayBuffer();
-      if (fileData.byteLength <= IMAGE_INLINE_MAX_BYTES) {
-        // Small enough — include base64 so Claude can actually see the image
-        const base64 = Buffer.from(fileData).toString("base64");
-        attachment = {
-          type: "image",
-          base64,
-          mime: mimeType ?? "image/jpeg",
-          path: hostPath,
-          caption: caption ?? null,
-        };
-      } else {
-        // Too large — just pass the path, Claude can use Read tool
-        attachment = { type: "image", path: hostPath, mime: mimeType ?? "image/jpeg", caption: caption ?? null };
-      }
-    } else {
-      attachment = {
-        type: "file",
-        path: hostPath,
-        name: filename ?? null,
-        mime: mimeType ?? null,
-        caption: caption ?? null,
-      };
-    }
-
-    await addMessage({
-      sessionId: route.sessionId,
-      projectPath: route.projectPath,
-      chatId,
-      role: "user",
-      content: text,
-      metadata: { fileId, filePath, messageId: ctx.message?.message_id },
-    });
-
-    await sql`
-      INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id, attachments)
-      VALUES (
-        ${route.sessionId},
-        ${chatId},
-        ${ctx.from?.username ?? ctx.from?.first_name ?? "user"},
-        ${text},
-        ${String(ctx.message?.message_id ?? "")},
-        ${JSON.stringify([attachment])}
-      )
-    `;
+  if (!caption) {
+    // No caption — save file and ask what to do with it
+    const fileLabel = filename ? `\`${filename}\`` : description;
+    await ctx.reply(`📎 ${fileLabel} сохранён. Что с ним сделать?`);
+    const origMessageId = ctx.message?.message_id;
+    setPendingInput(chatId, async (replyCtx) => {
+      const userCaption = replyCtx.message?.text ?? "";
+      await deliverMedia(
+        replyCtx, route, filePath, hostPath, description,
+        userCaption, fileId, filename, mimeType,
+        replyCtx.message?.message_id ?? origMessageId,
+      );
+    }, 5 * 60_000); // 5 min TTL — user may take time to decide
     return;
   }
 
-  // Standalone: process with available provider
-  const sessionId = route.sessionId;
-  const { provider } = getProviderInfo();
-
-  // Save text description to DB (no base64)
-  await addMessage({
-    sessionId,
-    projectPath: route.projectPath,
-    chatId,
-    role: "user",
-    content: text,
-    metadata: { fileId, filePath, messageId: ctx.message?.message_id },
-  });
-
-  // If Anthropic provider and it's a photo, send image to Claude for analysis
-  const isPhoto = description.startsWith("Photo");
-  if (provider === "anthropic" && isPhoto) {
-    try {
-      const fileData = await Bun.file(filePath).arrayBuffer();
-      const base64 = Buffer.from(fileData).toString("base64");
-      const mimeType = "image/jpeg"; // Telegram always sends photos as JPEG
-
-      const { system, messages } = await composePrompt(sessionId, chatId, caption || "Describe what's in the image");
-
-      // Replace last message content with image + text blocks
-      const lastMsg = messages[messages.length - 1];
-      const imageBlocks: ContentBlock[] = [
-        { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } },
-        { type: "text", text: caption || "Describe what's in the image" },
-      ];
-      messages[messages.length - 1] = { role: lastMsg.role, content: imageBlocks };
-
-      appendLog(sessionId, chatId, "llm", "analyzing image...");
-      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
-      appendLog(sessionId, chatId, "reply", `image reply sent ${response.length} chars`);
-
-      await addMessage({ sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
-      return;
-    } catch (err: any) {
-      appendLog(sessionId, chatId, "llm", `image analysis failed: ${err?.message}`, "error");
-    }
-  }
-
-  await ctx.reply(`Received ${description}. File saved.`);
+  await deliverMedia(ctx, route, filePath, hostPath, description, caption, fileId, filename, mimeType, ctx.message?.message_id);
 }
 
 export async function handlePhoto(ctx: Context): Promise<void> {
