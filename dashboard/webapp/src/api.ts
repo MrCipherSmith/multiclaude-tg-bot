@@ -82,12 +82,13 @@ export const api = {
     req<{ messages: { id: number; role: string; content: string; created_at: string }[]; total: number }>(
       `/api/sessions/${id}/messages?limit=${limit}&offset=${offset}`
     ),
-  sessionStats: (id: number, days = 30) =>
+  globalStats: () =>
     req<{
-      summary: { total: number; success: number; errors: number; input_tokens: number; output_tokens: number; total_tokens: number; avg_latency_ms: number };
-      by_model: { provider: string; model: string; requests: number; errors: number; input_tokens: number; output_tokens: number; total_tokens: number; avg_ms: number }[];
-      days: number;
-    }>(`/api/sessions/${id}/stats?days=${days}`),
+      api: Record<string, {
+        summary: { total: number; success: number; errors: number; input_tokens: number; output_tokens: number; total_tokens: number; avg_latency_ms: number; estimated_cost: number };
+        byProvider: { provider: string; model: string; requests: number; input_tokens: number; output_tokens: number; tokens: number; avg_ms: number; cost: number }[];
+      }>;
+    }>("/api/stats"),
   switchSession: (id: number) => req<{ ok: boolean }>(`/api/sessions/${id}/switch`, { method: "POST", body: "{}" }),
   deleteSession: (id: number) => req<void>(`/api/sessions/${id}`, { method: "DELETE" }),
 

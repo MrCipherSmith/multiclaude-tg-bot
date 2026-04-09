@@ -4,7 +4,7 @@ import { api, type Session, type SessionDetail } from "../api";
 interface Props { session: Session }
 
 type PermStats = Awaited<ReturnType<typeof api.permissions.stats>>;
-type SessionStats = Awaited<ReturnType<typeof api.sessionStats>>;
+type GlobalStats = Awaited<ReturnType<typeof api.globalStats>>;
 
 function relativeTime(iso: string) {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -22,20 +22,21 @@ function fmtTokens(n: number): string {
 
 export function SessionMonitor({ session }: Props) {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
-  const [sessStats, setSessStats] = useState<SessionStats | null>(null);
+  const [globalStats, setGlobalStats] = useState<GlobalStats | null>(null);
   const [permStats, setPermStats] = useState<PermStats | null>(null);
   const [statsDays, setStatsDays] = useState(30);
+  const [statsWindow, setStatsWindow] = useState<"24h" | "startup" | "total">("24h");
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const [det, ss, ps] = await Promise.all([
+      const [det, gs, ps] = await Promise.all([
         api.session(session.id),
-        api.sessionStats(session.id, statsDays),
+        api.globalStats(),
         api.permissions.stats(session.id, statsDays),
       ]);
       setDetail(det);
-      setSessStats(ss);
+      setGlobalStats(gs);
       setPermStats(ps);
     } catch {}
     setLoading(false);
@@ -91,50 +92,58 @@ export function SessionMonitor({ session }: Props) {
         )}
       </Section>
 
-      {/* API Stats */}
-      {sessStats && sessStats.summary.total > 0 && (
-        <Section title={
-          <div className="flex items-center justify-between w-full">
-            <span>API Stats</span>
-            <select
-              className="text-[10px] text-[var(--tg-hint)] bg-transparent border border-black/10 rounded px-1"
-              value={statsDays}
-              onChange={(e) => setStatsDays(Number(e.target.value))}
-            >
-              <option value={7}>7d</option>
-              <option value={30}>30d</option>
-              <option value={90}>90d</option>
-            </select>
-          </div>
-        }>
-          {/* Summary grid */}
-          <div className="grid grid-cols-3 gap-x-2 gap-y-2 mb-3">
-            <TokenStat label="Requests" value={String(sessStats.summary.total)} />
-            <TokenStat label="Errors" value={String(sessStats.summary.errors)} accent={sessStats.summary.errors > 0 ? "text-red-500" : undefined} />
-            <TokenStat label="Avg latency" value={`${sessStats.summary.avg_latency_ms}ms`} />
-            <TokenStat label="Total tokens" value={fmtTokens(sessStats.summary.total_tokens)} />
-            <TokenStat label="Input" value={fmtTokens(sessStats.summary.input_tokens)} />
-            <TokenStat label="Output" value={fmtTokens(sessStats.summary.output_tokens)} />
-          </div>
-          {/* By model */}
-          {sessStats.by_model.length > 0 && (
-            <div>
-              <div className="text-[10px] text-[var(--tg-hint)] mb-1">By model</div>
-              <div className="flex flex-col gap-1">
-                {sessStats.by_model.map((m) => (
-                  <div key={`${m.provider}/${m.model}`} className="flex items-center gap-2 text-[10px]">
-                    <span className="truncate flex-1 font-mono">{m.model}</span>
-                    <span className="text-[var(--tg-hint)]">{m.requests}req</span>
-                    <span className="text-[var(--tg-hint)]">{fmtTokens(m.total_tokens)}tok</span>
-                    {m.errors > 0 && <span className="text-red-500">{m.errors}err</span>}
-                    <span className="text-[var(--tg-hint)]">{m.avg_ms}ms</span>
-                  </div>
-                ))}
-              </div>
+      {/* API Stats (global) */}
+      {globalStats && (() => {
+        const w = globalStats.api[statsWindow];
+        if (!w || w.summary.total === 0) return null;
+        const s = w.summary;
+        return (
+          <Section title={
+            <div className="flex items-center justify-between w-full">
+              <span>API Stats (global)</span>
+              <select
+                className="text-[10px] text-[var(--tg-hint)] bg-transparent border border-black/10 rounded px-1"
+                value={statsWindow}
+                onChange={(e) => setStatsWindow(e.target.value as any)}
+              >
+                <option value="24h">24h</option>
+                <option value="startup">Since restart</option>
+                <option value="total">All time</option>
+              </select>
             </div>
-          )}
-        </Section>
-      )}
+          }>
+            <div className="grid grid-cols-3 gap-x-2 gap-y-2 mb-3">
+              <TokenStat label="Requests" value={String(s.total)} />
+              <TokenStat label="Errors" value={String(s.errors)} accent={s.errors > 0 ? "text-red-500" : undefined} />
+              <TokenStat label="Avg latency" value={`${s.avg_latency_ms}ms`} />
+              <TokenStat label="Total tokens" value={fmtTokens(s.total_tokens)} />
+              <TokenStat label="Input" value={fmtTokens(s.input_tokens)} />
+              <TokenStat label="Output" value={fmtTokens(s.output_tokens)} />
+            </div>
+            {s.estimated_cost > 0 && (
+              <div className="text-[10px] text-[var(--tg-hint)] mb-2">
+                Est. cost: <span className="font-semibold text-[var(--tg-text)]">${s.estimated_cost.toFixed(4)}</span>
+              </div>
+            )}
+            {w.byProvider.length > 0 && (
+              <div>
+                <div className="text-[10px] text-[var(--tg-hint)] mb-1">By model</div>
+                <div className="flex flex-col gap-1">
+                  {w.byProvider.map((m) => (
+                    <div key={`${m.provider}/${m.model}`} className="flex items-center gap-2 text-[10px]">
+                      <span className="truncate flex-1 font-mono">{m.model}</span>
+                      <span className="text-[var(--tg-hint)]">{m.requests}req</span>
+                      <span className="text-[var(--tg-hint)]">{fmtTokens(m.tokens)}tok</span>
+                      {m.cost > 0 && <span className="text-[var(--tg-hint)]">${m.cost.toFixed(3)}</span>}
+                      <span className="text-[var(--tg-hint)]">{m.avg_ms}ms</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Section>
+        );
+      })()}
 
       {/* Recent tool calls */}
       {recentTools.length > 0 && (
