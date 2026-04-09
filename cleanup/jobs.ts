@@ -150,3 +150,19 @@ export const ALL_JOBS: CleanupJob[] = [
   orphanCliSessionCleanup,
   staleSessionArchival,
 ];
+
+export interface RunAllResult {
+  job: string;
+  rowsAffected: number;
+  dryRun: boolean;
+}
+
+/** Run all cleanup jobs and return per-job results. */
+export async function runAllCleanupJobs(dryRun = false): Promise<RunAllResult[]> {
+  const results: RunAllResult[] = [];
+  for (const job of ALL_JOBS) {
+    const { rowsAffected } = await job.run(dryRun);
+    results.push({ job: job.name, rowsAffected, dryRun });
+  }
+  return results;
+}

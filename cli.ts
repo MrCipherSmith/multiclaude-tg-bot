@@ -492,20 +492,40 @@ async function backup() {
 }
 
 async function cleanup() {
-  const query = await run([
-    "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
-    "-c", `
-      DELETE FROM sessions WHERE name LIKE 'cli-%';
-      DELETE FROM message_queue WHERE delivered = true AND created_at < now() - interval '24 hours';
-      DELETE FROM request_logs WHERE created_at < now() - interval '7 days';
-      DELETE FROM api_request_stats WHERE created_at < now() - interval '30 days';
-      DELETE FROM permission_requests WHERE created_at < now() - interval '1 hour';
-      SELECT setval('sessions_id_seq', GREATEST((SELECT MAX(id) FROM sessions), 1));
-    `,
-  ], { silent: true });
+  const dryRun = process.argv.includes("--dry-run");
+  console.log(`\n  ${c.bold(dryRun ? "Cleanup (dry run)" : "Cleanup")}`);
+  console.log(`  ${"─".repeat(40)}\n`);
 
-  console.log(`\n  ${c.green("Cleanup complete")}`);
+  const jobs = [
+    { name: "message-queue",    query: dryRun
+        ? `SELECT COUNT(*) FROM message_queue WHERE delivered = true AND created_at < now() - interval '24 hours'`
+        : `DELETE FROM message_queue WHERE delivered = true AND created_at < now() - interval '24 hours'` },
+    { name: "request-logs",     query: dryRun
+        ? `SELECT COUNT(*) FROM request_logs WHERE created_at < now() - interval '7 days'`
+        : `DELETE FROM request_logs WHERE created_at < now() - interval '7 days'` },
+    { name: "api-stats",        query: dryRun
+        ? `SELECT COUNT(*) FROM api_request_stats WHERE created_at < now() - interval '30 days'`
+        : `DELETE FROM api_request_stats WHERE created_at < now() - interval '30 days'` },
+    { name: "orphan-sessions",  query: dryRun
+        ? `SELECT COUNT(*) FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0`
+        : `DELETE FROM sessions WHERE source != 'remote' AND status IN ('disconnected', 'terminated') AND id != 0` },
+  ];
+
+  let total = 0;
+  for (const job of jobs) {
+    const res = await run([
+      "docker", "compose", "exec", "-T", "postgres",
+      "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A", "-c", job.query,
+    ], { silent: true });
+    const count = parseInt(res.output?.trim() ?? "0") || 0;
+    total += count;
+    if (count > 0 || dryRun) {
+      const label = dryRun ? `${count} would be removed` : `${count} removed`;
+      console.log(`  ${count > 0 ? c.yellow("•") : c.dim("•")} ${job.name}: ${label}`);
+    }
+  }
+
+  console.log(`\n  ${dryRun ? c.yellow(`Dry run: ${total} rows would be removed`) : c.green(`Done: ${total} rows removed`)}\n`);
 }
 
 async function prune() {
@@ -1148,7 +1168,7 @@ function help() {
     sessions        List active sessions
     prune           Remove stale/duplicate sessions (interactive)
     backup          Run database backup
-    cleanup         Clean old queue, logs, stats
+    cleanup [--dry-run]   Clean old queue, logs, stats
 `);
 }
 

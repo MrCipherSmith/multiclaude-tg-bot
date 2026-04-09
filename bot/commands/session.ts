@@ -7,6 +7,7 @@ import { setPendingInput } from "../handlers.ts";
 import { setSwitchContext, clearSwitchContext } from "../switch-cache.ts";
 import { logger } from "../../logger.ts";
 import { sessionService } from "../../services/session-service.ts";
+import { runAllCleanupJobs } from "../../cleanup/jobs.ts";
 
 export async function handleStart(ctx: Context): Promise<void> {
   await ctx.reply(
@@ -285,28 +286,17 @@ async function cleanupSession(id: number): Promise<void> {
 }
 
 export async function handleCleanup(ctx: Context): Promise<void> {
-  // Find sessions to remove (exclude remote sessions — they are managed by channel.ts)
-  const toRemove = await sql`
-    SELECT id, name, project, source FROM sessions
-    WHERE id != 0
-      AND source != 'remote'
-      AND (name LIKE 'cli-%' OR status IN ('disconnected', 'terminated'))
-  `;
+  // Run structured cleanup jobs (message queue, logs, archived messages, memory TTL, orphan sessions)
+  const results = await runAllCleanupJobs(false);
+  const total = results.reduce((sum, r) => sum + r.rowsAffected, 0);
 
-  if (toRemove.length === 0) {
+  if (total === 0) {
     await ctx.reply("Nothing to clean up.");
     return;
   }
 
-  for (const row of toRemove) {
-    await cleanupSession(row.id);
-  }
-
-  const named = toRemove.filter((r) => r.project || (r.name && !r.name.startsWith("cli-")));
-  const cliCount = toRemove.length - named.length;
-  const parts: string[] = [];
-  if (named.length > 0) parts.push(named.map((r) => r.project ? `${r.project} · ${r.source}` : r.name).join(", "));
-  if (cliCount > 0) parts.push(`${cliCount} unnamed`);
-
-  await ctx.reply(`Cleaned up ${toRemove.length}: ${parts.join(", ")}`);
+  const lines = results
+    .filter((r) => r.rowsAffected > 0)
+    .map((r) => `  • ${r.job}: ${r.rowsAffected}`);
+  await ctx.reply(`Cleaned up ${total} rows:\n${lines.join("\n")}`);
 }
