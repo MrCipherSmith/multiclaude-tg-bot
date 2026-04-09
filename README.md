@@ -601,6 +601,16 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
 
+## Recent Changes (v1.14.0)
+
+### Google AI Provider in Setup Wizard
+
+Re-added Google AI (Gemma 4) as an interactive option in `claude-bot setup`. The wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama. Selecting Google AI prompts for `GOOGLE_AI_API_KEY` and `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`).
+
+### MCP Tools: react and edit_message in Channel Adapter
+
+Added `react` (set emoji reaction) and `edit_message` (edit a bot message) to the `channel.ts` stdio MCP adapter. Both tools were already available in the HTTP MCP server — now they work in all connection modes.
+
 ## Recent Changes (v1.13.0)
 
 ### Telegram Mini App — Claude Dev Hub
