@@ -1122,33 +1122,33 @@ function help() {
     remote          Connect laptop to a remote bot server
     mcp-register    Re-register MCP servers in Claude Code
 
-  ${c.bold("Manage:")}
-    docker-start    Start bot (docker compose up)
-    stop            Stop bot (docker compose down)
-    restart         Rebuild and restart bot
-    status          Show bot health and stats
-    logs            Show bot logs (follow mode)
+  ${c.bold("Bot (Docker service):")}
+    bot-start       Start bot (docker compose up -d)
+    bot-stop        Stop bot + all tmux sessions
+    bot-restart     Rebuild and restart bot container
+    bot-status      Show bot health and stats
+    bot-logs        Show bot logs (follow mode)
+
+  ${c.bold("Tmux (project workspaces):")}
+    up [-a] [-s]    Start all projects in tmux (-a attach, -s split panes)
+    down            Stop all tmux sessions + clean DB
+    bounce [-a] [-s] Restart tmux (down + up)
+    ps              List configured projects and status
+    add [dir]       Add project (saves to config + registers in bot DB)
+    run [dir]       Launch project in current terminal (full monitoring)
+    attach [dir]    Add project window to running tmux session
+    remove <name>   Remove project from tmux config
+
+  ${c.bold("Session (Claude Code):")}
+    open [dir]           Launch Claude Code locally (temp session)
+    connect [dir]        Start session (default: current dir)
+    connect [dir] --tmux Start in standalone tmux (not managed)
 
   ${c.bold("Data:")}
     sessions        List active sessions
     prune           Remove stale/duplicate sessions (interactive)
     backup          Run database backup
     cleanup         Clean old queue, logs, stats
-
-  ${c.bold("Tmux:")}
-    up [-a] [-s]    Start all projects in tmux (-a attach, -s split panes)
-    down            Stop all tmux sessions + clean DB
-    bounce [-a] [-s] Restart tmux (down + up in one command)
-    ps              List configured projects and status
-    add [dir]       Add project (saves to config + registers in bot DB)
-    run [dir]       Launch project in current terminal
-    attach [dir]    Add project window to running tmux session
-    remove <name>   Remove project from tmux config
-
-  ${c.bold("Connect:")}
-    start [dir]          Launch Claude Code in current terminal
-    connect [dir]        Start single CLI session (default: current dir)
-    connect [dir] --tmux Start in standalone tmux (not managed)
 `);
 }
 
@@ -1159,21 +1159,36 @@ const command = process.argv[2];
 switch (command) {
   case "setup":       await setup(); break;
   case "remote":      await remote(); break;
-  case "start":       await start(process.argv[3]); break;
-  case "docker-start": await dockerStart(); break;
-  case "stop":        await stop(); break;
-  case "restart":     await restart(); break;
-  case "status":      await status(); break;
+  // Bot (Docker service)
+  case "bot-start":   await dockerStart(); break;
+  case "bot-stop":    await stop(); break;
+  case "bot-restart": await restart(); break;
+  case "bot-status":  await status(); break;
+  case "bot-logs":    await logs(); break;
+  // Session (Claude Code)
+  case "open":        await start(process.argv[3]); break;
+  case "connect":     await connect(process.argv[3]); break;
+  // Data
   case "sessions":    await sessions(); break;
-  case "logs":        await logs(); break;
   case "backup":      await backup(); break;
   case "prune":       await prune(); break;
   case "cleanup":     await cleanup(); break;
-  case "connect":     await connect(process.argv[3]); break;
+  // Setup
   case "mcp-register": await mcpRegister(); break;
+  // Tmux
   case "up":          await tmuxStart(); break;
   case "down":        await tmuxStop(); break;
-  case "bounce":      await tmuxStop(); await tmuxStart(); break;
+  case "bounce": {
+    await tmuxStop();
+    // Wait for the tmux session to fully terminate before starting
+    for (let i = 0; i < 10; i++) {
+      const exists = await run(["tmux", "has-session", "-t", TMUX_SESSION], { silent: true });
+      if (!exists.ok) break;
+      await Bun.sleep(500);
+    }
+    await tmuxStart();
+    break;
+  }
   case "ps":          await tmuxList(); break;
   case "add":         await tmuxAdd(process.argv[3]); break;
   case "run":         await tmuxRun(process.argv[3]); break;
@@ -1181,5 +1196,12 @@ switch (command) {
   case "remove":      await tmuxRemove(process.argv[3]); break;
   case "_register":    await internalRegister(); break;
   case "_disconnect":  await internalDisconnect(); break;
+  // Legacy aliases (kept for backwards compat, not shown in help)
+  case "start":       await start(process.argv[3]); break;
+  case "docker-start": await dockerStart(); break;
+  case "stop":        await stop(); break;
+  case "restart":     await restart(); break;
+  case "status":      await status(); break;
+  case "logs":        await logs(); break;
   default:             help(); break;
 }

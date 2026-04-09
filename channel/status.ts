@@ -25,15 +25,39 @@ interface StatusState {
   timer: ReturnType<typeof setInterval> | null;
 }
 
+interface SessionStats {
+  filesEdited: Set<string>;
+  linesAdded: number;
+  linesRemoved: number;
+}
+
 function formatElapsed(ms: number): string {
   const sec = Math.round(ms / 1000);
   if (sec < 60) return `${sec}s`;
   return `${Math.floor(sec / 60)}m ${sec % 60}s`;
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function normalizeStage(stage: string): string {
+  return stage.replace(/^⏳\s*/, "");
+}
+
+function formatStatusText(stage: string, elapsed: string, tokens: string): string {
+  const normalized = normalizeStage(stage);
+  const header = `⏳ <i>${elapsed}${tokens}</i>`;
+  if (normalized.includes("\n")) {
+    return `${header}\n<pre>${escapeHtml(normalized)}</pre>`;
+  }
+  return `${header}  ${escapeHtml(normalized)}`;
+}
+
 export class StatusManager {
   private activeStatus = new Map<string, StatusState>();
   private lastTokenInfo = new Map<string, string>();
+  private sessionStats = new Map<string, SessionStats>();
   private activeTyping = new Map<string, TypingHandle>();
   private activeMonitors = new Map<string, TmuxMonitorHandle | OutputMonitorHandle>();
   private readonly TYPING_TIMEOUT_MS = 30_000;
@@ -61,36 +85,23 @@ export class StatusManager {
     const existing = this.activeStatus.get(chatId);
 
     if (existing) {
-      if (existing.stage !== `${prefix}${stage}`) {
-        // Stage changed — delete old and send new at bottom
-        try {
-          await fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: Number(chatId), message_id: existing.messageId }),
-          });
-        } catch {}
-        if (existing.timer) clearInterval(existing.timer);
-        this.activeStatus.delete(chatId);
-        // Fall through to create new
-      } else {
-        await this.editStatusMessage(existing);
-        return null;
-      }
+      existing.stage = `${prefix}${stage}`;
+      await this.editStatusMessage(existing);
+      return null;
     }
 
     try {
-      const result = await sendTelegramMessage(token, chatId, `⏳ ${prefix}${stage}`);
+      const initialText = formatStatusText(`${prefix}${stage}`, "0s", "");
+      const result = await sendTelegramMessage(token, chatId, initialText, { parse_mode: "HTML" });
       if (!result.ok) {
         channelLogger.warn({ error: result.errorBody }, "sendStatusMessage failed");
         return `Telegram API error`;
       }
 
-      const prevStartedAt = existing?.startedAt;
       const state: StatusState = {
         chatId,
         messageId: result.messageId!,
-        startedAt: prevStartedAt ?? Date.now(),
+        startedAt: Date.now(),
         stage: `${prefix}${stage}`,
         timer: null,
       };
@@ -105,6 +116,7 @@ export class StatusManager {
   }
 
   async updateStatus(chatId: string, stage: string): Promise<void> {
+    this.accumulateStats(chatId, stage);
     const state = this.activeStatus.get(chatId);
     if (!state) {
       await this.sendStatusMessage(chatId, stage);
@@ -114,18 +126,38 @@ export class StatusManager {
     await this.editStatusMessage(state);
   }
 
+  private accumulateStats(chatId: string, stage: string): void {
+    let stats = this.sessionStats.get(chatId);
+    if (!stats) {
+      stats = { filesEdited: new Set(), linesAdded: 0, linesRemoved: 0 };
+      this.sessionStats.set(chatId, stats);
+    }
+    // Track file edits from status updates (e.g. "Editing: status.ts" or "● Edit: file.ts")
+    const editMatch = stage.match(/(?:Editing|● (?:Edit|Write)):\s*([^\s\n]+)/);
+    if (editMatch) stats.filesEdited.add(editMatch[1]);
+    // Accumulate line changes from tmux output: "  └ Added N lines, removed N lines"
+    const linesMatch = stage.match(/Added (\d+) lines?,\s*removed (\d+) lines?/);
+    if (linesMatch) {
+      stats.linesAdded += parseInt(linesMatch[1]);
+      stats.linesRemoved += parseInt(linesMatch[2]);
+    }
+    // Also handle "Added N lines" without removed (new file)
+    const addedOnly = stage.match(/Added (\d+) lines?(?!.*removed)/);
+    if (addedOnly && !linesMatch) stats.linesAdded += parseInt(addedOnly[1]);
+  }
+
   private async editStatusMessage(state: StatusState): Promise<void> {
     const token = this.ctx.token();
     if (!token) return;
     const elapsed = formatElapsed(Date.now() - state.startedAt);
     const tokens = this.lastTokenInfo.get(state.chatId);
     const tokenStr = tokens ? ` · ↓ ${tokens}` : "";
-    const text = `⏳ ${state.stage} (${elapsed}${tokenStr})`;
+    const text = formatStatusText(state.stage, elapsed, tokenStr);
     try {
       await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: Number(state.chatId), message_id: state.messageId, text }),
+        body: JSON.stringify({ chat_id: Number(state.chatId), message_id: state.messageId, text, parse_mode: "HTML" }),
       });
     } catch {}
   }
@@ -135,14 +167,39 @@ export class StatusManager {
     if (!state) return;
     if (state.timer) clearInterval(state.timer);
     this.activeStatus.delete(chatId);
-    this.lastTokenInfo.delete(chatId);
     this.stopTypingForChat(chatId);
 
     const token = this.ctx.token();
     if (!token) return;
+
+    const elapsed = formatElapsed(Date.now() - state.startedAt);
+    const tokens = this.lastTokenInfo.get(chatId);
+    const stats = this.sessionStats.get(chatId);
+    this.lastTokenInfo.delete(chatId);
+    this.sessionStats.delete(chatId);
+
+    const parts: string[] = [`⏱ ${elapsed}`];
+    if (stats?.filesEdited.size) {
+      const fileStr = stats.filesEdited.size === 1
+        ? [...stats.filesEdited][0]
+        : `${stats.filesEdited.size} files`;
+      const diffStr = (stats.linesAdded || stats.linesRemoved)
+        ? ` <code>+${stats.linesAdded}/-${stats.linesRemoved}</code>`
+        : "";
+      parts.push(`📝 ${fileStr}${diffStr}`);
+    }
+    if (tokens) parts.push(`↓ ${tokens}`);
+
+    const summaryText = `✅ ${parts.join(" · ")}`;
     try {
+      await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: Number(chatId), message_id: state.messageId, text: summaryText, parse_mode: "HTML" }),
+      });
+    } catch {
       deleteTelegramMessage(token, chatId, state.messageId);
-    } catch {}
+    }
   }
 
   startTypingForChat(chatId: string): void {
