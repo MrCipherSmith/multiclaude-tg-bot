@@ -36,7 +36,7 @@ while true; do
     EXIT_CODE=$?
   else
     # Inside tmux: auto-confirm channel permission prompt, then run interactively
-    (sleep 2 && tmux send-keys -t "$TMUX_PANE" "" Enter) &
+    (sleep 5 && tmux send-keys -t "$TMUX_PANE" "" Enter) &
     CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:claude-bot-channel
     EXIT_CODE=$?
   fi
