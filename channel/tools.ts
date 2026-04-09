@@ -7,7 +7,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { markdownToTelegramHtml } from "../bot/format.ts";
 import type { StatusManager } from "./status.ts";
-import { sendTelegramMessage } from "./telegram.ts";
+import { sendTelegramMessage, setTelegramReaction, editTelegramMessage } from "./telegram.ts";
 import { channelLogger } from "../logger.ts";
 
 export interface ToolContext {
@@ -230,19 +230,15 @@ export function registerTools(
       case "react": {
         const token = ctx.token();
         if (!token) return text("TELEGRAM_BOT_TOKEN not set");
-        const res = await fetch(`https://api.telegram.org/bot${token}/setMessageReaction`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: Number(args!.chat_id),
-            message_id: Number(args!.message_id),
-            reaction: [{ type: "emoji", emoji: String(args!.emoji) }],
-          }),
-        });
-        if (!res.ok) {
-          const err = await res.text();
-          channelLogger.warn({ status: res.status, error: err }, "react: Telegram API error");
-          return text(`Telegram API error: ${res.status}`);
+        const reactResult = await setTelegramReaction(
+          token,
+          String(args!.chat_id),
+          Number(args!.message_id),
+          String(args!.emoji),
+        );
+        if (!reactResult.ok) {
+          channelLogger.warn({ error: reactResult.errorBody }, "react: Telegram API error");
+          return text(`Telegram API error: ${reactResult.errorBody}`);
         }
         return text(`Reaction ${args!.emoji} set on message ${args!.message_id}`);
       }
@@ -251,33 +247,13 @@ export function registerTools(
         const token = ctx.token();
         if (!token) return text("TELEGRAM_BOT_TOKEN not set");
         const htmlText = markdownToTelegramHtml(String(args!.text));
-        let res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: Number(args!.chat_id),
-            message_id: Number(args!.message_id),
-            text: htmlText,
-            parse_mode: "HTML",
-          }),
-        });
-        if (!res.ok) {
-          const errBody = await res.text();
-          if (errBody.includes("can't parse entities")) {
-            res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: Number(args!.chat_id),
-                message_id: Number(args!.message_id),
-                text: String(args!.text),
-              }),
-            });
-            if (!res.ok) return text(`Telegram API error: ${res.status}`);
-          } else {
-            channelLogger.warn({ status: res.status, error: errBody }, "edit_message: Telegram API error");
-            return text(`Telegram API error: ${res.status}`);
-          }
+        // Try HTML first, fall back to plain text if entity parse fails
+        const htmlResult = await editTelegramMessage(token, String(args!.chat_id), Number(args!.message_id), htmlText, { parse_mode: "HTML" });
+        if (!htmlResult.ok && htmlResult.errorBody?.includes("can't parse entities")) {
+          await editTelegramMessage(token, String(args!.chat_id), Number(args!.message_id), String(args!.text));
+        } else if (!htmlResult.ok) {
+          channelLogger.warn({ error: htmlResult.errorBody }, "edit_message: Telegram API error");
+          return text(`Telegram API error: ${htmlResult.errorBody}`);
         }
         return text(`Message ${args!.message_id} updated`);
       }

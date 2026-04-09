@@ -153,13 +153,7 @@ export class StatusManager {
     const tokens = this.lastTokenInfo.get(state.chatId);
     const tokenStr = tokens ? ` · ↓ ${tokens}` : "";
     const text = formatStatusText(state.stage, elapsed, tokenStr);
-    try {
-      await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: Number(state.chatId), message_id: state.messageId, text, parse_mode: "HTML" }),
-      });
-    } catch {}
+    await editTelegramMessage(token, state.chatId, state.messageId, text, { parse_mode: "HTML" });
   }
 
   async deleteStatusMessage(chatId: string): Promise<void> {
@@ -191,13 +185,8 @@ export class StatusManager {
     if (tokens) parts.push(`↓ ${tokens}`);
 
     const summaryText = `✅ ${parts.join(" · ")}`;
-    try {
-      await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: Number(chatId), message_id: state.messageId, text: summaryText, parse_mode: "HTML" }),
-      });
-    } catch {
+    const editRes = await editTelegramMessage(token, chatId, state.messageId, summaryText, { parse_mode: "HTML" });
+    if (!editRes.ok) {
       deleteTelegramMessage(token, chatId, state.messageId);
     }
   }
