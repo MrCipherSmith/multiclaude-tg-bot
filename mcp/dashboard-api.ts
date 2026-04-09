@@ -595,7 +595,9 @@ async function serveWebApp(res: ServerResponse, subpath: string): Promise<boolea
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
   const content = await readFile(filePath);
-  res.writeHead(200, { "Content-Type": contentType });
+  const isHtml = ext === ".html" || filePath.endsWith("index.html");
+  const cacheHeader = isHtml ? "no-store" : "public, max-age=31536000, immutable";
+  res.writeHead(200, { "Content-Type": contentType, "Cache-Control": cacheHeader });
   res.end(content);
   return true;
 }
