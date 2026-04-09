@@ -406,3 +406,63 @@ export async function summarizeWork(sessionId: number): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * Extract project facts from a Claude Code transcript file (.jsonl).
+ * Called by the Stop hook at session end.
+ * Parses the transcript, extracts assistant/user turns, and saves durable facts.
+ */
+export async function extractFactsFromTranscript(
+  transcriptPath: string,
+  projectPath: string,
+): Promise<number> {
+  const { readFileSync, existsSync } = await import("fs");
+
+  if (!existsSync(transcriptPath)) {
+    logger.warn({ transcriptPath }, "extractFactsFromTranscript: file not found");
+    return 0;
+  }
+
+  // Parse JSONL transcript — extract user/assistant turns
+  const lines = readFileSync(transcriptPath, "utf-8").split("\n").filter(Boolean);
+  const turns: { role: string; content: string }[] = [];
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      const type = entry.type;
+      if (type !== "user" && type !== "assistant") continue;
+
+      const msg = entry.message ?? {};
+      const content = msg.content;
+      let text = "";
+      if (typeof content === "string") {
+        text = content;
+      } else if (Array.isArray(content)) {
+        text = content
+          .filter((c: any) => c?.type === "text")
+          .map((c: any) => c.text ?? "")
+          .join("\n");
+      }
+      if (text.trim().length > 10) {
+        turns.push({ role: type, content: text.trim() });
+      }
+    } catch {
+      // skip malformed lines
+    }
+  }
+
+  if (turns.length < 4) {
+    logger.info({ transcriptPath, turns: turns.length }, "extractFactsFromTranscript: too few turns");
+    return 0;
+  }
+
+  // Call extractProjectKnowledge with the transcript turns
+  const workSummary = turns
+    .slice(-10)
+    .map((t) => `${t.role}: ${t.content.slice(0, 200)}`)
+    .join("\n");
+
+  await extractProjectKnowledge(0, projectPath, workSummary, turns.slice(-40));
+  logger.info({ transcriptPath, projectPath, turns: turns.length }, "extractFactsFromTranscript: done");
+  return turns.length;
+}

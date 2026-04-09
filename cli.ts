@@ -299,12 +299,38 @@ Examples:
 - Before analysis: \`update_status(chat_id, "Analyzing...")\`
 
 Keep status messages short (under 50 chars). The status is automatically deleted when you call \`reply\`.
+
+## Project Memory
+
+### Session start
+At the beginning of any session where you will do significant work on a codebase,
+call \`search_project_context(query="project architecture constraints conventions")\`
+to load facts saved in previous sessions.
+
+### Search memory proactively
+Call \`recall(query="<topic>")\` before exploring unfamiliar code or starting a new task:
+- Before touching a subsystem: \`recall("auth")\`, \`recall("database schema")\`
+- When you see an unfamiliar pattern: \`recall("<pattern>")\`
+- Before implementing something significant: \`recall("<feature area>")\`
+
+### Save facts during work
+Call \`remember(type="fact", tags=["project", "<category>"])\` when you discover:
+- Architecture decisions and why they were made
+- Non-obvious constraints (hardcoded ports, required env vars, ordering dependencies)
+- Important file roles, setup quirks, naming conventions, gotchas
+
+Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashboard via the same HTTP server"\`
 `;
     await Bun.write(claudeMdPath, template);
     done();
   } else {
     console.log(` ${c.yellow("exists, skipping")}`);
   }
+
+  // Register Stop hook for auto fact extraction
+  step("Registering Stop hook for memory auto-save");
+  await setupStopHook();
+  done();
 
   // Register projects
   console.log(`  ${c.bold("Add projects (optional)")}`);
@@ -352,6 +378,35 @@ Keep status messages short (under 50 chars). The status is automatically deleted
   console.log(`    ${c.cyan("claude-bot bounce")}   — restart all sessions`);
   console.log(`    ${c.cyan("claude-bot ps")}       — list session status`);
   console.log(`    ${c.cyan("claude-bot down")}     — stop all sessions\n`);
+}
+
+// --- Stop hook registration ---
+
+async function setupStopHook(): Promise<void> {
+  const settingsPath = `${process.env.HOME}/.claude/settings.json`;
+  const hookCmd = `${BOT_DIR}/scripts/save-session-facts.sh`;
+
+  let settings: Record<string, any> = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    } catch { /* start fresh */ }
+  }
+
+  if (!settings.hooks) settings.hooks = {};
+  if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
+
+  // Check if hook already registered
+  const alreadyAdded = settings.hooks.Stop.some((entry: any) =>
+    Array.isArray(entry.hooks) && entry.hooks.some((h: any) => h.command === hookCmd)
+  );
+  if (alreadyAdded) return;
+
+  settings.hooks.Stop.push({
+    hooks: [{ type: "command", command: hookCmd, timeout: 60 }],
+  });
+
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2), "utf-8");
 }
 
 // --- Management commands ---

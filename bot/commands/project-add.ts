@@ -144,11 +144,18 @@ const BOT_RULES_SECTION = `
 ${BOT_RULES_MARKER}
 ## Bot Integration
 
-### Project Knowledge: Save and Load
-
+### Session start — load context
 At the beginning of any session where you will do significant work on this codebase,
 call \`search_project_context(query="project architecture constraints conventions")\`
 to load facts saved in previous sessions. Read the results before exploring source files.
+
+### During work — search memory proactively
+Call \`recall(query="<topic>")\` before exploring unfamiliar code or starting a new task:
+
+- Before touching auth/DB/config code: \`recall("auth middleware")\`, \`recall("database schema")\`
+- When you see an unfamiliar pattern: \`recall("<pattern name>")\`
+- Before implementing something significant: \`recall("<feature area>")\`
+- When debugging a hard problem: \`recall("<error or component name>")\`
 
 ### During work — save facts proactively
 Call \`remember(type="fact", tags=["project", "<category>"])\` when you discover anything

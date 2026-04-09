@@ -10,7 +10,7 @@ import { handleDashboardRequest } from "./dashboard-api.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { sql } from "../memory/db.ts";
-import { summarizeOnDisconnect, summarizeWork } from "../memory/summarizer.ts";
+import { summarizeOnDisconnect, summarizeWork, extractFactsFromTranscript } from "../memory/summarizer.ts";
 import { verifyJwt } from "../dashboard/auth.ts";
 import { IncomingMessage, ServerResponse } from "http";
 import { createServer } from "http";
@@ -339,6 +339,40 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
         console.error("[api] summarize-work error:", err.message);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: false, error: err.message }));
+      }
+      return;
+    }
+
+    // POST /api/hooks/stop — Claude Code Stop hook: extract facts from transcript
+    if (url.pathname === "/api/hooks/stop" && req.method === "POST") {
+      if (!isLocalRequest(req)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Forbidden" }));
+        return;
+      }
+      try {
+        const body = await new Promise<string>((resolve, reject) => {
+          let data = "";
+          req.on("data", (chunk) => (data += chunk));
+          req.on("end", () => resolve(data));
+          req.on("error", reject);
+        });
+        const { transcript_path, project_path } = JSON.parse(body);
+        if (!transcript_path || !project_path) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "transcript_path and project_path required" }));
+          return;
+        }
+        // Non-blocking — respond immediately, extract in background
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+        extractFactsFromTranscript(transcript_path as string, project_path as string)
+          .catch((err) => console.error("[hooks/stop] extractFactsFromTranscript error:", err?.message));
+      } catch (err: any) {
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: err?.message }));
+        }
       }
       return;
     }
