@@ -10,3 +10,4 @@ bun.lock
 downloads
 tmux-projects.json
 # docs/ tracked in git
+.auth/
