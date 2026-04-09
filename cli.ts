@@ -111,11 +111,14 @@ async function setup() {
   // 3. LLM Provider
   const providerIdx = askChoice("LLM Provider for standalone mode:", [
     "Anthropic (best quality, requires API key)",
-    "OpenRouter (free models available)",
+    "Google AI (Gemma 4 models, free tier available)",
+    "OpenRouter (many models, free & paid)",
     "Ollama (local, free)",
   ]);
 
   let anthropicKey = "";
+  let googleAiKey = "";
+  let googleAiModel = "gemma-4-31b-it";
   let openrouterKey = "";
   let openrouterModel = "qwen/qwen3-235b-a22b:free";
   let ollamaModel = "qwen3:8b";
@@ -123,6 +126,9 @@ async function setup() {
   if (providerIdx === 0) {
     anthropicKey = ask("Anthropic API Key");
   } else if (providerIdx === 1) {
+    googleAiKey = ask("Google AI API Key");
+    googleAiModel = ask("Google AI Model", "gemma-4-31b-it");
+  } else if (providerIdx === 2) {
     openrouterKey = ask("OpenRouter API Key");
     openrouterModel = ask("OpenRouter Model", "qwen/qwen3-235b-a22b:free");
   } else {
@@ -184,6 +190,8 @@ async function setup() {
     `ANTHROPIC_API_KEY=${anthropicKey}`,
     `CLAUDE_MODEL=claude-sonnet-4-20250514`,
     `MAX_TOKENS=8192`,
+    `GOOGLE_AI_API_KEY=${googleAiKey}`,
+    `GOOGLE_AI_MODEL=${googleAiModel}`,
     `OPENROUTER_API_KEY=${openrouterKey}`,
     `OPENROUTER_MODEL=${openrouterModel}`,
     `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1`,

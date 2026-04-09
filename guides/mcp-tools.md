@@ -33,8 +33,8 @@ These tools work in any Claude session — with or without the channel adapter.
 | Tool | Parameters | Description |
 |---|---|---|
 | `reply` | `text`, `chatId?` | Send a message to the Telegram chat. Supports HTML formatting (bold, italic, code blocks, links). |
-| `react` | `messageId`, `emoji` | Set an emoji reaction on a Telegram message. _(planned)_ |
-| `edit_message` | `messageId`, `text` | Edit a previously sent bot message. _(planned)_ |
+| `react` | `chat_id`, `message_id`, `emoji` | Set an emoji reaction on a Telegram message. |
+| `edit_message` | `chat_id`, `message_id`, `text` | Edit a previously sent bot message. |
 
 ---
 

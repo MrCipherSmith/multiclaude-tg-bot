@@ -290,11 +290,10 @@ Get your ID from [@userinfobot](https://t.me/userinfobot): send `/start` → it 
 ```
 LLM Provider for standalone mode:
 ❯ 1. Anthropic (best quality, requires API key)
-  2. OpenRouter (many models, free & paid)
-  3. Ollama (local, free)
+  2. Google AI (Gemma 4 models, free tier available)
+  3. OpenRouter (many models, free & paid)
+  4. Ollama (local, free)
 ```
-
-> **Planned:** Google AI (Gemma 4) will be re-added to the interactive wizard. Currently available via manual `.env` configuration (`GOOGLE_AI_API_KEY`, `GOOGLE_AI_MODEL`).
 
 This is for **standalone mode** (when no CLI session is active). Choose **Google AI** for Gemma 4 models, **OpenRouter** for variety, or **Ollama** for fully local.
 
@@ -601,6 +600,16 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
+
+## Recent Changes (v1.14.0)
+
+### Google AI Provider in Setup Wizard
+
+Re-added Google AI (Gemma 4) as an interactive option in `claude-bot setup`. The wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama. Selecting Google AI prompts for `GOOGLE_AI_API_KEY` and `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`).
+
+### MCP Tools: react and edit_message in Channel Adapter
+
+Added `react` (set emoji reaction) and `edit_message` (edit a bot message) to the `channel.ts` stdio MCP adapter. Both tools were already available in the HTTP MCP server — now they work in all connection modes.
 
 ## Recent Changes (v1.13.0)
 
