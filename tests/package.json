@@ -1,0 +1,15 @@
+{
+  "name": "claude-bot-e2e",
+  "private": true,
+  "scripts": {
+    "test": "playwright test --config=playwright.config.ts",
+    "test:api": "playwright test --config=playwright.config.ts --project=api",
+    "test:dashboard": "playwright test --config=playwright.config.ts --project=dashboard",
+    "test:headed": "playwright test --config=playwright.config.ts --headed"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.59.1",
+    "dotenv": "^16.4.7",
+    "jose": "^5.10.0"
+  }
+}
