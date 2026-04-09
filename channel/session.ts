@@ -1,5 +1,10 @@
 /**
- * Session lifecycle — resolveSession(), markDisconnected(), idle timer.
+ * Session lifecycle — resolveSession(), lease-based ownership, idle timer.
+ *
+ * Replaces pg_advisory_lock with a TTL lease stored in the sessions table.
+ * The lease_owner identifies this process uniquely; lease_expires_at is renewed
+ * every heartbeat. If the process crashes, the lease auto-expires and another
+ * channel.ts process can take over after the TTL (3 minutes).
  */
 
 import type postgres from "postgres";
@@ -14,15 +19,61 @@ export interface SessionContext {
   idleTimeoutMs: number;
 }
 
+const LEASE_TTL = "3 minutes";
+const LEASE_RETRY_DELAY_MS = 1000;
+const LEASE_MAX_ATTEMPTS = 5;
+
 export class SessionManager {
   sessionId: number | null = null;
   sessionName: string;
-  hasPollingLock = false;
+  private leaseOwner: string;
+  private leaseAcquired = false;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private ctx: SessionContext) {
     this.sessionName = `${ctx.projectName} · ${ctx.channelSource ?? "standalone"}`;
+    this.leaseOwner = `ch-${ctx.projectName}-${ctx.channelSource ?? "x"}-${Date.now()}`;
   }
+
+  // --- Lease helpers ---
+
+  private async acquireLease(sessionId: number): Promise<boolean> {
+    const result = await this.ctx.sql`
+      UPDATE sessions
+      SET lease_owner = ${this.leaseOwner},
+          lease_expires_at = now() + ${LEASE_TTL}::interval
+      WHERE id = ${sessionId}
+        AND (lease_expires_at IS NULL OR lease_expires_at < now() OR lease_owner = ${this.leaseOwner})
+      RETURNING id
+    `;
+    return result.length > 0;
+  }
+
+  async renewLease(): Promise<void> {
+    if (!this.leaseAcquired || this.sessionId === null) return;
+    const result = await this.ctx.sql`
+      UPDATE sessions
+      SET lease_expires_at = now() + ${LEASE_TTL}::interval,
+          last_active = now()
+      WHERE id = ${this.sessionId} AND lease_owner = ${this.leaseOwner}
+      RETURNING id
+    `;
+    if (result.length === 0) {
+      channelLogger.error({ sessionId: this.sessionId, owner: this.leaseOwner }, "lease lost — another process took ownership");
+    }
+  }
+
+  private async releaseLease(): Promise<void> {
+    if (!this.leaseAcquired || this.sessionId === null) return;
+    await this.ctx.sql`
+      UPDATE sessions SET lease_owner = NULL, lease_expires_at = NULL
+      WHERE id = ${this.sessionId} AND lease_owner = ${this.leaseOwner}
+    `.catch(() => {});
+    this.leaseAcquired = false;
+    channelLogger.info({ sessionId: this.sessionId }, "lease released");
+  }
+
+  // --- Session resolution ---
 
   async resolve(): Promise<number> {
     const { sql, projectName, projectPath, channelSource } = this.ctx;
@@ -42,8 +93,8 @@ export class SessionManager {
         RETURNING id
       `;
       this.sessionId = row.id;
-      this.hasPollingLock = true;
-      await sql`SELECT pg_advisory_lock(${this.sessionId!})`;
+      const acquired = await this.acquireLease(this.sessionId!);
+      if (acquired) this.leaseAcquired = true;
       channelLogger.info({ sessionId: this.sessionId, name: this.sessionName }, "created local session");
       return this.sessionId!;
     }
@@ -56,22 +107,22 @@ export class SessionManager {
     `;
 
     if (existing.length > 0) {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const lockResult = await sql`SELECT pg_try_advisory_lock(${existing[0].id}) as locked`;
-        if (lockResult[0].locked) {
+      for (let attempt = 0; attempt < LEASE_MAX_ATTEMPTS; attempt++) {
+        const acquired = await this.acquireLease(existing[0].id);
+        if (acquired) {
           this.sessionId = existing[0].id;
-          this.hasPollingLock = true;
+          this.leaseAcquired = true;
           const [proj] = await sql`SELECT id FROM projects WHERE path = ${projectPath}`;
           await sql`UPDATE sessions SET status = 'active', last_active = now(), project_id = ${proj?.id ?? null} WHERE id = ${this.sessionId!}`;
           channelLogger.info({ sessionId: this.sessionId, name: this.sessionName }, "attached to remote session");
           return this.sessionId!;
         }
-        if (attempt < 4) {
-          channelLogger.warn({ name: this.sessionName, attempt: attempt + 1 }, "session locked, retrying");
-          await new Promise((r) => setTimeout(r, 1000));
+        if (attempt < LEASE_MAX_ATTEMPTS - 1) {
+          channelLogger.warn({ name: this.sessionName, attempt: attempt + 1 }, "session lease held by another process, retrying");
+          await new Promise((r) => setTimeout(r, LEASE_RETRY_DELAY_MS));
         }
       }
-      channelLogger.warn("remote session for project already active, exiting");
+      channelLogger.warn("remote session lease held after max attempts, exiting");
       process.exit(0);
     }
 
@@ -84,8 +135,11 @@ export class SessionManager {
       RETURNING id
     `;
     this.sessionId = row.id;
-    this.hasPollingLock = true;
-    await sql`SELECT pg_advisory_lock(${this.sessionId})`;
+    this.leaseAcquired = true;
+    const acquired = await this.acquireLease(this.sessionId);
+    if (!acquired) {
+      channelLogger.warn({ sessionId: this.sessionId }, "failed to acquire lease on newly created session (race?)");
+    }
     channelLogger.info({ sessionId: this.sessionId, name: this.sessionName }, "created remote session");
 
     // Transfer chat routing from old sessions
@@ -106,6 +160,8 @@ export class SessionManager {
     return this.sessionId!;
   }
 
+  // --- Idle timer ---
+
   touchIdleTimer(onIdle: () => Promise<void>): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
     this.idleTimer = setTimeout(async () => {
@@ -120,6 +176,8 @@ export class SessionManager {
       this.idleTimer = null;
     }
   }
+
+  // --- Summarization ---
 
   async triggerSummarize(): Promise<void> {
     if (this.sessionId === null) return;
@@ -145,7 +203,9 @@ export class SessionManager {
     }
   }
 
-  async markDisconnected(releasePollingLock: () => Promise<void>): Promise<void> {
+  // --- Disconnect ---
+
+  async markDisconnected(): Promise<void> {
     if (this.sessionId === null) return;
     await this.triggerSummarize();
     try {
@@ -155,10 +215,7 @@ export class SessionManager {
         WHERE id = ${this.sessionId}
       `;
       channelLogger.info({ sessionId: this.sessionId, status: newStatus }, "session marked disconnected");
-      if (this.hasPollingLock) {
-        await releasePollingLock();
-        channelLogger.info({ sessionId: this.sessionId }, "released polling lock");
-      }
+      await this.releaseLease();
     } catch (err) {
       channelLogger.error({ err }, "failed to mark disconnected");
     }

@@ -25,19 +25,6 @@ export class MessageQueuePoller {
     private touchIdleTimer: () => void,
   ) {}
 
-  async acquirePollingLock(): Promise<boolean> {
-    const sessionId = this.ctx.sessionId();
-    if (sessionId === null) return false;
-    const result = await this.ctx.sql`SELECT pg_try_advisory_lock(${sessionId}) as locked`;
-    return result[0].locked;
-  }
-
-  async releasePollingLock(): Promise<void> {
-    const sessionId = this.ctx.sessionId();
-    if (sessionId === null) return;
-    await this.ctx.sql`SELECT pg_advisory_unlock(${sessionId})`.catch(() => {});
-  }
-
   private async setupListenNotify(): Promise<void> {
     const sessionId = this.ctx.sessionId();
     if (sessionId === null) return;

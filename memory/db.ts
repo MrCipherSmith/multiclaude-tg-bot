@@ -345,6 +345,14 @@ const migrations: Migration[] = [
       await tx`ALTER TABLE message_queue ADD COLUMN IF NOT EXISTS attachments JSONB`;
     },
   },
+  {
+    version: 12,
+    name: "session lease columns",
+    up: async (tx) => {
+      await tx`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS lease_owner VARCHAR(100)`;
+      await tx`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ`;
+    },
+  },
 ];
 
 // --- Public API ---

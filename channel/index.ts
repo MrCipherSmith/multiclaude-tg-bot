@@ -172,10 +172,11 @@ async function main() {
 
   poller.start();
 
-  const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+  // Renew session lease + last_active every 60s (lease TTL is 3 min, so 60s is safe margin)
+  const HEARTBEAT_INTERVAL_MS = 60_000;
   const heartbeatTimer = setInterval(async () => {
     if (sessionMgr.sessionId === null) return;
-    await sql`UPDATE sessions SET last_active = now() WHERE id = ${sessionMgr.sessionId}`.catch(() => {});
+    await sessionMgr.renewLease().catch(() => {});
   }, HEARTBEAT_INTERVAL_MS);
 
   let shuttingDown = false;
@@ -185,7 +186,7 @@ async function main() {
     poller.stop();
     clearInterval(heartbeatTimer);
     sessionMgr.clearIdleTimer();
-    await sessionMgr.markDisconnected(() => poller.releasePollingLock());
+    await sessionMgr.markDisconnected();
     await sql.end();
     process.exit(0);
   };
@@ -198,7 +199,7 @@ async function main() {
 
 main().catch(async (err) => {
   channelLogger.fatal({ err }, "channel fatal error");
-  await sessionMgr.markDisconnected(() => poller.releasePollingLock());
+  await sessionMgr.markDisconnected();
   await sql.end();
   process.exit(1);
 });
