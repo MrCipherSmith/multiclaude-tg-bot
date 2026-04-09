@@ -3,13 +3,14 @@ import { readFile, access, writeFile } from "fs/promises";
 import { join, extname, resolve } from "path";
 import { homedir } from "os";
 import { sql } from "../memory/db.ts";
-import { deleteSessionCascade } from "../sessions/delete.ts";
 import { sessionManager } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { signJwt, verifyJwt, verifyTelegramLogin, verifyWebAppInitData, type AuthPayload } from "../dashboard/auth.ts";
 import { getApiStats, getTranscriptionStats, getMessageStats, getRecentErrors } from "../utils/stats.ts";
 import { isIndexing } from "../memory/long-term.ts";
 import { addSSEClient, removeSSEClient, getSSEClientCount } from "./notification-broadcaster.ts";
+import { sessionService } from "../services/session-service.ts";
+import { projectService } from "../services/project-service.ts";
 
 const DIST_DIR = join(import.meta.dirname, "../dashboard/dist");
 const WEBAPP_DIST_DIR = join(import.meta.dirname, "../dashboard/webapp/dist");
@@ -168,42 +169,13 @@ async function handleOverview(_req: IncomingMessage, res: ServerResponse): Promi
 }
 
 async function handleSessions(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const rows = await sql`
-    SELECT id, name, project_path, source, status, connected_at, last_active
-    FROM sessions WHERE id != 0 ORDER BY last_active DESC
-  `;
-  sendJson(res, rows);
+  sendJson(res, await sessionService.list());
 }
 
 async function handleSessionDetail(res: ServerResponse, id: number): Promise<void> {
-  const [session] = await sql`
-    SELECT id, name, project, project_path, source, client_id, status, metadata, connected_at, last_active
-    FROM sessions WHERE id = ${id}
-  `;
-  if (!session) { sendError(res, "Session not found", 404); return; }
-  const [{ count }, tokenStats, recentTools] = await Promise.all([
-    sql`SELECT count(*)::int FROM messages WHERE session_id = ${id}`.then((r) => r[0]),
-    sql`
-      SELECT
-        coalesce(sum(input_tokens), 0)::int AS input_tokens,
-        coalesce(sum(output_tokens), 0)::int AS output_tokens,
-        coalesce(sum(total_tokens), 0)::int AS total_tokens,
-        count(*)::int AS api_calls
-      FROM api_request_stats WHERE session_id = ${id}
-    `.then((r) => r[0]),
-    sql`
-      SELECT tool_name, response, created_at
-      FROM permission_requests
-      WHERE session_id = ${id} AND archived_at IS NULL
-      ORDER BY created_at DESC LIMIT 15
-    `,
-  ]);
-  sendJson(res, {
-    ...session,
-    message_count: count,
-    tokens: tokenStats,
-    recent_tools: recentTools,
-  });
+  const detail = await sessionService.getDetail(id);
+  if (!detail) { sendError(res, "Session not found", 404); return; }
+  sendJson(res, detail);
 }
 
 async function handleSessionMessages(res: ServerResponse, id: number, url: URL): Promise<void> {
@@ -218,17 +190,14 @@ async function handleSessionMessages(res: ServerResponse, id: number, url: URL):
 }
 
 async function handleDeleteSession(res: ServerResponse, id: number): Promise<void> {
-  await deleteSessionCascade(id);
+  await sessionService.delete(id);
   sendJson(res, { ok: true });
 }
 
 async function handleRenameSession(req: IncomingMessage, res: ServerResponse, id: number): Promise<void> {
   const { name } = await parseBody(req);
   if (!name) { sendError(res, "name required"); return; }
-  const [row] = await sql`
-    UPDATE sessions SET name = ${name} WHERE id = ${id}
-    RETURNING id, name, project_path, status, connected_at, last_active
-  `;
+  const row = await sessionService.rename(id, name);
   if (!row) { sendError(res, "Session not found", 404); return; }
   sendJson(res, row);
 }
@@ -332,14 +301,7 @@ async function handleDeleteMemory(res: ServerResponse, id: number): Promise<void
 }
 
 async function handleListProjects(_req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const rows = await sql`
-    SELECT p.id, p.name, p.path, p.tmux_session_name, p.created_at,
-           s.id as session_id, s.status as session_status
-    FROM projects p
-    LEFT JOIN sessions s ON s.project_id = p.id AND s.source = 'remote'
-    ORDER BY p.name
-  `;
-  sendJson(res, rows);
+  sendJson(res, await projectService.list());
 }
 
 async function handleCreateProject(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -347,66 +309,29 @@ async function handleCreateProject(req: IncomingMessage, res: ServerResponse): P
   if (!name || typeof name !== "string") { sendError(res, "name required"); return; }
   if (!path || typeof path !== "string") { sendError(res, "path required"); return; }
   if (!path.startsWith("/")) { sendError(res, "path must be absolute"); return; }
-
-  const tmuxName = name.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
-
-  let project: any;
   try {
-    const rows = await sql`
-      INSERT INTO projects (name, path, tmux_session_name)
-      VALUES (${name}, ${path}, ${tmuxName})
-      ON CONFLICT (path) DO NOTHING
-      RETURNING id, name, path, tmux_session_name, created_at
-    `;
-    if (rows.length === 0) {
-      sendError(res, "Project with this path already exists", 409);
-      return;
-    }
-    project = rows[0];
+    const project = await projectService.create(name, path);
+    if (!project) { sendError(res, "Project with this path already exists", 409); return; }
+    sendJson(res, project, 201);
   } catch (err: any) {
     if (err.code === "23505") { sendError(res, "Project already exists", 409); return; }
     throw err;
   }
-
-  // Register remote session
-  await sql`
-    INSERT INTO sessions (project_id, name, project_path, source, status)
-    VALUES (${project.id}, ${project.name}, ${project.path}, 'remote', 'inactive')
-    ON CONFLICT DO NOTHING
-  `.catch((sessionErr: unknown) => {
-    console.error("[projects] failed to create remote session:", sessionErr);
-  });
-
-  sendJson(res, project, 201);
 }
 
-async function handleProjectAction(req: IncomingMessage, res: ServerResponse, id: number, action: "start" | "stop"): Promise<void> {
-  const rows = await sql`SELECT id, name, path, tmux_session_name FROM projects WHERE id = ${id}`;
-  if (rows.length === 0) {
-    res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Project not found" }));
-    return;
-  }
-  const project = rows[0];
-
-  const command = action === "start" ? "proj_start" : "proj_stop";
-  await sql`INSERT INTO admin_commands (command, payload) VALUES (${command}, ${JSON.stringify({ project_id: id, path: project.path, name: project.name, tmux_session_name: project.tmux_session_name })}::jsonb)`;
+async function handleProjectAction(_req: IncomingMessage, res: ServerResponse, id: number, action: "start" | "stop"): Promise<void> {
+  const result = action === "start" ? await projectService.start(id) : await projectService.stop(id);
+  if (!result.ok) { sendError(res, result.error ?? "Failed", 404); return; }
   sendJson(res, { ok: true });
 }
 
 async function handleDeleteProject(res: ServerResponse, id: number): Promise<void> {
-  const [project] = await sql`SELECT id FROM projects WHERE id = ${id}`;
-  if (!project) { sendError(res, "Project not found", 404); return; }
-
-  const activeSessions = await sql`
-    SELECT id FROM sessions WHERE project_id = ${id} AND status = 'active'
-  `;
-  if (activeSessions.length > 0) {
-    sendError(res, "Cannot delete project with active sessions", 409);
+  const result = await projectService.delete(id);
+  if (!result.ok) {
+    const status = result.error?.includes("active") ? 409 : 404;
+    sendError(res, result.error ?? "Failed", status);
     return;
   }
-
-  await sql`DELETE FROM projects WHERE id = ${id}`;
   sendJson(res, { ok: true });
 }
 
