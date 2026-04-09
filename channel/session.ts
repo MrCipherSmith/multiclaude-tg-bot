@@ -104,6 +104,7 @@ export class SessionManager {
     const existing = await sql`
       SELECT id FROM sessions
       WHERE project = ${projectName} AND source = 'remote' AND id != 0
+      ORDER BY last_active DESC
       LIMIT 1
     `;
 
@@ -123,8 +124,10 @@ export class SessionManager {
           await new Promise((r) => setTimeout(r, LEASE_RETRY_DELAY_MS));
         }
       }
-      channelLogger.warn("remote session lease held after max attempts, exiting");
-      process.exit(0);
+      // Lease held by another process (e.g. stale subprocess from previous bounce).
+      // Fall through to create a new session instead of exiting — the old one will
+      // expire naturally when its lease TTL runs out.
+      channelLogger.warn({ existingId: existing[0].id }, "remote session lease held after max attempts — creating new session");
     }
 
     const clientId = `channel-${projectName}-remote-${Date.now()}`;
