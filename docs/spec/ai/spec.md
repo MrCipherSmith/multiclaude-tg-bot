@@ -12,7 +12,7 @@ This document is optimized for AI agents (Claude instances) that need to underst
 LAYER 0 — Telegram
   grammY bot (polling or webhook)
   Entry: bot/bot.ts → bot/handlers.ts → bot/text-handler.ts
-  Media: bot/media.ts (voice→Groq, photo→Claude API)
+  Media: bot/media.ts (voice→Groq transcription; photo/doc→download+attachments JSONB in message_queue)
   Callbacks: bot/callbacks.ts (permission inline buttons)
 
 LAYER 1 — Session Router
@@ -20,8 +20,8 @@ LAYER 1 — Session Router
   Active session per chatId stored in chat_sessions table
 
 LAYER 2 — Message Dispatch (CLI mode)
-  Bot → message_queue (INSERT) → channel.ts polls (500ms LISTEN/NOTIFY)
-  channel.ts → MCP notifications/claude/channel → Claude Code process
+  Bot → message_queue (INSERT, incl. attachments JSONB) → channel.ts polls (500ms LISTEN/NOTIFY)
+  channel.ts → MCP notifications/claude/channel {content, meta:{attachments?}} → Claude Code process
 
 LAYER 3 — MCP Servers
   HTTP: mcp/server.ts (StreamableHTTPServerTransport) port=3847

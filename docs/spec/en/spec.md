@@ -170,10 +170,13 @@ When no active CLI session is selected, the bot responds directly via LLM. Suppo
 ### 3.4 Voice & Photo Media
 
 - **Voice**: Downloads OGG from Telegram → Groq whisper-large-v3 (~200ms) → text. Falls back to local Whisper container if Groq fails. Result prefixed with 🎤 and processed as normal text.
-- **Photos**: Downloads JPEG → base64 encode → Claude for analysis (standalone+Anthropic). Otherwise saves file path and sends to CLI.
-- **Files shared**: `downloads/` directory mounted from host via Docker volume.
+- **Photos**: Downloads JPEG → base64 encode → Claude for analysis (standalone+Anthropic). In CLI mode: images ≤5 MB included as base64 in `message_queue.attachments`; larger images forwarded as host file path.
+- **Documents**: Downloaded to `downloads/`, host path included in queue content and `attachments` for Claude to read via `Read` tool.
+- **Video / VideoNote / Audio**: Downloaded, host path stored in `attachments`.
+- **Files shared**: `downloads/` directory mounted from host via Docker volume (`./downloads:/app/downloads`). `toHostPath()` maps container paths to host paths so Claude Code can access them directly.
+- **Attachment forwarding**: `message_queue.attachments` (JSONB, migration v11) carries structured file metadata `{type, base64?, path, mime, name, caption}` to channel.ts, which includes it in `notifications/claude/channel` `meta.attachments`.
 
-**Key files:** `bot/media.ts`, `utils/transcribe.ts`
+**Key files:** `bot/media.ts`, `utils/files.ts`, `utils/transcribe.ts`
 
 ---
 
@@ -461,7 +464,7 @@ Features:
 | `chat_sessions` | User → active session mapping | `chat_id` (PK), `active_session_id` (FK) |
 | `messages` | Short-term and archived messages | `id`, `session_id`, `chat_id`, `role`, `content`, `project_path`, `created_at`, `archived_at` |
 | `memories` | Long-term semantic memory | `id`, `session_id`, `chat_id`, `type`, `content`, `tags`, `project_path`, `embedding` (vector 768), `created_at`, `archived_at` |
-| `message_queue` | Pending messages for channel.ts | `id`, `session_id`, `chat_id`, `content`, `message_id`, `delivered`, `created_at` |
+| `message_queue` | Pending messages for channel.ts | `id`, `session_id`, `chat_id`, `content`, `message_id`, `delivered`, `created_at`, `attachments` (JSONB) |
 | `permission_requests` | CLI permission requests | `id`, `session_id`, `chat_id`, `tool_name`, `description`, `response`, `message_id`, `created_at`, `archived_at` |
 | `projects` | Persistent project registry | `id`, `name`, `path`, `created_at` |
 | `api_request_stats` | API call metrics | `id`, `session_id`, `provider`, `model`, `operation`, `duration_ms`, `status`, `input_tokens`, `output_tokens`, `created_at` |
