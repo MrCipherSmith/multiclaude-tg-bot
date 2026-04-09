@@ -183,6 +183,14 @@ None currently. Latest merged work completed in v1.14.0.
 
 These items have PRDs written and are ready to implement.
 
+### GitHub Actions E2E CI — Activate Secrets
+- Workflow `.github/workflows/e2e.yml` is committed and ready
+- **Blocked on:** adding 3 secrets in GitHub repo Settings → Secrets and variables → Actions:
+  - `CLAUDE_BOT_TOKEN` — Telegram bot token
+  - `ALLOWED_USERS` — `446593035`
+  - `TEST_BASE_URL` — `https://claude-bot.mrciphersmith.com`
+- **After:** E2E tests run automatically on every push to main and PRs
+
 ### README Environment Variables and Prerequisites Fixes
 - **PRD:** `docs/requirements/readme-env-vars-fix-2026-04-09/en/readme-env-vars-fix.md`
 - **Issues:**
