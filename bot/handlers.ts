@@ -69,6 +69,7 @@ import { handleRemoteControl } from "./commands/remote-control.ts";
 import { handleProjects } from "./commands/projects.ts";
 import { handleProjectAdd } from "./commands/project-add.ts";
 import { handleProjectFacts, handleProjectScan } from "./commands/project-facts.ts";
+import { handleMemoryExport, handleMemoryImport } from "./commands/memory-export.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
 import { handleCallbackQuery } from "./callbacks.ts";
 import { handleText } from "./text-handler.ts";
@@ -90,6 +91,13 @@ export function registerHandlers(b: Bot): void {
   b.command("recall", handleRecall);
   b.command("memories", handleMemories);
   b.command("forget", handleForget);
+  b.command("memory_export", handleMemoryExport);
+  b.command("memory_import", handleMemoryImport);
+  // Import via document with /memory_import caption
+  b.on("message:document", async (ctx) => {
+    const caption = ctx.message.caption ?? "";
+    if (caption.startsWith("/memory_import")) await handleMemoryImport(ctx);
+  });
 
   // Utility commands
   b.command("clear", handleClear);

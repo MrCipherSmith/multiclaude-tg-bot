@@ -31,6 +31,8 @@ export function createBot(): Bot {
     { command: "recall", description: "Search memory" },
     { command: "memories", description: "List memories" },
     { command: "forget", description: "Delete memory" },
+    { command: "memory_export", description: "Export memories as JSON" },
+    { command: "memory_import", description: "Import memories from JSON file" },
     // Monitoring
     { command: "stats", description: "API stats, tokens, transcriptions" },
     { command: "logs", description: "Session logs" },
