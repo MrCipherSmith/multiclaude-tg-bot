@@ -691,7 +691,7 @@ export async function handleDashboardRequest(
     }
 
     // Parse session ID from path
-    const sessionMatch = pathname.match(/^\/api\/sessions\/(\d+)(\/messages)?$/);
+    const sessionMatch = pathname.match(/^\/api\/sessions\/(\d+)(\/messages|\/switch)?$/);
 
     if (pathname === "/api/overview" && method === "GET") {
       await handleOverview(req, res);
@@ -719,6 +719,14 @@ export async function handleDashboardRequest(
       }
       if (!sub && method === "PATCH") {
         await handleRenameSession(req, res, id);
+        return true;
+      }
+      if (sub === "/switch" && method === "POST") {
+        const user = await getUser(req);
+        if (!user) { sendError(res, "Unauthorized", 401); return true; }
+        const chatId = String(user.id);
+        await sessionManager.switchSession(chatId, id);
+        sendJson(res, { ok: true });
         return true;
       }
     }

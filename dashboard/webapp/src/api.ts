@@ -61,6 +61,8 @@ export const api = {
 
   sessions: () => req<Session[]>("/api/sessions"),
   session: (id: number) => req<SessionDetail>(`/api/sessions/${id}`),
+  switchSession: (id: number) => req<{ ok: boolean }>(`/api/sessions/${id}/switch`, { method: "POST", body: "{}" }),
+  deleteSession: (id: number) => req<void>(`/api/sessions/${id}`, { method: "DELETE" }),
 
   git: {
     tree: (sessionId: number) =>

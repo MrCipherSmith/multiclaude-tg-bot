@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api, type Session } from "./api";
 import { GitBrowser } from "./components/GitBrowser";
 import { PermissionList } from "./components/PermissionList";
@@ -127,17 +127,23 @@ export function App() {
                 <div className="p-4 text-[var(--tg-hint)] text-sm text-center">No sessions</div>
               )}
               {sessions.map((s) => (
-                <button
+                <SessionCard
                   key={s.id}
-                  onClick={() => { setSelectedSession(s); setSidebarOpen(false); }}
-                  className={`w-full text-left px-4 py-3 border-b border-black/5 active:bg-black/10 ${selectedSession?.id === s.id ? "bg-[var(--tg-button)]/10" : ""}`}
-                >
-                  <div className="flex items-center gap-2">
-                    <StatusDot status={s.status} />
-                    <span className="font-medium text-sm truncate">{s.project ?? s.name ?? `#${s.id}`}</span>
-                  </div>
-                  <div className="text-xs text-[var(--tg-hint)] mt-0.5 pl-5">{s.source} · {s.project_path?.split("/").pop() ?? ""}</div>
-                </button>
+                  session={s}
+                  selected={selectedSession?.id === s.id}
+                  onSelect={() => { setSelectedSession(s); setSidebarOpen(false); }}
+                  onSwitch={async () => {
+                    await api.switchSession(s.id);
+                    setSelectedSession(s);
+                    setSidebarOpen(false);
+                    await loadSessions();
+                  }}
+                  onDelete={async () => {
+                    await api.deleteSession(s.id);
+                    if (selectedSession?.id === s.id) setSelectedSession(null);
+                    await loadSessions();
+                  }}
+                />
               ))}
             </div>
             <div className="px-4 py-3 border-t border-black/10">
@@ -196,4 +202,63 @@ export function App() {
 function StatusDot({ status }: { status?: string }) {
   const color = status === "active" ? "bg-green-500" : status === "terminated" ? "bg-red-400" : "bg-gray-400";
   return <span className={`inline-block w-2 h-2 rounded-full shrink-0 ${color}`} />;
+}
+
+interface SessionCardProps {
+  session: Session;
+  selected: boolean;
+  onSelect: () => void;
+  onSwitch: () => Promise<void>;
+  onDelete: () => Promise<void>;
+}
+
+function SessionCard({ session, selected, onSelect, onSwitch, onDelete }: SessionCardProps) {
+  const [busy, setBusy] = useState(false);
+  const isActive = session.status === "active";
+  const canDelete = session.source === "local" && !isActive;
+  const sourceBadgeColor = session.source === "remote" ? "text-purple-400 bg-purple-400/10" : session.source === "local" ? "text-blue-400 bg-blue-400/10" : "text-gray-400 bg-gray-400/10";
+
+  const handle = useCallback(async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try { await fn(); } finally { setBusy(false); }
+  }, []);
+
+  return (
+    <div className={`border-b border-black/5 ${selected ? "bg-[var(--tg-button)]/10" : ""}`}>
+      <button onClick={onSelect} className="w-full text-left px-4 py-2.5 active:bg-black/5">
+        <div className="flex items-center gap-2">
+          <StatusDot status={session.status} />
+          <span className="font-medium text-sm truncate flex-1">
+            {session.project ?? session.name ?? `#${session.id}`}
+          </span>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0 ${sourceBadgeColor}`}>
+            {session.source}
+          </span>
+        </div>
+        <div className="text-xs text-[var(--tg-hint)] mt-0.5 pl-4 truncate">
+          #{session.id} · {session.status}
+        </div>
+      </button>
+      <div className="flex gap-1 px-4 pb-2">
+        {!isActive && (
+          <button
+            onClick={() => handle(onSwitch)}
+            disabled={busy}
+            className="text-[10px] px-2 py-1 rounded-lg font-medium text-[var(--tg-button)] bg-[var(--tg-button)]/10 active:bg-[var(--tg-button)]/20 disabled:opacity-40"
+          >
+            Switch
+          </button>
+        )}
+        {canDelete && (
+          <button
+            onClick={() => handle(onDelete)}
+            disabled={busy}
+            className="text-[10px] px-2 py-1 rounded-lg font-medium text-red-400 bg-red-400/10 active:bg-red-400/20 disabled:opacity-40"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
