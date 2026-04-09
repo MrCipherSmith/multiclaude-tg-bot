@@ -204,6 +204,13 @@ async function main() {
   const heartbeatTimer = setInterval(async () => {
     if (sessionMgr.sessionId === null) return;
     await sessionMgr.renewLease().catch(() => {});
+    // Refresh forum topic ID — may have changed if topic was recreated or project added after startup
+    if (forumChatId) {
+      try {
+        const rows = await sql`SELECT forum_topic_id FROM projects WHERE path = ${projectPath}`;
+        forumTopicId = rows[0]?.forum_topic_id ?? null;
+      } catch { /* non-critical */ }
+    }
   }, HEARTBEAT_INTERVAL_MS);
 
   let shuttingDown = false;

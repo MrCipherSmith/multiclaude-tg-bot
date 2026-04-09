@@ -182,10 +182,16 @@ export function registerTools(
           return text("TELEGRAM_BOT_TOKEN not set");
         }
 
-        // In forum mode: inject message_thread_id so reply lands in the project topic
+        // In forum mode: inject message_thread_id so reply lands in the project topic.
+        // Always query DB fresh — startup snapshot may be stale (topic recreated, or project
+        // added after subprocess started).
         const forumChatId = ctx.forumChatId?.();
-        const forumTopicId = ctx.forumTopicId?.();
-        const isForumReply = forumChatId && forumTopicId && chatId === forumChatId;
+        let forumTopicId: number | null = null;
+        if (forumChatId && chatId === forumChatId) {
+          const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
+          forumTopicId = rows[0]?.forum_topic_id ?? null;
+        }
+        const isForumReply = !!(forumChatId && forumTopicId && chatId === forumChatId);
         const forumExtra = isForumReply ? { message_thread_id: forumTopicId } : {};
 
         // In DM mode: check if this session is the active one (background session badge)
@@ -321,7 +327,11 @@ export function registerTools(
           const token = ctx.token();
           if (token) {
             const fChatId = ctx.forumChatId?.();
-            const fTopicId = ctx.forumTopicId?.();
+            let fTopicId: number | null = null;
+            if (fChatId && chatId === fChatId) {
+              const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
+              fTopicId = rows[0]?.forum_topic_id ?? null;
+            }
             const diffExtra = (fChatId && fTopicId && chatId === fChatId)
               ? { message_thread_id: fTopicId }
               : {};
