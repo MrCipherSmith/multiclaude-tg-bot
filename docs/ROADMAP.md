@@ -14,7 +14,27 @@
 
 ## ✅ Implemented
 
-### v1.15.0 (Latest)
+### v1.16.0 (Latest)
+
+#### Memory Export / Import
+- `/memory_export [project_path]` — exports all active memories as a JSON manifest file
+- `/memory_import` — send exported file with this caption; runs Smart Reconciliation on each entry (add/update/skip)
+- Optional project filter: `/memory_export /home/user/project` exports only that project's memories
+- **Files changed:** `bot/commands/memory-export.ts` (new), `bot/handlers.ts`, `bot/bot.ts`
+
+#### Permission History Analytics
+- `GET /api/permissions/stats` — summary (total/allowed/denied/always/pending) + top-15 tools breakdown, filterable by `session_id` and `days`
+- Webapp Session Monitor: new **Permission History** section — summary counts + bar chart of top 8 tools with allow-rate indicator
+- `/permission_stats [days]` Telegram command — ASCII bar chart per tool (default: 30d, max 365d)
+- **Files changed:** `mcp/dashboard-api.ts`, `dashboard/webapp/src/api.ts`, `dashboard/webapp/src/components/SessionMonitor.tsx`, `bot/commands/admin.ts`
+
+#### Webapp: Expanded Session Monitor
+- **API Stats (global)**: requests / errors / avg latency / tokens (total, input, output) / estimated cost / per-model breakdown
+- Time window selector: 24h / Since restart / All time (shared with Permission History)
+- Stats sourced from global `api_request_stats` (CLI sessions don't write session-scoped rows)
+- **Files changed:** `mcp/dashboard-api.ts`, `dashboard/webapp/src/api.ts`, `dashboard/webapp/src/components/SessionMonitor.tsx`
+
+### v1.15.0
 
 #### Webapp: Active Session Fix
 - Webapp now opens the user's actual active session instead of the first globally active session
@@ -266,12 +286,6 @@ Features identified as valuable but without PRDs yet.
 - **Why:** Dashboard loses state on refresh (scroll position, open menus, filters).
 - **Effort:** Low — localStorage middleware + query param routing
 
-### Memory Export/Import
-- Backup all memories as JSON with metadata
-- Restore or migrate memories between bot instances
-- **Why:** Data portability. Currently no export mechanism; data is trapped in DB.
-- **Effort:** Low — dump memories + embeddings, provide CLI tool
-
 ### Conversation Threading
 - Group messages by session/project in Telegram topic threads
 - Telegram topic per project
@@ -326,4 +340,4 @@ Features identified as valuable but without PRDs yet.
 
 ---
 
-**Last updated:** 2026-04-09
+**Last updated:** 2026-04-09 (v1.16.0)

@@ -64,11 +64,24 @@ Live overview of all sessions.
 - ⚪ **Idle** — session connected but no recent activity
 - 🔴 **Inactive** — session disconnected
 
-**Session detail:**
-- Project name and path
-- Session source: `remote` / `local`
-- Connected time
-- Pending permission count
+**Session info:**
+- Project name, path, source (`remote` / `local`), status
+- Connected time, message count
+
+**API Stats (global):**
+- Requests / Errors (highlighted red if > 0) / Avg latency
+- Total / Input / Output tokens
+- Estimated cost
+- Per-model breakdown: requests · tokens · cost · avg latency
+- Time window selector: **24h** / **Since restart** / **All time**
+
+**Permission History:**
+- Summary counts: Total / Allowed / Always Allowed / Denied / Pending
+- Bar chart of top 8 tools by usage with allow-rate progress bar
+- Shares the same time window selector as API Stats
+
+**Tool Calls:**
+- Last 15 tool calls with status dot (🟢 allow / 🔴 deny / 🟡 pending) and relative time
 
 **Session Sidebar:**
 - All sessions listed with source badge and status dot

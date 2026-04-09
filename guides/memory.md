@@ -97,8 +97,39 @@ This is more detailed than idle summarization — it captures the full arc of wh
 | `/recall [query]` | Semantic search through project memories |
 | `/memories` | List recent memories for this project |
 | `/forget [id]` | Delete a memory by ID |
+| `/memory_export [project_path]` | Export all active memories as a JSON file |
+| `/memory_import` | Import memories from export file (send file with this as caption) |
 | `/summarize` | Force conversation summarization now |
 | `/clear` | Clear current session's short-term context |
+
+---
+
+## Memory Export / Import
+
+Memories can be backed up and restored between bot instances.
+
+### Export
+
+```
+/memory_export
+```
+
+Exports all non-archived memories as a JSON file. Optionally filter by project:
+
+```
+/memory_export /home/user/myproject
+```
+
+The file contains a manifest with `exported_at`, `total`, `filters`, and a `memories` array — each entry with `id`, `source`, `type`, `content`, `tags`, `project_path`, `created_at`, `updated_at`.
+
+### Import
+
+Send the exported `.json` file to the bot chat with `/memory_import` as the caption.
+
+The importer runs Smart Reconciliation on each memory — duplicates are detected and updated rather than inserted blindly. The reply shows:
+- `✅ Added: N` — new memories inserted
+- `🔄 Updated: N` — existing memories updated
+- `⏭ Skipped: N` — duplicates or invalid entries
 
 ---
 

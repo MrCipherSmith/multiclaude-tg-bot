@@ -380,6 +380,8 @@ Connect:
 | `/recall [query]` | Semantic search through memory |
 | `/memories` | List recent memories |
 | `/forget [id]` | Delete a memory |
+| `/memory_export [project_path]` | Export all memories as a JSON file (optionally filtered by project) |
+| `/memory_import` | Import memories from a previously exported JSON file (send file with this caption) |
 | `/summarize` | Force conversation summarization |
 | `/clear` | Clear current session context |
 | **Monitoring** | |
@@ -387,6 +389,7 @@ Connect:
 | `/logs [id]` | Request logs for session |
 | `/status` | Bot health (DB, Ollama, counts) |
 | `/pending` | Pending CLI permission requests |
+| `/permission_stats [days]` | Permission history: allow/deny breakdown by tool (default: 30 days) |
 | **Tools & Knowledge** | |
 | `/tools` | Available MCP tools |
 | `/skills` | Skills catalog — inline buttons with descriptions, click to run |
