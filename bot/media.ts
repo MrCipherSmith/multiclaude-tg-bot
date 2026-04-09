@@ -11,6 +11,7 @@ import { sql } from "../memory/db.ts";
 import { logger } from "../logger.ts";
 import { appendLog } from "../utils/stats.ts";
 import { getBotRef, setPendingInput } from "./handlers.ts";
+import { getForumChatId } from "./forum-cache.ts";
 
 const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — include base64 inline
 
@@ -115,7 +116,16 @@ async function handleMedia(
 ): Promise<void> {
   const bot = getBotRef();
   const chatId = String(ctx.chat!.id);
-  const route = await routeMessage(chatId);
+  const forumTopicId = ctx.message?.message_thread_id;
+  const forumChatId = await getForumChatId();
+  const isForumMessage = forumChatId !== null && chatId === forumChatId;
+
+  if (isForumMessage && (!forumTopicId || forumTopicId === 1)) {
+    await ctx.reply("💡 General — только команды.\nОткрой топик проекта чтобы работать с сессией.");
+    return;
+  }
+
+  const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
 
   await ctx.replyWithChatAction("typing");
 
@@ -178,7 +188,16 @@ export async function handleVoice(ctx: Context): Promise<void> {
   if (!voice) return;
 
   const chatId = String(ctx.chat!.id);
-  const route = await routeMessage(chatId);
+  const forumTopicId = ctx.message?.message_thread_id;
+  const forumChatId = await getForumChatId();
+  const isForumMessage = forumChatId !== null && chatId === forumChatId;
+
+  if (isForumMessage && (!forumTopicId || forumTopicId === 1)) {
+    await ctx.reply("💡 General — только команды.\nОткрой топик проекта чтобы работать с сессией.");
+    return;
+  }
+
+  const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
 
   appendLog(route.sessionId, chatId, "voice", `received ${voice.duration}s, route=${route.mode}`);
 

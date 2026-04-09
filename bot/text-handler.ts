@@ -9,6 +9,7 @@ import { appendLog } from "../utils/stats.ts";
 import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, getBotRef } from "./handlers.ts";
 import { getSwitchContext, clearSwitchContext } from "./switch-cache.ts";
 import { replyInThread } from "./format.ts";
+import { getForumChatId } from "./forum-cache.ts";
 export { replyInThread } from "./format.ts";
 
 export async function enqueueToolCommand(
@@ -56,9 +57,19 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  // Extract forum topic ID (undefined or 1 → fall through to DM routing)
+  // Forum routing
   const forumTopicId = ctx.message?.message_thread_id;
-  const route = await routeMessage(chatId, forumTopicId);
+  const forumChatId = await getForumChatId();
+  const isForumMessage = forumChatId !== null && chatId === forumChatId;
+
+  // General topic (threadId=1 or no thread) in forum mode → control channel only.
+  // Commands still work (handled before this point by grammY command handlers).
+  if (isForumMessage && (!forumTopicId || forumTopicId === 1)) {
+    await replyInThread(ctx, "💡 General — только команды.\nОткрой топик проекта чтобы работать с сессией.");
+    return;
+  }
+
+  const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
 
   appendLog(route.sessionId, chatId, "route", `mode=${route.mode}, session=#${route.sessionId}`);
 

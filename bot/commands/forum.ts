@@ -11,6 +11,7 @@
 import type { Context } from "grammy";
 import { forumService } from "../../services/forum-service.ts";
 import { replyInThread } from "../format.ts";
+import { invalidateForumCache } from "../forum-cache.ts";
 import { logger } from "../../logger.ts";
 
 // --- /forum_setup ---
@@ -50,6 +51,8 @@ export async function handleForumSetup(ctx: Context): Promise<void> {
     }
     return;
   }
+
+  invalidateForumCache();
 
   const errorPart = result.errors.length > 0
     ? `\n\n⚠️ Errors:\n${result.errors.map((e) => `• ${e}`).join("\n")}`
