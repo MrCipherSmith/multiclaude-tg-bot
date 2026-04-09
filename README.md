@@ -7,9 +7,9 @@
 
 [Dashboard](examples/dashboard.md) | [Usage Patterns](examples/usage-patterns.md) | [Architecture](guides/architecture.md) | [Cloudflare Tunnel](guides/cloudflare-tunnel-setup.md) | [Remote Laptop Setup](guides/remote-laptop-setup.md) | [Usage Scenarios](guides/usage-scenarios.md) | [Memory](guides/memory.md) | [MCP Tools](guides/mcp-tools.md) | [Mini App](guides/webapp.md) | [CLAUDE.md Guide](CLAUDE_MD_GUIDE.md)
 
-> **Control Claude Code from Telegram.** Multi-session bot with persistent projects, dual-layer memory, voice transcription, image analysis, and real-time CLI progress monitoring.
+> **Control Claude Code from Telegram.** Each project gets its own topic in a Telegram Forum group — no `/switch` needed. Persistent sessions, dual-layer memory, voice transcription, image analysis, and real-time CLI progress monitoring.
 
-Connect multiple Claude Code CLI instances to a single Telegram bot. Switch between projects with automatic context briefing, send voice messages, approve CLI permissions, and see what Claude is doing — all from your phone.
+Connect multiple Claude Code CLI instances to a single Telegram bot. Each project lives in its own **forum topic** — open the topic, type normally, Claude replies there. Status updates and permission requests appear in the correct topic. No context bleeding, no `/switch` ceremony.
 
 ## Quick Start
 
@@ -24,7 +24,75 @@ Then connect any project:
 cd your-project && claude-bot connect . --tmux
 ```
 
-Done. Open Telegram, type `/sessions` — your project is there.
+Done. Open Telegram, run `/forum_setup` in your group — your projects appear as topics.
+
+## Forum Group Setup
+
+The recommended way to use Claude Bot is with a **Telegram Forum Supergroup** where each project gets its own topic.
+
+### Step 1 — Create a Supergroup
+
+1. In Telegram tap **New Group** → add yourself → set a name (e.g. `🧠 Dev Hub`)
+2. Open group **Settings → Group type → Topics** → enable
+3. The group becomes a Forum Supergroup with a **General** topic
+
+### Step 2 — Add the bot as admin
+
+1. Open group **⋮ → Manage Group → Administrators → Add Admin**
+2. Search your bot (e.g. `@GoodeaAIBot`)
+3. Enable **Manage Topics** permission
+4. Save
+
+### Step 3 — Run `/forum_setup`
+
+Open the **General** topic and send:
+
+```
+/forum_setup
+```
+
+The bot will:
+- Verify the group has Topics enabled
+- Save the group chat ID to `bot_config`
+- Create one topic per registered project (`keryx`, `claude-bot`, `vantage-frontend`, …)
+- Pin a **Dev Hub** button in General topic (opens the Mini App WebApp)
+- Reply: `✅ Forum configured. N topics created.`
+
+Topics appear in the left sidebar immediately.
+
+### Step 4 — Start working
+
+Open any project topic and type normally:
+
+```
+keryx topic:  "добавь тест для auth middleware"
+              → Claude replies here, status shows here, permissions appear here
+```
+
+No `/switch` ever needed. The topic IS the project.
+
+### Daily use
+
+| Action | How |
+|--------|-----|
+| Talk to keryx | Open **keryx** topic, type normally |
+| Talk to claude-bot | Open **claude-bot** topic, type normally |
+| Check all projects | `/projects` in General topic |
+| Add new project | `/project_add /path/to/project` — topic auto-created |
+| Re-sync topics | `/forum_sync` in General topic |
+
+### Topic management
+
+```
+/topic_rename <name>   — rename the current topic
+/topic_close           — close (pause) topic
+/topic_reopen          — reopen topic
+/forum_sync            — create missing topics, re-sync
+```
+
+### Backward compatibility
+
+If you don't run `/forum_setup`, the bot works exactly as before — private DM, `/switch` routing, everything unchanged. Forum mode is **additive**.
 
 ### Dashboard
 
@@ -77,9 +145,10 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Auto-Summarization** — remote session conversations summarized on idle/overflow; messages archived with configurable TTL (default 30 days)
 
 ### Telegram UX
+- **Forum Topics** — each project gets its own topic in a Telegram Forum Supergroup; messages, status updates, and permission requests are scoped to the correct topic; General topic is control-only; `/forum_setup` creates all topics at once; `/project_add` auto-creates a topic for new projects
 - **Markdown Rendering** — responses formatted with HTML (bold, italic, code blocks with syntax highlighting, links)
-- **Live Status Updates** — real-time progress from CLI via tmux monitoring ("Explore: Find files", "Bash: git status")
-- **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), with input preview (file path + syntax-highlighted diff), synced with terminal
+- **Live Status Updates** — real-time progress from CLI via tmux monitoring ("Explore: Find files", "Bash: git status"); status appears in the project topic in forum mode
+- **Permission Forwarding** — CLI permission requests as inline buttons (Allow / Always / Deny), with input preview (file path + syntax-highlighted diff), synced with terminal; in forum mode, buttons appear in the project topic
 - **Auto-Approve Permissions** — configure allowed tools in `settings.local.json` (`permissions.allow` patterns like `"Edit(*)"`, `"Bash(*)"`) to skip Telegram approval for trusted operations
 - **Statistics & Logging** — `/stats` for API usage and tokens, `/logs` for per-session request logs
 - **Web Dashboard** — real-time stats (by provider, project, operation, session), token charts, cost estimation including Anthropic CLI sessions, error drill-down with slide panel, log viewer with full message detail; **Projects page** for creating, starting, and stopping projects from the browser
@@ -95,7 +164,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **Service Layer** — `services/` directory with `SessionService`, `ProjectService`, `PermissionService`, `MemoryService`, `MessageService`, `SummarizationService`; typed wrappers over raw SQL with atomic operations
 - **Zod Config Validation** — all env vars parsed and validated at startup via `config.ts`; bot exits immediately on missing required vars
 - **Structured Logging (Pino)** — JSON-structured logs throughout the codebase; `LOG_LEVEL` env var; `channelLogger` writes to stderr fd 2 for MCP stdio compatibility
-- **Unit Test Suite** — 43 pure unit tests in `tests/unit/` covering session lifecycle, permission state machine, and memory reconciliation; runs in ~24ms with `bun test tests/unit/`
+- **Unit Test Suite** — 77 pure unit tests in `tests/unit/` covering session lifecycle, permission state machine, memory reconciliation, and forum topic routing; runs in ~30ms with `bun test tests/unit/`
 - **Security Defaults** — bot exits immediately at startup if `ALLOWED_USERS` is empty and `ALLOW_ALL_USERS=true` is not set; no silent open-access deployments
 - **Session State Machine** — `sessions/state-machine.ts` enforces valid status transitions (`active→inactive`, `active→terminated`, `inactive→active`); invalid transitions are blocked and logged
 
@@ -419,6 +488,13 @@ Connect:
 | `/rules` | Coding rules from knowledge base |
 | `/add` | Register project as Claude Code session (prompts for path if not in session) |
 | `/model` | Select Claude model for current session (inline buttons) |
+| **Forum** | |
+| `/forum_setup` | Configure forum supergroup — creates one topic per project + pins Dev Hub button, run in General topic |
+| `/forum_sync` | Re-sync topics — creates missing topics for new projects, re-pins Dev Hub button |
+| `/forum_hub` | Send/re-send pinned Dev Hub WebApp button to General topic |
+| `/topic_rename <name>` | Rename current project topic (run from within a project topic) |
+| `/topic_close` | Close (pause) current project topic |
+| `/topic_reopen` | Reopen current project topic |
 
 ## Skills, Commands & Hooks
 
@@ -628,6 +704,23 @@ Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
 | Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
+
+## Recent Changes (v1.20.0)
+
+### Forum Topics — One Topic Per Project
+
+The primary UX model is now a **Telegram Forum Supergroup** where each project has a dedicated topic:
+
+- `/forum_setup` — run once in the General topic; bot creates one topic per registered project and stores the group ID in `bot_config`
+- `/project_add` — automatically creates a forum topic for the new project when forum is configured
+- **Message routing** — `sessions/router.ts` resolves `message_thread_id` → project → active session; General topic (thread ID = 1) is control-only
+- **Status messages** — `StatusManager` in `channel/status.ts` sends all status updates to the project topic; project name prefix suppressed (the topic already identifies the project)
+- **Permission requests** — `PermissionHandler` in `channel/permissions.ts` sends Allow/Always/Deny buttons to the correct project topic
+- **`reply` and `update_status` MCP tools** — automatically include `message_thread_id` when called from a forum session
+- **Forum cache** — `bot/forum-cache.ts` lazy-loads `forum_chat_id` from DB with invalidation on setup/sync
+- **DB migration v13** — `forum_topic_id INTEGER` column on `projects`, `bot_config` table for runtime settings
+- **34 new unit tests** — `tests/unit/forum-topics.test.ts` covers routing logic, icon color rotation, `replyInThread`, StatusManager forum target, PermissionHandler forum target, migration schema shape
+- **Backward compatible** — if `/forum_setup` was never run, the bot operates in DM mode unchanged
 
 ## Recent Changes (v1.19.0)
 

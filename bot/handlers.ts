@@ -73,7 +73,7 @@ import { handleProjects } from "./commands/projects.ts";
 import { handleProjectAdd } from "./commands/project-add.ts";
 import { handleProjectFacts, handleProjectScan } from "./commands/project-facts.ts";
 import { handleMemoryExport, handleMemoryImport } from "./commands/memory-export.ts";
-import { handleForumSetup, handleForumSync, handleTopicRename, handleTopicClose, handleTopicReopen } from "./commands/forum.ts";
+import { handleForumSetup, handleForumSync, handleTopicRename, handleTopicClose, handleTopicReopen, handleForumHub } from "./commands/forum.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
 import { handleCallbackQuery } from "./callbacks.ts";
 import { handleText } from "./text-handler.ts";
@@ -135,6 +135,7 @@ export function registerHandlers(b: Bot): void {
   // Forum topic management
   b.command("forum_setup", handleForumSetup);
   b.command("forum_sync", handleForumSync);
+  b.command("forum_hub", handleForumHub);
   b.command("topic_rename", handleTopicRename);
   b.command("topic_close", handleTopicClose);
   b.command("topic_reopen", handleTopicReopen);

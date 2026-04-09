@@ -14,7 +14,25 @@
 
 ## ✅ Implemented
 
-### v1.18.0 (Latest)
+### v1.20.0 (Latest)
+
+#### Forum Topics — One Topic Per Project
+- Telegram Forum Supergroup: each project = one dedicated topic/thread
+- `/forum_setup` creates topics for all existing projects, stores `forum_chat_id` in `bot_config`
+- `/project_add` auto-creates a forum topic when forum is configured
+- Message routing: `sessions/router.ts` resolves `message_thread_id` → project → active session
+- General topic (thread_id=1) = control channel only; text/media routing blocked
+- Status updates and permission requests go to the correct project topic
+- `reply` and `update_status` MCP tools auto-inject `message_thread_id` in forum mode
+- Forum config cached in-memory (`bot/forum-cache.ts`), invalidated after `/forum_setup`
+- DB migration v13: `forum_topic_id` on `projects`, `bot_config` table
+- `/forum_sync`, `/topic_rename`, `/topic_close`, `/topic_reopen` management commands
+- 34 new unit tests in `tests/unit/forum-topics.test.ts`
+- Backward compatible: DM mode works unchanged when forum not configured
+- **PRD:** `docs/requirements/forum-topics-2026-04-09/en/forum-topics.md`
+- **Commits:** acb1d6d, bece340, 4ee1d05
+
+### v1.18.0
 
 #### Service Layer
 - Introduced `services/` directory — thin typed wrappers over raw SQL for all domain operations
@@ -283,7 +301,7 @@ Core features established in foundational releases:
 
 ## 🚧 In Progress
 
-None currently. Latest merged work completed in v1.18.0.
+None currently. Latest merged work completed in v1.20.0.
 
 ---
 
@@ -350,10 +368,9 @@ Features identified as valuable but without PRDs yet.
 - **Effort:** Low — localStorage middleware + query param routing
 
 ### Conversation Threading
-- Group messages by session/project in Telegram topic threads
-- Telegram topic per project
-- **Why:** Single chat thread gets cluttered with multi-session context.
-- **Effort:** Medium — Telegram topic API integration, message routing changes
+- ~~Group messages by session/project in Telegram topic threads~~
+- ~~Telegram topic per project~~
+- Moved to 📋 Planned — PRD written: `docs/requirements/forum-topics-2026-04-09/en/forum-topics.md`
 
 ---
 
@@ -398,4 +415,4 @@ Features identified as valuable but without PRDs yet.
 
 ---
 
-**Last updated:** 2026-04-09 (v1.18.0)
+**Last updated:** 2026-04-09 (v1.20.0)

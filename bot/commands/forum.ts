@@ -6,6 +6,7 @@
  * FR-7:  /topic_rename  — rename current project topic
  * FR-7:  /topic_close   — close current project topic
  * FR-7:  /topic_reopen  — reopen current project topic
+ *        /forum_hub     — send/re-send Dev Hub WebApp button to General topic
  */
 
 import type { Context } from "grammy";
@@ -13,6 +14,55 @@ import { forumService } from "../../services/forum-service.ts";
 import { replyInThread } from "../format.ts";
 import { invalidateForumCache } from "../forum-cache.ts";
 import { logger } from "../../logger.ts";
+import { CONFIG } from "../../config.ts";
+
+/** Build the webapp URL from the configured webhook URL. */
+function getWebAppUrl(): string | null {
+  const base = CONFIG.TELEGRAM_WEBHOOK_URL;
+  if (!base) return null;
+  try {
+    return new URL(base).origin + "/webapp/";
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a pinned Dev Hub message with WebApp button to the General topic (thread_id=1).
+ * Safe to call multiple times — sends a new message each time (old pin is unpinned automatically).
+ */
+async function sendDevHubPin(ctx: Context, forumChatId: string | number): Promise<boolean> {
+  const webAppUrl = getWebAppUrl();
+  if (!webAppUrl) {
+    logger.warn("sendDevHubPin: TELEGRAM_WEBHOOK_URL not set, skipping Dev Hub pin");
+    return false;
+  }
+
+  try {
+    // General topic (thread_id=1) requires NO message_thread_id — messages without it go to General
+    const msg = await ctx.api.sendMessage(
+      Number(forumChatId),
+      "🧠 <b>Dev Hub</b>\n\nОткрой веб-приложение для управления сессиями, памятью, разрешениями и статистикой.",
+      {
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [[
+            // web_app buttons are not allowed in groups — use url button instead
+            { text: "🚀 Открыть Dev Hub", url: webAppUrl },
+          ]],
+        },
+      } as any,
+    );
+    await ctx.api.pinChatMessage(Number(forumChatId), msg.message_id, {
+      disable_notification: true,
+    });
+    logger.info({ forumChatId, messageId: msg.message_id }, "Dev Hub pinned in General topic");
+    return true;
+  } catch (err: any) {
+    logger.warn({ err }, "sendDevHubPin: failed to send or pin Dev Hub message");
+    return false;
+  }
+}
 
 // --- /forum_setup ---
 
@@ -59,6 +109,9 @@ export async function handleForumSetup(ctx: Context): Promise<void> {
     : "";
 
   await replyInThread(ctx, `✅ Forum configured. ${result.topicsCreated} topic(s) created.${errorPart}`);
+
+  // Pin Dev Hub button in General topic
+  await sendDevHubPin(ctx, chatId);
 }
 
 // --- /forum_sync ---
@@ -84,6 +137,9 @@ export async function handleForumSync(ctx: Context): Promise<void> {
     : "";
 
   await replyInThread(ctx, `✅ Sync complete. Created: ${result.created}${errorPart}`);
+
+  // Re-pin Dev Hub button in General topic
+  await sendDevHubPin(ctx, forumChatId);
 }
 
 // --- /topic_rename <name> ---
@@ -145,4 +201,24 @@ export async function handleTopicReopen(ctx: Context): Promise<void> {
   } catch (err: any) {
     await replyInThread(ctx, `❌ Failed: ${err?.message ?? String(err)}`);
   }
+}
+
+// --- /forum_hub ---
+
+export async function handleForumHub(ctx: Context): Promise<void> {
+  const forumChatId = await forumService.getForumChatId();
+  if (!forumChatId) {
+    await replyInThread(ctx, "⚠️ Forum not configured. Run /forum_setup first.");
+    return;
+  }
+
+  if (!getWebAppUrl()) {
+    await replyInThread(ctx, "⚠️ TELEGRAM_WEBHOOK_URL not set — cannot generate Dev Hub URL.");
+    return;
+  }
+
+  const ok = await sendDevHubPin(ctx, forumChatId);
+  await replyInThread(ctx, ok
+    ? "✅ Dev Hub button pinned in General topic."
+    : "⚠️ Dev Hub message sent but pinning failed — check bot has 'Pin Messages' permission.");
 }

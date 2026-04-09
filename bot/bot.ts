@@ -53,6 +53,7 @@ export function createBot(): Bot {
     // Forum management
     { command: "forum_setup", description: "Configure forum supergroup (run in group)" },
     { command: "forum_sync", description: "Sync forum topics for all projects" },
+    { command: "forum_hub", description: "Pin Dev Hub WebApp button in General topic" },
     { command: "topic_rename", description: "Rename current project topic" },
     { command: "topic_close", description: "Close current project topic" },
     { command: "topic_reopen", description: "Reopen current project topic" },
@@ -66,9 +67,9 @@ export function createBot(): Bot {
   ]).catch((err) => logger.error({ err }, "failed to set bot commands"));
 
   // Set WebApp menu button (requires HTTPS URL for production)
-  const webAppUrl = (CONFIG.TELEGRAM_WEBHOOK_URL || "")
-    .replace(/\/$/, "")
-    .replace(/\/[^/]*$/, "") + "/webapp/";
+  const webAppUrl = CONFIG.TELEGRAM_WEBHOOK_URL
+    ? new URL(CONFIG.TELEGRAM_WEBHOOK_URL).origin + "/webapp/"
+    : "";
   if (CONFIG.TELEGRAM_WEBHOOK_URL) {
     bot.api.setChatMenuButton({ menu_button: { type: "web_app", text: "Dev Hub", web_app: { url: webAppUrl } } })
       .catch((err) => logger.error({ err }, "failed to set menu button"));
