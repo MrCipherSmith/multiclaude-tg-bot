@@ -38,18 +38,32 @@ const PermissionRequestSchema = NotificationSchema.extend({
 
 // Config read directly from env (not via config.ts) because channel.ts runs
 // as a separate stdio process, not part of the main bot. This is intentional.
-const DATABASE_URL = process.env.DATABASE_URL!;
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL ?? "nomic-embed-text";
-const POLL_INTERVAL_MS = 500;
-const BOT_API_URL = process.env.BOT_API_URL ?? "http://localhost:3847";
+const ChannelEnvSchema = z.object({
+  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  OLLAMA_URL: z.string().default("http://localhost:11434"),
+  EMBEDDING_MODEL: z.string().default("nomic-embed-text"),
+  BOT_API_URL: z.string().default("http://localhost:3847"),
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  CHANNEL_SOURCE: z.enum(["remote", "local"]).optional(),
+  IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
+  HOME: z.string().default("/root"),
+});
 
-if (!DATABASE_URL) {
-  process.stderr.write("DATABASE_URL is required\n");
+const channelEnvResult = ChannelEnvSchema.safeParse(process.env);
+if (!channelEnvResult.success) {
+  for (const issue of channelEnvResult.error.issues) {
+    process.stderr.write(`[channel] config error — ${issue.path.join(".")}: ${issue.message}\n`);
+  }
   process.exit(1);
 }
+const ENV = channelEnvResult.data;
 
-const sql = postgres(DATABASE_URL, { max: 3 });
+const POLL_INTERVAL_MS = 500;
+
+const sql = postgres(ENV.DATABASE_URL, { max: 3 });
+const OLLAMA_URL = ENV.OLLAMA_URL;
+const EMBEDDING_MODEL = ENV.EMBEDDING_MODEL;
+const BOT_API_URL = ENV.BOT_API_URL;
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -75,8 +89,8 @@ async function embed(text: string): Promise<number[]> {
 // --- Session management ---
 // source: "remote" (claude-bot up / tmux), "local" (claude-bot start), null (plain claude — no bot involvement)
 const channelSource: "remote" | "local" | null =
-  process.env.CHANNEL_SOURCE === "remote" ? "remote" :
-  process.env.CHANNEL_SOURCE === "local" ? "local" :
+  ENV.CHANNEL_SOURCE === "remote" ? "remote" :
+  ENV.CHANNEL_SOURCE === "local" ? "local" :
   null;
 let sessionName = `${projectName} · ${channelSource ?? "standalone"}`; // for logs only
 
@@ -178,7 +192,7 @@ async function resolveSession(): Promise<number> {
 }
 
 // --- Idle timer for summarization ---
-const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS ?? 900_000); // 15 min
+const IDLE_TIMEOUT_MS = ENV.IDLE_TIMEOUT_MS; // 15 min default
 let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function touchIdleTimer(): void {
@@ -240,7 +254,7 @@ async function markDisconnected(): Promise<void> {
 const autoApprovePatterns = new Set<string>();
 
 async function loadAutoApproveRules(): Promise<void> {
-  const homeDir = process.env.HOME ?? "/root";
+  const homeDir = ENV.HOME;
   const encodedPath = projectPath.replace(/\//g, "-");
   const paths = [
     `${homeDir}/.claude/projects/${encodedPath}/settings.local.json`,
@@ -328,7 +342,7 @@ mcp.setNotificationHandler(
     }
     if (!sessionId) return;
 
-    const token = process.env.TELEGRAM_BOT_TOKEN;
+    const token = ENV.TELEGRAM_BOT_TOKEN;
     if (!token) return;
 
     // Find which chat_id this session is connected to
@@ -651,7 +665,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       stopProgressMonitorForChat(chatId);
       await deleteStatusMessage(chatId);
 
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const token = ENV.TELEGRAM_BOT_TOKEN;
       if (!token) {
         process.stderr.write(`[channel] reply failed: no TELEGRAM_BOT_TOKEN\n`);
         return text("TELEGRAM_BOT_TOKEN not set");
@@ -728,7 +742,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "react": {
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const token = ENV.TELEGRAM_BOT_TOKEN;
       if (!token) return text("TELEGRAM_BOT_TOKEN not set");
       const res = await fetch(`https://api.telegram.org/bot${token}/setMessageReaction`, {
         method: "POST",
@@ -748,7 +762,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     case "edit_message": {
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const token = ENV.TELEGRAM_BOT_TOKEN;
       if (!token) return text("TELEGRAM_BOT_TOKEN not set");
       const htmlText = markdownToTelegramHtml(String(args!.text));
       let res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
@@ -823,7 +837,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
 
       // Send optional diff as a separate formatted message
       if (args!.diff) {
-        const token = process.env.TELEGRAM_BOT_TOKEN;
+        const token = ENV.TELEGRAM_BOT_TOKEN;
         if (token) {
           const htmlDiff = markdownToTelegramHtml(String(args!.diff));
           let res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -915,7 +929,7 @@ function text(t: string) {
 // --- Telegram helpers ---
 
 async function editTelegramMessage(chatId: string, messageId: number, text: string): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   try {
     await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
@@ -927,7 +941,7 @@ async function editTelegramMessage(chatId: string, messageId: number, text: stri
 }
 
 function deleteTelegramMessage(chatId: string, messageId: number): void {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   fetch(`https://api.telegram.org/bot${token}/deleteMessage`, {
     method: "POST",
@@ -965,7 +979,7 @@ async function getSessionPrefix(chatId: string): Promise<string> {
 }
 
 async function sendStatusMessage(chatId: string, stage: string): Promise<string | null> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) {
     process.stderr.write(`[status] no TELEGRAM_BOT_TOKEN\n`);
     return "no TELEGRAM_BOT_TOKEN";
@@ -1046,7 +1060,7 @@ async function updateStatus(chatId: string, stage: string): Promise<void> {
 }
 
 async function editStatusMessage(state: StatusState): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) return;
 
   const elapsed = formatElapsed(Date.now() - state.startedAt);
@@ -1078,7 +1092,7 @@ async function deleteStatusMessage(chatId: string): Promise<void> {
   // Also stop typing indicator
   stopTypingForChat(chatId);
 
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) return;
 
   try {
@@ -1137,7 +1151,7 @@ function stopProgressMonitorForChat(chatId: string): void {
 function startTypingForChat(chatId: string): void {
   // Don't start if already typing for this chat
   if (activeTyping.has(chatId)) return;
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = ENV.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   const handle = startTypingRaw(token, chatId);
   activeTyping.set(chatId, handle);
@@ -1175,7 +1189,7 @@ let wakeResolve: (() => void) | null = null;
 async function setupListenNotify(): Promise<void> {
   try {
     // Use a separate connection for LISTEN (it stays open)
-    const listenSql = postgres(DATABASE_URL, { max: 1 });
+    const listenSql = postgres(ENV.DATABASE_URL, { max: 1 });
     await listenSql.listen(`message_queue_${sessionId}`, () => {
       if (wakeResolve) { wakeResolve(); wakeResolve = null; }
     });
