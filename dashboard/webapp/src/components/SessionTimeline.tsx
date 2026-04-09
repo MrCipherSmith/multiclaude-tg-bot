@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api, type Session } from "../api";
 
 type TimelineItem = {
@@ -40,6 +40,7 @@ export function SessionTimeline({ session }: Props) {
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
 
   const load = useCallback(async (off = 0, prepend = false) => {
@@ -48,9 +49,14 @@ export function SessionTimeline({ session }: Props) {
       setItems((prev) => prepend ? [...res.items, ...prev] : res.items);
       setTotal(res.total);
       setOffset(off);
-    } catch {}
-    setLoading(false);
-    setLoadingMore(false);
+      setError(null);
+    } catch (e: any) {
+      if (off === 0 && !prepend) setError(e?.message ?? "Failed to load timeline");
+      // silent for auto-refresh failures (offset > 0 or existing data present)
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
   }, [session.id]);
 
   useEffect(() => {
@@ -60,9 +66,16 @@ export function SessionTimeline({ session }: Props) {
     load(0);
   }, [load]);
 
-  // Auto-refresh every 5s (only refresh from current position)
+  // Track offset in a ref so the interval closure always sees the current value
+  const offsetRef = useRef(offset);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+
+  // Auto-refresh every 5s — only when user is on the latest page (offset=0)
+  // Avoids resetting the view when the user has paginated to older items
   useEffect(() => {
-    const t = setInterval(() => load(0), 5000);
+    const t = setInterval(() => {
+      if (offsetRef.current === 0) load(0);
+    }, 5000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -81,6 +94,10 @@ export function SessionTimeline({ session }: Props) {
 
   if (loading) {
     return <div className="flex items-center justify-center h-full text-[var(--tg-hint)] text-sm">Loading...</div>;
+  }
+
+  if (error) {
+    return <div className="flex items-center justify-center h-full text-red-500 text-xs px-4 text-center">{error}</div>;
   }
 
   const hasMore = offset + PAGE < total;

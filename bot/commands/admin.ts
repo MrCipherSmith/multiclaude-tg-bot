@@ -418,20 +418,24 @@ export async function handleSessionExport(ctx: Context): Promise<void> {
     session = await sessionManager.get(sessionId);
   }
 
-  // Fetch messages
+  const MAX_ROWS = 5000;
+
+  // Fetch messages (capped to avoid memory issues on large sessions)
   const messages = await sql`
     SELECT role, content, created_at
     FROM messages
     WHERE session_id = ${sessionId} AND archived_at IS NULL
     ORDER BY created_at ASC
+    LIMIT ${MAX_ROWS}
   `;
 
-  // Fetch tool calls
+  // Fetch tool calls (capped)
   const tools = await sql`
     SELECT tool_name, description, response, created_at
     FROM permission_requests
     WHERE session_id = ${sessionId} AND archived_at IS NULL
     ORDER BY created_at ASC
+    LIMIT ${MAX_ROWS}
   `;
 
   const msgCount = messages.length;
@@ -479,8 +483,12 @@ export async function handleSessionExport(ctx: Context): Promise<void> {
   const markdown = lines.join("\n");
   const filename = `session-${sessionId}-${new Date().toISOString().slice(0, 10)}.md`;
 
+  const capped = messages.length === MAX_ROWS || tools.length === MAX_ROWS;
+  const caption = `Session transcript: ${sessionName}\n${msgCount} messages · ${toolCount} tool calls`
+    + (capped ? `\n⚠️ Capped at ${MAX_ROWS} rows per type` : "");
+
   await ctx.replyWithDocument(
     { source: Buffer.from(markdown, "utf8"), filename },
-    { caption: `Session transcript: ${sessionName}\n${msgCount} messages · ${toolCount} tool calls` },
+    { caption },
   );
 }
