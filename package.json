@@ -7,9 +7,12 @@
     "dev": "bun --watch main.ts",
     "migrate": "bun memory/db.ts",
     "cli": "bun cli.ts",
-    "test": "cd tests && npx playwright test --config=playwright.config.ts",
-    "test:api": "cd tests && npx playwright test --config=playwright.config.ts --project=api",
-    "test:dashboard": "cd tests && npx playwright test --config=playwright.config.ts --project=dashboard",
+    "test": "bun test tests/unit/",
+    "test:unit": "bun test tests/unit/",
+    "test:e2e": "cd tests && npx playwright test --config=playwright.config.ts",
+    "test:e2e:api": "cd tests && npx playwright test --config=playwright.config.ts --project=api",
+    "test:e2e:dashboard": "cd tests && npx playwright test --config=playwright.config.ts --project=dashboard",
+    "test:coverage": "bun test --coverage tests/unit/",
     "cleanup:dry-run": "DRY_RUN=true bun cleanup/runner.ts"
   },
   "dependencies": {
