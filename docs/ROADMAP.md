@@ -1,0 +1,283 @@
+# Claude Bot — Roadmap
+
+## How to Use This Document
+
+- **Update status** when a feature is implemented or a decision is made
+- **Add new planned items** when PRDs are created
+- **Status key:**
+  - ✅ Done — completed and released
+  - 🚧 In Progress — on a feature branch or explicitly WIP
+  - 📋 Planned — has a PRD, ready to implement
+  - 💡 Idea — no PRD yet, but identified as valuable
+
+---
+
+## ✅ Implemented
+
+### v1.14.0 (Latest)
+
+#### Google AI Provider in Setup Wizard
+- Re-added Google AI (Gemma 4) as interactive option in `claude-bot setup`
+- Wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama
+- Collects `GOOGLE_AI_API_KEY` and optionally `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`)
+- **Files changed:** `cli.ts` (~lines 111–130, provider selection block)
+
+#### MCP Tools: react and edit_message in Channel Adapter
+- Added `react` (set emoji reaction) and `edit_message` (edit bot message) to channel.ts stdio MCP adapter
+- Both tools now work in all connection modes (HTTP MCP server + stdio channel adapter)
+- **Files changed:** `channel.ts` (ListToolsRequestSchema + CallToolRequestSchema handlers)
+
+### v1.13.0
+
+#### Telegram Mini App — Claude Dev Hub
+- Mobile-first WebApp accessible via "Dev Hub" button in Telegram
+- Features: git browser (file tree, commit log, diffs), permission manager (Allow/Deny/Always Allow), session monitor
+- Full spec: `dashboard/webapp/SPEC.md`
+- **Files changed:** `dashboard/webapp/`, `bot/main.ts`, `bot/commands/`
+- **Commits:** 4b71911, 502bb68, ada5d4b
+
+### v1.12.0
+
+#### Local Session Management
+- Delete local sessions from Telegram via `/sessions` inline buttons (🗑 Delete)
+- Delete local sessions from dashboard (Sessions table, Delete action column)
+- `source` field in sessions API (`GET /api/sessions`, `GET /api/overview`) returns `source: "remote" | "local" | "standalone"`
+- **Commits:** 3feb0f5
+
+#### Session Source Refactoring
+- Three distinct session modes: `remote` (persistent via tmux), `local` (temporary per process), `standalone` (no DB registration)
+- `CHANNEL_SOURCE` env var determines behavior
+- Plain `claude` without `CHANNEL_SOURCE` set now skips DB entirely (no phantom sessions)
+- **Commits:** 3feb0f5, e88efb3
+
+#### CLI Changes
+- `claude-bot start` — spawns `claude` directly with `CHANNEL_SOURCE=local` (no `run-cli.sh`)
+- `claude-bot restart` — syncs `TELEGRAM_BOT_TOKEN` from `.env` into `~/.claude.json` MCP server config
+- `run()` helper — new `stream: true` option pipes stdout/stderr directly to terminal (real-time build output)
+
+### v1.11.0
+
+#### Dashboard Project Management
+- Projects page — create, start, stop projects directly from web dashboard (previously Telegram-only)
+- SSE notifications — `GET /api/events` streams `session-state` events to dashboard
+- Browser notifications — dashboard requests Notification permission, shows push on session state changes
+- Projects API — `GET/POST /api/projects`, `POST /api/projects/:id/start|stop`, `DELETE /api/projects/:id`
+
+#### Memory TTL per Type
+- Each memory type has its own TTL: `fact` 90d, `summary` 60d, `decision` 180d, `note` 30d, `project_context` 180d
+- Hourly cleanup — expired memories deleted automatically based on `created_at`
+- Configurable via `MEMORY_TTL_FACT_DAYS`, `MEMORY_TTL_SUMMARY_DAYS`, etc.
+- DB migration v9 — `archived_at` column + partial index on `memories` table
+
+### v1.10.0
+
+#### Smart Memory Reconciliation
+- LLM-based deduplication — before saving, vector search finds similar memories via cosine similarity, Claude Haiku decides ADD / UPDATE / DELETE / NOOP
+- `/remember` shows outcome: `Saved (#N)` / `Updated #N` / `Already known (#N)`
+- `project_context` deduplication — session exit summaries update existing context instead of accumulating duplicates
+- Graceful fallback — Ollama or Claude API unavailable → plain `remember()`, no data loss
+- Config vars: `MEMORY_SIMILARITY_THRESHOLD` (0.35), `MEMORY_RECONCILE_TOP_K` (5)
+- **Commits:** 85aa582, d7e3176, d782f5e
+
+### v1.9.0
+
+#### Session Management Redesign
+- **Persistent Projects** — `projects` DB table, `/project_add` command saves projects (not JSON file)
+- **Remote/Local Sessions** — one remote session per project (persistent), multiple local (temporary per process)
+- **Work Summary on Exit** — local session exit triggers AI summary of work done ([DECISIONS][FILES][PROBLEMS][PENDING][CONTEXT]), vectorized to long-term memory
+- **Session Switch Briefing** — switching sessions shows last project context summary, injected as system context
+- **Semantic Search** — `search_project_context` MCP tool + `/search_context` bot command
+- **Archival TTL** — messages and permission_requests archived on summarize, deleted after `ARCHIVE_TTL_DAYS` (30 days default)
+- **Status vocab** — `active | inactive | terminated` (was `active | disconnected`)
+- DB migrations v6-v8 — projects table, archived_at columns, project_id FK, unique remote-per-project constraint
+- **Commits:** df57eda, f52c7f5, 2994474, 4614a78
+
+### v1.8.0
+
+#### Skills & Commands Integration
+- `/skills` — Interactive skill browser with inline buttons (reads from `~/.claude/skills/`)
+- `/commands` — Custom command launcher (reads from `~/.claude/commands/`)
+- `/hooks` — View configured Hookify rules
+- Deferred input — Tools requiring args prompt user then enqueue
+- Icon support — 38+ emojis for quick visual identification
+
+#### Session Management Commands
+- `/add` — Register project as Claude Code session (prompts for path, auto-switches)
+- `/model` — Select Claude model via inline buttons (stored in `cli_config.model`)
+- Adapter pattern — `adapters/ClaudeAdapter` (message_queue polling), extensible registry
+- Session router — `sessions/router.ts` typed routing: standalone / cli / disconnected
+
+#### CLI Refactoring
+- `start [dir]` — Register + launch project in current terminal
+- `docker-start` — New command for `docker compose up -d`
+- `add [dir]` — Now registration-only (saves to config + bot DB, no launch)
+- `run [dir]` — New command to launch registered project in terminal
+- `attach [dir]` — New command to add window to running tmux `bots` session
+- tmux session renamed — `claude` → `bots`
+
+### Earlier Versions (v1.0–v1.7)
+
+Core features established in foundational releases:
+- Multi-Session MCP Server (HTTP, port 3847) with tool registry
+- Channel Adapter (stdio MCP bridge to Claude Code, LISTEN/NOTIFY)
+- One Session Per Project (reuse session on reconnect)
+- Auto-Named Sessions (based on project directory basename)
+- Standalone Mode (bot responds directly via LLM API)
+- Voice Messages (Groq whisper-large-v3 with local Whisper fallback)
+- Image Analysis (Claude API in CLI mode, Anthropic API in standalone)
+- Auto-Summarization (15 min idle timeout)
+- Dual-Layer Memory (short-term sliding window + long-term pgvector embeddings)
+- Persistent Projects (projects table as permanent registry)
+- Web Dashboard (React + Tailwind, stats/logs/memory/sessions pages)
+- Permission Forwarding (Allow / Always / Deny inline buttons with diff preview)
+- Statistics & Logging (`/stats`, `/logs`, dashboard charts)
+- CLI Tool (setup wizard, session management, Docker integration)
+
+---
+
+## 🚧 In Progress
+
+None currently. Latest merged work completed in v1.14.0.
+
+---
+
+## 📋 Planned
+
+These items have PRDs written and are ready to implement.
+
+### README Environment Variables and Prerequisites Fixes
+- **PRD:** `docs/requirements/readme-env-vars-fix-2026-04-09/en/readme-env-vars-fix.md`
+- **Issues:**
+  1. Ollama marked as "Required" when it's optional (only affects semantic memory search)
+  2. Missing `CLAUDE_MODEL` and `MAX_TOKENS` env vars in table
+  3. `OLLAMA_URL` marked as required when it's optional
+- **Solution:**
+  - Change Ollama prerequisite to "Optional (semantic memory search only)"
+  - Add `CLAUDE_MODEL` and `MAX_TOKENS` rows with correct defaults
+  - Change `OLLAMA_URL` from required to optional with default `http://localhost:11434`
+- **Key files:** `README.md`
+
+---
+
+## 💡 Future Ideas
+
+Features identified as valuable but without PRDs yet.
+
+### Multi-User Support
+- Separate session namespaces per Telegram user
+- Per-user memory and context isolation
+- Role-based access control (read-only, admin, etc.)
+- **Why:** Current bot is single-user (`ALLOWED_USERS` whitelist only). Teams and shared projects need isolation.
+- **Effort:** High — major schema changes (user_id FK in sessions, memories, projects)
+
+### Inline Mode
+- Respond in any Telegram chat via `@bot` mention (not just private chat)
+- Forward task updates to group chats or channels
+- **Why:** Currently bot only works in private DMs. Shared task coordination requires a workaround.
+- **Effort:** Medium — grammY supports inline queries; main work is adapting context routing
+
+### Batch Deduplication
+- Retroactive cleanup of existing duplicate memories
+- LLM-driven reconciliation of entire `memories` table
+- **Why:** Smart Memory Reconciliation (v1.10) only applies to new memories. Backlog may still have duplicates.
+- **Effort:** High — scanning and reconciling 10K+ records; careful transaction handling
+
+### Graph-Based Memory Relationships
+- Track relationships between memories: depends_on, relates_to, contradicts, extends
+- Use graph for more intelligent reconciliation and search
+- **Why:** Currently memories are flat records with no explicit connections.
+- **Effort:** Very High — requires schema redesign (separate relationships table, graph query logic)
+
+### Multi-Provider Model Switching at Message Time
+- Easy switching between providers mid-session
+- Per-message provider override (`/use google-ai`, then send message)
+- **Why:** Currently provider is fixed at setup; swapping requires `.env` edit + restart.
+- **Effort:** Medium — routing logic in message handler + provider config per session
+
+### Voice Input Chunking & Streaming
+- For long voice messages, chunk transcription and stream to Claude progressively
+- Real-time transcription UI feedback ("Transcribing... 45s")
+- **Why:** Current Groq transcription is synchronous; long voices (>1 min) feel slow and unresponsive.
+- **Effort:** Medium — Groq API supports streaming; UI needs progress indicator
+
+### Permission Request History & Analytics
+- Track patterns in permission requests (which files edited most, which commands run most)
+- Dashboard heatmap: "Top 10 edited files", "Top 10 bash commands"
+- Export audit log as CSV
+- **Why:** Transparency and security insight into what Claude is actually doing.
+- **Effort:** Medium — analytics columns to `permission_requests`, dashboard charts
+
+### Remote Access via SSH Tunnel (Automated)
+- Auto-setup Cloudflare Tunnel or frp tunnel for remote laptop deployment
+- `claude-bot setup-tunnel` command
+- **Why:** Extended guide exists (`guides/remote-laptop-setup.md`); could be fully automated.
+- **Effort:** High — tunnel management, DNS setup, certificate rotation
+
+### Persistent Dashboard State
+- Dashboard state survives page reload
+- Deep linking via query params (`?tab=memory&type=fact&sort=recent`)
+- LocalStorage for user preferences
+- **Why:** Dashboard loses state on refresh (scroll position, open menus, filters).
+- **Effort:** Low — localStorage middleware + query param routing
+
+### Memory Export/Import
+- Backup all memories as JSON with metadata
+- Restore or migrate memories between bot instances
+- **Why:** Data portability. Currently no export mechanism; data is trapped in DB.
+- **Effort:** Low — dump memories + embeddings, provide CLI tool
+
+### Conversation Threading
+- Group messages by session/project in Telegram topic threads
+- Telegram topic per project
+- **Why:** Single chat thread gets cluttered with multi-session context.
+- **Effort:** Medium — Telegram topic API integration, message routing changes
+
+### Session Recording & Playback
+- Record all messages and tool calls in a session
+- Playback session as a transcript or timeline
+- **Why:** Audit trail, training, sharing results with stakeholders.
+- **Effort:** High — storage, UI timeline
+
+---
+
+## How to Keep This Updated
+
+### When to Update
+
+**Add items to Planned:**
+- When a new PRD is created in `docs/requirements/` → add PRD filename and brief description
+
+**Move items to In Progress:**
+- When work starts on a feature branch (`feat/...`); add branch name
+
+**Move items to Done:**
+- When PR is merged to `main` and released in a version tag
+- Group by version number (descending), add commit hashes
+
+**Update Future Ideas:**
+- Add ideas when identified in discussions/issues
+- Remove ideas that get PRDs (move to Planned)
+
+### Where to Check
+
+- **Latest commits:** `git log --oneline -40`
+- **All PRDs:** `docs/requirements/*/en/*.md` (newer dates = higher priority)
+- **Shipped features:** README.md "Recent Changes" sections
+- **Guides:** `guides/` directory for documented workflows
+
+---
+
+## Quick Links
+
+- **[README](../README.md)** — Features, Quick Start, Architecture diagram
+- **[Human Spec](spec/en/spec.md)** — Full project specification for developers
+- **[AI Spec](spec/ai/spec.md)** — Machine-readable spec for AI agents
+- **[Usage Scenarios](../guides/usage-scenarios.md)** — Common workflows
+- **[Memory System](../guides/memory.md)** — Short-term and long-term memory details
+- **[Webapp Guide](../guides/webapp.md)** — Telegram Mini App features
+- **[MCP Tools](../guides/mcp-tools.md)** — Available MCP tools for Claude Code
+- **[Remote Laptop Setup](../guides/remote-laptop-setup.md)** — Deploy on remote machines
+
+---
+
+**Last updated:** 2026-04-09
