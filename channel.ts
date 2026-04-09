@@ -606,6 +606,32 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["query"],
       },
     },
+    {
+      name: "react",
+      description: "Set an emoji reaction on a Telegram message",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat_id: { type: "string", description: "Telegram chat ID" },
+          message_id: { type: "number", description: "Message ID to react to" },
+          emoji: { type: "string", description: "Single emoji character (e.g. '👍', '❤️', '🔥')" },
+        },
+        required: ["chat_id", "message_id", "emoji"],
+      },
+    },
+    {
+      name: "edit_message",
+      description: "Edit a previously sent bot message",
+      inputSchema: {
+        type: "object",
+        properties: {
+          chat_id: { type: "string", description: "Telegram chat ID" },
+          message_id: { type: "number", description: "Message ID to edit" },
+          text: { type: "string", description: "New message text" },
+        },
+        required: ["chat_id", "message_id", "text"],
+      },
+    },
   ],
 }));
 
@@ -699,6 +725,61 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
       touchIdleTimer();
       return text(`Sent to chat ${args!.chat_id}`);
+    }
+
+    case "react": {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) return text("TELEGRAM_BOT_TOKEN not set");
+      const res = await fetch(`https://api.telegram.org/bot${token}/setMessageReaction`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: Number(args!.chat_id),
+          message_id: Number(args!.message_id),
+          reaction: [{ type: "emoji", emoji: String(args!.emoji) }],
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        process.stderr.write(`[channel] react error: ${res.status} ${err}\n`);
+        return text(`Telegram API error: ${res.status}`);
+      }
+      return text(`Reaction ${args!.emoji} set on message ${args!.message_id}`);
+    }
+
+    case "edit_message": {
+      const token = process.env.TELEGRAM_BOT_TOKEN;
+      if (!token) return text("TELEGRAM_BOT_TOKEN not set");
+      const htmlText = markdownToTelegramHtml(String(args!.text));
+      let res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: Number(args!.chat_id),
+          message_id: Number(args!.message_id),
+          text: htmlText,
+          parse_mode: "HTML",
+        }),
+      });
+      if (!res.ok) {
+        const errBody = await res.text();
+        if (errBody.includes("can't parse entities")) {
+          res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: Number(args!.chat_id),
+              message_id: Number(args!.message_id),
+              text: String(args!.text),
+            }),
+          });
+          if (!res.ok) return text(`Telegram API error: ${res.status}`);
+        } else {
+          process.stderr.write(`[channel] edit_message error: ${res.status} ${errBody}\n`);
+          return text(`Telegram API error: ${res.status}`);
+        }
+      }
+      return text(`Message ${args!.message_id} updated`);
     }
 
     case "remember": {
