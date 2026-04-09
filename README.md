@@ -390,6 +390,7 @@ Connect:
 | `/status` | Bot health (DB, Ollama, counts) |
 | `/pending` | Pending CLI permission requests |
 | `/permission_stats [days]` | Permission history: allow/deny breakdown by tool (default: 30 days) |
+| `/session_export [id]` | Export session as markdown transcript (messages + tool calls chronologically) |
 | **Tools & Knowledge** | |
 | `/tools` | Available MCP tools |
 | `/skills` | Skills catalog — inline buttons with descriptions, click to run |

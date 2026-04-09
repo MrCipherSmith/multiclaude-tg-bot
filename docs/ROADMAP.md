@@ -14,7 +14,21 @@
 
 ## ✅ Implemented
 
-### v1.16.0 (Latest)
+### v1.17.0 (Latest)
+
+#### Voice Transcription Live Progress
+- Status message updates every 5s while Groq/Whisper transcribes: `🎤 Transcribing... (15s)`
+- Timer only starts for voice messages ≥10s (short ones complete before first tick)
+- Race condition guard: `cancelled` flag prevents the progress edit from overwriting the final transcription result
+- **Files changed:** `bot/media.ts`
+
+#### Session Timeline
+- `GET /api/sessions/:id/timeline` — merged, chronologically sorted messages + tool calls
+- Webapp: new 🕐 **Timeline** tab — message bubbles + tool event rows interleaved, filter by All/Messages/Tools, "Load older" pagination, auto-refresh 5s (skips reset when paginated)
+- `/session_export [id]` Telegram command — sends full session as a `.md` transcript file (capped at 5000 rows per type)
+- **Files changed:** `mcp/dashboard-api.ts`, `dashboard/webapp/src/api.ts`, `dashboard/webapp/src/components/SessionTimeline.tsx` (new), `dashboard/webapp/src/App.tsx`, `bot/commands/admin.ts`, `bot/handlers.ts`, `bot/bot.ts`
+
+### v1.16.0
 
 #### Memory Export / Import
 - `/memory_export [project_path]` — exports all active memories as a JSON manifest file
@@ -260,19 +274,6 @@ Features identified as valuable but without PRDs yet.
 - **Why:** Currently provider is fixed at setup; swapping requires `.env` edit + restart.
 - **Effort:** Medium — routing logic in message handler + provider config per session
 
-### Voice Input Chunking & Streaming
-- For long voice messages, chunk transcription and stream to Claude progressively
-- Real-time transcription UI feedback ("Transcribing... 45s")
-- **Why:** Current Groq transcription is synchronous; long voices (>1 min) feel slow and unresponsive.
-- **Effort:** Medium — Groq API supports streaming; UI needs progress indicator
-
-### Permission Request History & Analytics
-- Track patterns in permission requests (which files edited most, which commands run most)
-- Dashboard heatmap: "Top 10 edited files", "Top 10 bash commands"
-- Export audit log as CSV
-- **Why:** Transparency and security insight into what Claude is actually doing.
-- **Effort:** Medium — analytics columns to `permission_requests`, dashboard charts
-
 ### Remote Access via SSH Tunnel (Automated)
 - Auto-setup Cloudflare Tunnel or frp tunnel for remote laptop deployment
 - `claude-bot setup-tunnel` command
@@ -291,12 +292,6 @@ Features identified as valuable but without PRDs yet.
 - Telegram topic per project
 - **Why:** Single chat thread gets cluttered with multi-session context.
 - **Effort:** Medium — Telegram topic API integration, message routing changes
-
-### Session Recording & Playback
-- Record all messages and tool calls in a session
-- Playback session as a transcript or timeline
-- **Why:** Audit trail, training, sharing results with stakeholders.
-- **Effort:** High — storage, UI timeline
 
 ---
 
