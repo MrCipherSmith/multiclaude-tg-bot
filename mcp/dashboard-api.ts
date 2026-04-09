@@ -172,12 +172,33 @@ async function handleSessions(_req: IncomingMessage, res: ServerResponse): Promi
 
 async function handleSessionDetail(res: ServerResponse, id: number): Promise<void> {
   const [session] = await sql`
-    SELECT id, name, project_path, client_id, status, metadata, connected_at, last_active
+    SELECT id, name, project, project_path, source, client_id, status, metadata, connected_at, last_active
     FROM sessions WHERE id = ${id}
   `;
   if (!session) { sendError(res, "Session not found", 404); return; }
-  const [{ count }] = await sql`SELECT count(*)::int FROM messages WHERE session_id = ${id}`;
-  sendJson(res, { ...session, message_count: count });
+  const [{ count }, tokenStats, recentTools] = await Promise.all([
+    sql`SELECT count(*)::int FROM messages WHERE session_id = ${id}`.then((r) => r[0]),
+    sql`
+      SELECT
+        coalesce(sum(input_tokens), 0)::int AS input_tokens,
+        coalesce(sum(output_tokens), 0)::int AS output_tokens,
+        coalesce(sum(total_tokens), 0)::int AS total_tokens,
+        count(*)::int AS api_calls
+      FROM api_request_stats WHERE session_id = ${id}
+    `.then((r) => r[0]),
+    sql`
+      SELECT tool_name, response, created_at
+      FROM permission_requests
+      WHERE session_id = ${id} AND archived_at IS NULL
+      ORDER BY created_at DESC LIMIT 15
+    `,
+  ]);
+  sendJson(res, {
+    ...session,
+    message_count: count,
+    tokens: tokenStats,
+    recent_tools: recentTools,
+  });
 }
 
 async function handleSessionMessages(res: ServerResponse, id: number, url: URL): Promise<void> {
@@ -574,7 +595,9 @@ async function serveWebApp(res: ServerResponse, subpath: string): Promise<boolea
   const ext = extname(filePath);
   const contentType = MIME_TYPES[ext] || "application/octet-stream";
   const content = await readFile(filePath);
-  res.writeHead(200, { "Content-Type": contentType });
+  const isHtml = ext === ".html" || filePath.endsWith("index.html");
+  const cacheHeader = isHtml ? "no-store" : "public, max-age=31536000, immutable";
+  res.writeHead(200, { "Content-Type": contentType, "Cache-Control": cacheHeader });
   res.end(content);
   return true;
 }
@@ -701,6 +724,21 @@ export async function handleDashboardRequest(
     if (pathname === "/api/sessions" && method === "GET") {
       console.log(`[sessions] cookie=${req.headers.cookie?.slice(0, 40) ?? "none"}`);
       await handleSessions(req, res);
+      return true;
+    }
+    if (pathname === "/api/sessions/active" && method === "GET") {
+      const user = await getUser(req);
+      if (!user) { sendError(res, "Unauthorized", 401); return true; }
+      const chatId = String(user.id);
+      const [chatSess] = await sql`
+        SELECT active_session_id FROM chat_sessions WHERE chat_id = ${chatId}
+      `;
+      if (!chatSess?.active_session_id) { sendJson(res, null); return true; }
+      const [session] = await sql`
+        SELECT id, name, project, project_path, source, status, last_active
+        FROM sessions WHERE id = ${chatSess.active_session_id}
+      `;
+      sendJson(res, session ?? null);
       return true;
     }
     if (sessionMatch) {

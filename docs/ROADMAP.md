@@ -14,7 +14,45 @@
 
 ## ✅ Implemented
 
-### v1.14.0 (Latest)
+### v1.15.0 (Latest)
+
+#### Webapp: Active Session Fix
+- Webapp now opens the user's actual active session instead of the first globally active session
+- New `GET /api/sessions/active` reads `chat_sessions` table by JWT user's Telegram ID
+- `App.tsx` calls both `/api/sessions` and `/api/sessions/active` in parallel; prefers user's session
+- **Files changed:** `mcp/dashboard-api.ts`, `dashboard/webapp/src/api.ts`, `dashboard/webapp/src/App.tsx`
+
+#### Webapp: Expanded Session Monitor
+- Token usage section: API calls, total/input/output tokens for the session lifetime
+- Tool call history: last 15 calls with color-coded status (green=allow, red=deny, yellow=pending)
+- Message count added to Session info row
+- Manual refresh button; auto-refresh interval changed to 5s
+- Bug fix: `handleSessionDetail` now selects `project` and `source` columns (previously missing)
+- **Files changed:** `mcp/dashboard-api.ts`, `dashboard/webapp/src/api.ts`, `dashboard/webapp/src/components/SessionMonitor.tsx`
+
+#### Webapp: Messages Tab
+- New 💬 Messages tab with chronological chat history
+- Bubble UI: user messages right, assistant/system messages left
+- Tap to expand truncated messages (>400 chars)
+- Pagination: loads 30 messages at a time, "Load older" button
+- Auto-refresh every 5s; auto-scrolls to latest on first load
+- Uses existing `GET /api/sessions/:id/messages` endpoint
+- **Files changed:** `dashboard/webapp/src/components/MessageHistory.tsx`, `dashboard/webapp/src/App.tsx`, `dashboard/webapp/src/api.ts`
+
+#### Webapp: Cache Fix
+- `index.html` now served with `Cache-Control: no-store`
+- Hashed asset files served with `Cache-Control: public, max-age=31536000, immutable`
+- Prevents Telegram WebView from serving stale JS after deploys
+- **Files changed:** `mcp/dashboard-api.ts`
+
+#### Project Knowledge Memory
+- Auto-scan on session registration: reads README, package.json, entry points; LLM synthesizes 3–7 durable facts
+- Session-end extraction: second LLM pass after `summarizeWork()` extracts durable project facts (not session-specific events)
+- `scan_project_knowledge` MCP tool for manual/force rescan
+- `/project_facts` and `/project_scan` Telegram commands
+- **Files changed:** `memory/project-scanner.ts` (new), `memory/summarizer.ts`, `mcp/tools.ts`, `bot/commands/`, `bot/handlers.ts`, `bot/bot.ts`
+
+### v1.14.0
 
 #### Google AI Provider in Setup Wizard
 - Re-added Google AI (Gemma 4) as interactive option in `claude-bot setup`

@@ -41,7 +41,9 @@ Telegram WebView does NOT reliably persist cookies. All auth uses Bearer tokens 
 | `/telegram/webapp/*` | 301 redirect → `/webapp/*` (BotFather legacy URL) |
 | `/api/auth/webapp` | POST — authenticate with Telegram initData |
 | `/api/sessions` | GET — list all non-standalone sessions |
-| `/api/sessions/:id` | GET — session detail |
+| `/api/sessions/active` | GET — active session for the authenticated user (from chat_sessions table) |
+| `/api/sessions/:id` | GET — session detail (includes message_count, tokens, recent_tools) |
+| `/api/sessions/:id/messages` | GET `?limit=&offset=` — paginated message history (newest first) |
 | `/api/sessions/:id/switch` | POST — make session active for the authenticated user |
 | `/api/sessions/:id` | DELETE — delete session (cascade) |
 | `/api/git/:id/tree` | GET — git ls-tree for session project path |
@@ -64,7 +66,8 @@ Telegram WebView does NOT reliably persist cookies. All auth uses Bearer tokens 
 - Auth state machine: `Connecting → Authed | AuthError`
 - Session state: `sessions[]`, `selectedSession`
 - Sidebar: session list with `SessionCard` components
-- Bottom nav: Files / Perms / Monitor tabs (only when session selected)
+- Session selection: calls `/api/sessions/active` to get the user's actual active session (from `chat_sessions` table); falls back to first active session if not set
+- Bottom nav: Files / Perms / Messages / Monitor tabs (only when session selected)
 - Auto-opens sidebar when sessions exist but none is active
 
 ### SessionCard
@@ -123,10 +126,21 @@ Colored diff lines:
 
 ### SessionMonitor.tsx
 
-- Polls session detail + pending permissions every 3s
-- Status banner: Working (green pulse) / Idle (blue) / Inactive (gray)
-- Session metadata: ID, Project, Source, Status, Path, Connected time
-- Pending permissions list with tool name and age; approve/deny/always buttons
+- Polls session detail every 5s (manual refresh button also available)
+- Status banner: Working (green pulse, last_active <10s) / Idle (blue) / Inactive (gray)
+- Session metadata: ID, Project, Source, Status, Path, Connected time, Message count
+- **Token Usage** section: API calls, total/input/output tokens for session lifetime (hidden if zero)
+- **Tool Calls** section: last 15 tool calls with color-coded status dot (green=allow, red=deny, yellow=pending) and relative time
+- SessionDetail API response includes: `message_count`, `tokens: { input_tokens, output_tokens, total_tokens, api_calls }`, `recent_tools: [{ tool_name, response, created_at }]`
+
+### MessageHistory.tsx
+
+- 💬 Messages tab — chronological chat history for selected session
+- Bubble UI: user messages on right (blue), assistant on left (dark), system messages on left (yellow tint)
+- Long messages (>400 chars) truncated with "tap to expand" affordance
+- Loads 30 messages per page; "Load older" button shows remaining count
+- Auto-scrolls to bottom on first load; auto-refreshes every 5s
+- Uses `GET /api/sessions/:id/messages?limit=30&offset=N` (messages returned newest-first, reversed for display)
 
 ### PermissionList.tsx
 
@@ -184,6 +198,12 @@ cd dashboard/webapp && bun dev  # proxy /api → localhost:3847
 cd dashboard/webapp && bun run build
 # Output: dashboard/webapp/dist/
 # Served by bot at /webapp/*
+# NOTE: dist/ is baked into Docker image — changes require docker compose up --build -d bot
 ```
+
+### Cache Policy
+
+- `index.html` → `Cache-Control: no-store` (always fresh)
+- `assets/*.js`, `assets/*.css` → `Cache-Control: public, max-age=31536000, immutable` (content-hashed names)
 
 Dependencies: `react`, `react-dom`, `highlight.js`, `tailwindcss`, `vite`

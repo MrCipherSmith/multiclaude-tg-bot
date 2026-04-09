@@ -3,6 +3,7 @@ import { api, type Session } from "./api";
 import { GitBrowser } from "./components/GitBrowser";
 import { PermissionList } from "./components/PermissionList";
 import { SessionMonitor } from "./components/SessionMonitor";
+import { MessageHistory } from "./components/MessageHistory";
 
 declare global {
   interface Window {
@@ -20,7 +21,7 @@ declare global {
   }
 }
 
-type Tab = "git" | "permissions" | "monitor";
+type Tab = "git" | "permissions" | "monitor" | "messages";
 
 export function App() {
   const [authed, setAuthed] = useState(false);
@@ -56,14 +57,25 @@ export function App() {
 
   async function loadSessions() {
     try {
-      const list = await api.sessions();
+      const [list, userActive] = await Promise.all([
+        api.sessions(),
+        api.activeSession().catch(() => null),
+      ]);
       const nonStandalone = list.filter((s) => s.id !== 0);
       setSessions(nonStandalone);
-      const active = nonStandalone.find((s) => s.status === "active");
-      if (active) {
-        setSelectedSession(active);
-      } else if (nonStandalone.length > 0) {
-        setSidebarOpen(true);
+
+      // Prefer user's actual active session from chat_sessions table
+      if (userActive && userActive.id !== 0) {
+        const match = nonStandalone.find((s) => s.id === userActive.id) ?? userActive;
+        setSelectedSession(match);
+      } else {
+        // Fallback: first active session, then open sidebar
+        const firstActive = nonStandalone.find((s) => s.status === "active");
+        if (firstActive) {
+          setSelectedSession(firstActive);
+        } else if (nonStandalone.length > 0) {
+          setSidebarOpen(true);
+        }
       }
     } catch (e: any) {
       setAuthError(`Sessions error: ${e.message}`);
@@ -171,6 +183,7 @@ export function App() {
             {tab === "git" && <GitBrowser session={selectedSession} />}
             {tab === "permissions" && <PermissionList session={selectedSession} />}
             {tab === "monitor" && <SessionMonitor session={selectedSession} />}
+            {tab === "messages" && <MessageHistory session={selectedSession} />}
           </>
         )}
       </div>
@@ -182,6 +195,7 @@ export function App() {
           {([
             ["git", "📁", "Files"],
             ["permissions", "🔑", "Perms"],
+            ["messages", "💬", "Messages"],
             ["monitor", "📊", "Monitor"],
           ] as [Tab, string, string][]).map(([t, icon, label]) => (
             <button
