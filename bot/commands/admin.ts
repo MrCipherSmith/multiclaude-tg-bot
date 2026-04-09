@@ -395,3 +395,92 @@ export async function handleRules(ctx: Context): Promise<void> {
     await ctx.reply(`Failed to read knowledge base (${KNOWLEDGE_BASE})`);
   }
 }
+
+export async function handleSessionExport(ctx: Context): Promise<void> {
+  const text = ctx.message?.text ?? "";
+  const arg = text.replace(/^\/session_export\s*/, "").trim();
+  const chatId = String(ctx.chat!.id);
+
+  await ctx.replyWithChatAction("upload_document");
+
+  let sessionId: number;
+  let session: any;
+
+  if (arg && !isNaN(Number(arg))) {
+    sessionId = Number(arg);
+    session = await sessionManager.get(sessionId);
+    if (!session) {
+      await ctx.reply("Session not found.");
+      return;
+    }
+  } else {
+    sessionId = await sessionManager.getActiveSession(chatId);
+    session = await sessionManager.get(sessionId);
+  }
+
+  // Fetch messages
+  const messages = await sql`
+    SELECT role, content, created_at
+    FROM messages
+    WHERE session_id = ${sessionId} AND archived_at IS NULL
+    ORDER BY created_at ASC
+  `;
+
+  // Fetch tool calls
+  const tools = await sql`
+    SELECT tool_name, description, response, created_at
+    FROM permission_requests
+    WHERE session_id = ${sessionId} AND archived_at IS NULL
+    ORDER BY created_at ASC
+  `;
+
+  const msgCount = messages.length;
+  const toolCount = tools.length;
+  const exportedAt = new Date().toISOString();
+  const sessionName = session?.name ?? `#${sessionId}`;
+  const projectPath = session?.project_path ?? "—";
+
+  // Merge chronologically
+  type MsgRow = { kind: "message"; role: string; content: string; created_at: string };
+  type ToolRow = { kind: "tool"; tool_name: string; description: string; response: string | null; created_at: string };
+  const merged: (MsgRow | ToolRow)[] = [
+    ...messages.map((m: any) => ({ kind: "message" as const, ...m })),
+    ...tools.map((t: any) => ({ kind: "tool" as const, ...t })),
+  ].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+  const lines: string[] = [
+    `# Session Transcript: ${sessionName}`,
+    `Project: ${projectPath}`,
+    `Exported: ${exportedAt}`,
+    `Messages: ${msgCount} | Tool calls: ${toolCount}`,
+    "",
+    "---",
+    "",
+  ];
+
+  for (const item of merged) {
+    const time = new Date(item.created_at).toLocaleTimeString("en-GB", {
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+
+    if (item.kind === "message") {
+      lines.push(`[${time}] ${item.role.toUpperCase()}`);
+      lines.push(item.content);
+    } else {
+      lines.push(`[${time}] 🔧 TOOL: ${item.tool_name}`);
+      if (item.description) lines.push(`Command: ${item.description}`);
+      lines.push(`Response: ${item.response ?? "pending"}`);
+    }
+    lines.push("");
+    lines.push("---");
+    lines.push("");
+  }
+
+  const markdown = lines.join("\n");
+  const filename = `session-${sessionId}-${new Date().toISOString().slice(0, 10)}.md`;
+
+  await ctx.replyWithDocument(
+    { source: Buffer.from(markdown, "utf8"), filename },
+    { caption: `Session transcript: ${sessionName}\n${msgCount} messages · ${toolCount} tool calls` },
+  );
+}

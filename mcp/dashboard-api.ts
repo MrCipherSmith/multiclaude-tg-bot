@@ -535,6 +535,35 @@ async function handleSessionStats(res: ServerResponse, sessionId: number, url: U
   sendJson(res, { summary: summary[0], by_model: byModel, days });
 }
 
+// --- Session Timeline API ---
+
+async function handleSessionTimeline(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
+  const limit = Math.min(Number(url.searchParams.get("limit") ?? 100), 500);
+  const offset = Number(url.searchParams.get("offset") ?? 0);
+
+  // Merge messages + tool calls chronologically
+  const rows = await sql`
+    SELECT 'message' AS kind, id, role AS actor, content, NULL AS response, created_at
+    FROM messages
+    WHERE session_id = ${sessionId} AND archived_at IS NULL
+    UNION ALL
+    SELECT 'tool', id, tool_name, description, response, created_at
+    FROM permission_requests
+    WHERE session_id = ${sessionId} AND archived_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT ${limit} OFFSET ${offset}
+  `;
+
+  const total = await sql`
+    SELECT (
+      (SELECT count(*) FROM messages WHERE session_id = ${sessionId} AND archived_at IS NULL) +
+      (SELECT count(*) FROM permission_requests WHERE session_id = ${sessionId} AND archived_at IS NULL)
+    )::int AS total
+  `;
+
+  sendJson(res, { items: rows, total: total[0].total, limit, offset });
+}
+
 // --- Permissions API ---
 
 async function handleGetPermissions(res: ServerResponse, sessionId: number): Promise<void> {
@@ -788,7 +817,7 @@ export async function handleDashboardRequest(
     }
 
     // Parse session ID from path
-    const sessionMatch = pathname.match(/^\/api\/sessions\/(\d+)(\/messages|\/switch|\/stats)?$/);
+    const sessionMatch = pathname.match(/^\/api\/sessions\/(\d+)(\/messages|\/switch|\/stats|\/timeline)?$/);
 
     if (pathname === "/api/overview" && method === "GET") {
       await handleOverview(req, res);
@@ -823,6 +852,10 @@ export async function handleDashboardRequest(
       }
       if (sub === "/stats" && method === "GET") {
         await handleSessionStats(res, id, url);
+        return true;
+      }
+      if (sub === "/timeline" && method === "GET") {
+        await handleSessionTimeline(res, id, url);
         return true;
       }
       if (!sub && method === "GET") {

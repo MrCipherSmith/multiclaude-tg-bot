@@ -4,6 +4,7 @@ import { GitBrowser } from "./components/GitBrowser";
 import { PermissionList } from "./components/PermissionList";
 import { SessionMonitor } from "./components/SessionMonitor";
 import { MessageHistory } from "./components/MessageHistory";
+import { SessionTimeline } from "./components/SessionTimeline";
 
 declare global {
   interface Window {
@@ -21,7 +22,7 @@ declare global {
   }
 }
 
-type Tab = "git" | "permissions" | "monitor" | "messages";
+type Tab = "git" | "permissions" | "monitor" | "messages" | "timeline";
 
 export function App() {
   const [authed, setAuthed] = useState(false);
@@ -184,6 +185,7 @@ export function App() {
             {tab === "permissions" && <PermissionList session={selectedSession} />}
             {tab === "monitor" && <SessionMonitor session={selectedSession} />}
             {tab === "messages" && <MessageHistory session={selectedSession} />}
+            {tab === "timeline" && <SessionTimeline session={selectedSession} />}
           </>
         )}
       </div>
@@ -197,6 +199,7 @@ export function App() {
             ["permissions", "🔑", "Perms"],
             ["messages", "💬", "Messages"],
             ["monitor", "📊", "Monitor"],
+            ["timeline", "🕐", "Timeline"],
           ] as [Tab, string, string][]).map(([t, icon, label]) => (
             <button
               key={t}
