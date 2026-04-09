@@ -9,7 +9,8 @@
     "cli": "bun cli.ts",
     "test": "cd tests && npx playwright test --config=playwright.config.ts",
     "test:api": "cd tests && npx playwright test --config=playwright.config.ts --project=api",
-    "test:dashboard": "cd tests && npx playwright test --config=playwright.config.ts --project=dashboard"
+    "test:dashboard": "cd tests && npx playwright test --config=playwright.config.ts --project=dashboard",
+    "cleanup:dry-run": "DRY_RUN=true bun cleanup/runner.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
