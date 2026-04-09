@@ -430,6 +430,158 @@ async function handleGitCommitDiff(res: ServerResponse, sessionId: number, hash:
   sendJson(res, { diff: out });
 }
 
+// --- GitHub PR API ---
+
+/** Parse owner/repo from git remote URL (SSH or HTTPS). */
+function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } | null {
+  // SSH: git@github.com:owner/repo.git
+  const sshMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/\s]+?)(?:\.git)?$/);
+  if (sshMatch) return { owner: sshMatch[1], repo: sshMatch[2] };
+  // HTTPS: https://github.com/owner/repo.git
+  const httpsMatch = remoteUrl.match(/github\.com\/([^/]+)\/([^/\s]+?)(?:\.git)?$/);
+  if (httpsMatch) return { owner: httpsMatch[1], repo: httpsMatch[2] };
+  return null;
+}
+
+async function getGitHubRepo(projectPath: string): Promise<{ owner: string; repo: string } | null> {
+  const { ok, out } = await gitExec(projectPath, ["remote", "get-url", "origin"]);
+  if (!ok) return null;
+  return parseGitHubRepo(out.trim());
+}
+
+async function githubReq<T>(path: string): Promise<T | null> {
+  const token = CONFIG.GITHUB_TOKEN;
+  if (!token) return null;
+  const res = await fetch(`https://api.github.com${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!res.ok) return null;
+  return res.json() as Promise<T>;
+}
+
+async function handleGitHubPRs(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+
+  const token = CONFIG.GITHUB_TOKEN;
+  if (!token) { sendError(res, "GITHUB_TOKEN not configured", 503); return; }
+
+  const repo = await getGitHubRepo(path);
+  if (!repo) { sendError(res, "Could not determine GitHub repo from git remote", 400); return; }
+
+  // Filters
+  const filterAuthor = url.searchParams.get("author") || CONFIG.GITHUB_USERNAME || null;
+  const filterDraft = url.searchParams.get("draft"); // "true" | "false" | null
+
+  // Fetch all open PRs (GitHub API max 100 per page)
+  const prs = await githubReq<any[]>(
+    `/repos/${repo.owner}/${repo.repo}/pulls?state=open&per_page=100&sort=updated&direction=desc`
+  );
+  if (!prs) { sendError(res, "GitHub API error", 502); return; }
+
+  let filtered = prs;
+  if (filterAuthor) filtered = filtered.filter((p) => p.user?.login === filterAuthor);
+  if (filterDraft === "true") filtered = filtered.filter((p) => p.draft === true);
+  if (filterDraft === "false") filtered = filtered.filter((p) => p.draft === false);
+
+  const result = filtered.map((p) => ({
+    number: p.number as number,
+    title: p.title as string,
+    state: p.state as string,
+    draft: p.draft as boolean,
+    author: p.user?.login as string,
+    author_avatar: p.user?.avatar_url as string,
+    head: p.head?.ref as string,
+    base: p.base?.ref as string,
+    created_at: p.created_at as string,
+    updated_at: p.updated_at as string,
+    body: (p.body ?? "") as string,
+    html_url: p.html_url as string,
+    head_sha: p.head?.sha as string,
+    comments: p.comments as number,
+    review_comments: p.review_comments as number,
+    additions: p.additions as number,
+    deletions: p.deletions as number,
+    changed_files: p.changed_files as number,
+  }));
+
+  sendJson(res, { prs: result, repo });
+}
+
+async function handleGitHubPRDetail(res: ServerResponse, sessionId: number, prNumber: number): Promise<void> {
+  const path = await getSessionPath(sessionId);
+  if (!path) { sendError(res, "Session not found", 404); return; }
+
+  const token = CONFIG.GITHUB_TOKEN;
+  if (!token) { sendError(res, "GITHUB_TOKEN not configured", 503); return; }
+
+  const repo = await getGitHubRepo(path);
+  if (!repo) { sendError(res, "Could not determine GitHub repo", 400); return; }
+
+  const base = `/repos/${repo.owner}/${repo.repo}`;
+
+  // Fetch PR, reviews, inline comments, and checks in parallel
+  const [pr, reviews, inlineComments] = await Promise.all([
+    githubReq<any>(`${base}/pulls/${prNumber}`),
+    githubReq<any[]>(`${base}/pulls/${prNumber}/reviews?per_page=100`),
+    githubReq<any[]>(`${base}/pulls/${prNumber}/comments?per_page=100`),
+  ]);
+
+  if (!pr) { sendError(res, "PR not found", 404); return; }
+
+  // Fetch check runs for the PR head SHA
+  const checks = await githubReq<any>(`${base}/commits/${pr.head.sha}/check-runs?per_page=100`);
+
+  sendJson(res, {
+    pr: {
+      number: pr.number,
+      title: pr.title,
+      state: pr.state,
+      draft: pr.draft,
+      author: pr.user?.login,
+      author_avatar: pr.user?.avatar_url,
+      head: pr.head?.ref,
+      base: pr.base?.ref,
+      head_sha: pr.head?.sha,
+      created_at: pr.created_at,
+      updated_at: pr.updated_at,
+      body: pr.body ?? "",
+      html_url: pr.html_url,
+    },
+    reviews: (reviews ?? []).map((r: any) => ({
+      id: r.id,
+      author: r.user?.login,
+      author_avatar: r.user?.avatar_url,
+      state: r.state, // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED
+      body: r.body ?? "",
+      submitted_at: r.submitted_at,
+    })),
+    comments: (inlineComments ?? []).map((c: any) => ({
+      id: c.id,
+      author: c.user?.login,
+      author_avatar: c.user?.avatar_url,
+      body: c.body ?? "",
+      path: c.path,
+      line: c.line ?? c.original_line,
+      created_at: c.created_at,
+      diff_hunk: c.diff_hunk,
+    })),
+    checks: (checks?.check_runs ?? []).map((cr: any) => ({
+      id: cr.id,
+      name: cr.name,
+      status: cr.status, // queued | in_progress | completed
+      conclusion: cr.conclusion, // success | failure | neutral | cancelled | skipped | timed_out | action_required
+      started_at: cr.started_at,
+      completed_at: cr.completed_at,
+      html_url: cr.html_url,
+    })),
+  });
+}
+
 // --- Session Stats API ---
 
 async function handleSessionStats(res: ServerResponse, sessionId: number, url: URL): Promise<void> {
@@ -897,6 +1049,15 @@ export async function handleDashboardRequest(
       if (action === "status") { await handleGitStatus(res, sessionId); return true; }
       if (action === "branches") { await handleGitBranches(res, sessionId); return true; }
       if (gitMatch[3]) { await handleGitCommitDiff(res, sessionId, gitMatch[3]); return true; }
+    }
+    // GitHub PR API
+    const prListMatch = pathname.match(/^\/api\/git\/(\d+)\/prs$/);
+    if (prListMatch && method === "GET") {
+      await handleGitHubPRs(res, Number(prListMatch[1]), url); return true;
+    }
+    const prDetailMatch = pathname.match(/^\/api\/git\/(\d+)\/prs\/(\d+)$/);
+    if (prDetailMatch && method === "GET") {
+      await handleGitHubPRDetail(res, Number(prDetailMatch[1]), Number(prDetailMatch[2])); return true;
     }
 
     // Permissions API

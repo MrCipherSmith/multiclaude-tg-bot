@@ -41,6 +41,57 @@ export interface GitStatusFile {
   file: string;
 }
 
+export interface GitHubPR {
+  number: number;
+  title: string;
+  state: string;
+  draft: boolean;
+  author: string;
+  author_avatar: string;
+  head: string;
+  base: string;
+  created_at: string;
+  updated_at: string;
+  body: string;
+  html_url: string;
+  head_sha: string;
+  comments: number;
+  review_comments: number;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+}
+
+export interface GitHubReview {
+  id: number;
+  author: string;
+  author_avatar: string;
+  state: string; // APPROVED | CHANGES_REQUESTED | COMMENTED | DISMISSED
+  body: string;
+  submitted_at: string;
+}
+
+export interface GitHubComment {
+  id: number;
+  author: string;
+  author_avatar: string;
+  body: string;
+  path: string;
+  line: number;
+  created_at: string;
+  diff_hunk: string;
+}
+
+export interface GitHubCheckRun {
+  id: number;
+  name: string;
+  status: string; // queued | in_progress | completed
+  conclusion: string | null; // success | failure | neutral | cancelled | skipped | timed_out
+  started_at: string | null;
+  completed_at: string | null;
+  html_url: string;
+}
+
 export interface PermissionRequest {
   id: number;
   tool_name: string;
@@ -120,6 +171,19 @@ export const api = {
       req<{ branches: { name: string; current: boolean }[] }>(`/api/git/${sessionId}/branches`),
     commitDiff: (sessionId: number, hash: string) =>
       req<{ diff: string }>(`/api/git/${sessionId}/commit/${hash}`),
+    prs: (sessionId: number, params?: { author?: string; draft?: boolean }) => {
+      const q = new URLSearchParams();
+      if (params?.author) q.set("author", params.author);
+      if (params?.draft !== undefined) q.set("draft", String(params.draft));
+      return req<{ prs: GitHubPR[]; repo: { owner: string; repo: string } }>(`/api/git/${sessionId}/prs?${q}`);
+    },
+    prDetail: (sessionId: number, prNumber: number) =>
+      req<{
+        pr: GitHubPR;
+        reviews: GitHubReview[];
+        comments: GitHubComment[];
+        checks: GitHubCheckRun[];
+      }>(`/api/git/${sessionId}/prs/${prNumber}`),
   },
 
   permissions: {

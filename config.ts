@@ -60,6 +60,10 @@ const EnvSchema = z.object({
   GROQ_API_KEY: z.string().default(""),
   WHISPER_URL: z.string().default("http://localhost:9000"),
 
+  // GitHub
+  GITHUB_TOKEN: z.string().default(""),
+  GITHUB_USERNAME: z.string().default(""),
+
   // Security / paths
   JWT_SECRET: z.string().optional(),
   SECURE_COOKIES: z.string().optional(),
@@ -161,6 +165,10 @@ export const CONFIG = {
   HOST_PROJECTS_DIR: env.HOST_PROJECTS_DIR,
   KNOWLEDGE_BASE: env.KNOWLEDGE_BASE,
   KNOWLEDGE_BASE_PATH: env.KNOWLEDGE_BASE_PATH,
+
+  // GitHub
+  GITHUB_TOKEN: env.GITHUB_TOKEN,
+  GITHUB_USERNAME: env.GITHUB_USERNAME,
 
   // Access control
   ALLOW_ALL_USERS: env.ALLOW_ALL_USERS,

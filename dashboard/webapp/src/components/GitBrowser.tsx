@@ -13,6 +13,7 @@ import markdown from "highlight.js/lib/languages/markdown";
 import rust from "highlight.js/lib/languages/rust";
 import go from "highlight.js/lib/languages/go";
 import { api, type Session, type GitCommit, type GitStatusFile } from "../api";
+import { PRList } from "./PRList";
 import { getFileIcon, getLang } from "../utils/fileIcons";
 
 // Register languages
@@ -29,7 +30,7 @@ hljs.registerLanguage("markdown", markdown);
 hljs.registerLanguage("rust", rust);
 hljs.registerLanguage("go", go);
 
-type GitTab = "files" | "log" | "status";
+type GitTab = "files" | "log" | "status" | "prs";
 interface Props { session: Session }
 
 // --- Tree structure ---
@@ -519,6 +520,7 @@ export function GitBrowser({ session }: Props) {
     { id: "files", label: "Files", icon: "📁" },
     { id: "log", label: "Log", icon: "🕐" },
     { id: "status", label: "Changes", icon: "✎" },
+    { id: "prs", label: "PRs", icon: "🔀" },
   ];
 
   return (
@@ -546,6 +548,7 @@ export function GitBrowser({ session }: Props) {
         {gitTab === "files" && <FileTree session={session} />}
         {gitTab === "log" && <CommitLog session={session} />}
         {gitTab === "status" && <GitStatus session={session} />}
+        {gitTab === "prs" && <PRList session={session} />}
       </div>
     </div>
   );
