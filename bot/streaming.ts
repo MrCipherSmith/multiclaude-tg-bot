@@ -76,28 +76,37 @@ export async function streamToTelegram(
     }
   };
 
-  for await (const delta of streamResponse(messages, system, ctx)) {
-    accumulated += delta;
+  // Keep typing indicator alive during long responses (Telegram clears it after ~5s)
+  const typingInterval = setInterval(() => {
+    bot.api.sendChatAction(Number(chatId), "typing").catch(() => {});
+  }, 4000);
 
-    const now = Date.now();
-    if (now - lastEditAt >= EDIT_INTERVAL_MS && !editInFlight) {
-      lastEditAt = now;
-      const snapshot = accumulated;
-      // Sequential: wait for previous edit before starting next
-      editInFlight = doEdit(snapshot)
-        .catch((err) => logger.warn({ err }, "streaming: edit failed"))
-        .finally(() => { editInFlight = null; });
+  try {
+    for await (const delta of streamResponse(messages, system, ctx)) {
+      accumulated += delta;
+
+      const now = Date.now();
+      if (now - lastEditAt >= EDIT_INTERVAL_MS && !editInFlight) {
+        lastEditAt = now;
+        const snapshot = accumulated;
+        // Sequential: wait for previous edit before starting next
+        editInFlight = doEdit(snapshot)
+          .catch((err) => logger.warn({ err }, "streaming: edit failed"))
+          .finally(() => { editInFlight = null; });
+      }
     }
-  }
 
-  // Wait for any in-flight edit to complete before final edit
-  if (editInFlight) await editInFlight;
+    // Wait for any in-flight edit to complete before final edit
+    if (editInFlight) await editInFlight;
 
-  // Final edit with complete text + HTML formatting
-  if (accumulated.length > 0) {
-    await doEdit(accumulated, true);
-  } else {
-    await bot.api.editMessageText(Number(chatId), messageId, "(empty response)");
+    // Final edit with complete text + HTML formatting
+    if (accumulated.length > 0) {
+      await doEdit(accumulated, true);
+    } else {
+      await bot.api.editMessageText(Number(chatId), messageId, "(empty response)");
+    }
+  } finally {
+    clearInterval(typingInterval);
   }
 
   return accumulated;

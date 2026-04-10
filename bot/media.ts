@@ -201,6 +201,16 @@ export async function handleVoice(ctx: Context): Promise<void> {
   const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
   appendLog(route.sessionId, chatId, "voice", `received ${voice.duration}s, route=${route.mode}`);
 
+  // Early exit for disconnected sessions — don't waste Whisper API call
+  if (route.mode === "disconnected") {
+    await ctx.reply(
+      `⚠️ Нет активной CLI-сессии для этого проекта.\n` +
+      `Голосовое сообщение не обработано.\n\n` +
+      `/sessions — список сессий | /switch 0 — standalone режим`,
+    );
+    return;
+  }
+
   // Send status immediately (user feedback before queue slot opens)
   const statusMsg = await ctx.reply(`🎤 Voice message (${voice.duration}s) — downloading...`);
 

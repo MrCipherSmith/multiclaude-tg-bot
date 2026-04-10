@@ -76,9 +76,15 @@ export async function handleText(ctx: Context): Promise<void> {
 
   if (route.mode === "disconnected") {
     appendLog(route.sessionId, chatId, "route", `session "${route.sessionName}" not active`, "warn");
+    const sessionLabel = route.sessionName ?? `#${route.sessionId}`;
+    const projectHint = route.projectPath ? `\n📁 Проект: <code>${route.projectPath}</code>` : "";
     await replyInThread(
       ctx,
-      `⚠️ Session <b>${route.sessionName ?? `#${route.sessionId}`}</b> is not active.\n\n/switch 0 — standalone mode\n/sessions — list all sessions`,
+      `⚠️ Сессия <b>${sessionLabel}</b> не активна.${projectHint}\n\n` +
+      `Если Claude Code запущен — сессия подключится автоматически при следующем запуске.\n` +
+      `Или:\n` +
+      `/switch 0 — перейти в standalone (без Claude Code)\n` +
+      `/sessions — все сессии`,
       { parse_mode: "HTML" },
     );
     return;
