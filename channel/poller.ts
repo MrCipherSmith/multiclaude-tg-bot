@@ -87,8 +87,8 @@ export class MessageQueuePoller {
           const enrichedContent = hint ? `${hint}${row.content}` : row.content;
           if (hint) channelLogger.debug({ hint: hint.trim() }, "skill hint injected");
 
-          // Deliver to Claude first — don't block on status message HTTP round-trip
-          await this.ctx.mcp.notification({
+          // 1. Deliver to Claude immediately — don't wait for Telegram HTTP
+          this.ctx.mcp.notification({
             method: "notifications/claude/channel",
             params: {
               content: enrichedContent,
@@ -100,15 +100,16 @@ export class MessageQueuePoller {
                 attachments: row.attachments ?? undefined,
               },
             },
-          });
+          }).catch((err) => channelLogger.warn({ err }, "mcp.notification failed"));
           channelLogger.info({ phase: "poller", step: "notification-sent", msgId: row.id, chatId: row.chat_id, elapsedMs: Date.now() - tDequeue, totalFromQueueMs: Date.now() - new Date(row.created_at).getTime() }, "perf");
           this.touchIdleTimer();
 
-          // Status + typing + monitor fire concurrently after notification (non-blocking)
+          // 2. Create status message (awaited) — monitor MUST start after this so
+          //    updateStatus() finds an active state and doesn't silently drop updates
           this.status.startTypingForChat(row.chat_id);
-          this.status.sendStatusMessage(row.chat_id, "Thinking...").catch((err) =>
-            channelLogger.warn({ err }, "sendStatusMessage failed"),
-          );
+          await this.status.sendStatusMessage(row.chat_id, "Thinking...");
+
+          // 3. Start progress monitor — status is now registered, updates will land
           this.status.startProgressMonitorForChat(row.chat_id).catch(() => {});
           this.status.armResponseGuard(row.chat_id);
         }
