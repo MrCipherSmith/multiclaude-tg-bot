@@ -102,7 +102,7 @@ export function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen" style={{ background: "var(--tg-bg)" }}>
+    <div className="flex flex-col h-screen" style={{ background: "var(--tg-bg)", paddingTop: "var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px))" }}>
       {/* Header */}
       <header className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-700 shrink-0"
         style={{ background: "var(--tg-secondary-bg)" }}>
@@ -191,7 +191,7 @@ export function App() {
       {/* Bottom nav */}
       {selectedSession && (
         <nav className="flex border-t border-black/10 shrink-0"
-          style={{ background: "var(--tg-secondary-bg)" }}>
+          style={{ background: "var(--tg-secondary-bg)", paddingBottom: "var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}>
           {([
             ["git", "📁", "Files"],
             ["permissions", "🔑", "Perms"],
