@@ -7,7 +7,7 @@ import { z } from "zod";
 import { executeTool } from "./tools.ts";
 import { registerMcpSession, unregisterMcpSession } from "./bridge.ts";
 import { handleDashboardRequest } from "./dashboard-api.ts";
-import { sessionManager } from "../sessions/manager.ts";
+import { sessionManager, setTerminationCallback } from "../sessions/manager.ts";
 import { CONFIG } from "../config.ts";
 import { sql } from "../memory/db.ts";
 import { summarizeOnDisconnect, summarizeWork, extractFactsFromTranscript } from "../memory/summarizer.ts";
@@ -202,6 +202,35 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
   if (CONFIG.TELEGRAM_TRANSPORT === "webhook" && !CONFIG.TELEGRAM_WEBHOOK_SECRET) {
     console.error("[security] FATAL: TELEGRAM_WEBHOOK_SECRET must be set in webhook mode. Generate with: openssl rand -hex 32");
     process.exit(1);
+  }
+
+  // Register session crash notification callback
+  if (bot) {
+    setTerminationCallback(async (sessionId, projectPath, sessionName) => {
+      try {
+        const forumChatRow = await sql`SELECT value FROM bot_config WHERE key = 'forum_chat_id'`;
+        const forumChatId = forumChatRow[0]?.value;
+        if (!forumChatId) return;
+
+        let forumTopicId: number | null = null;
+        if (projectPath) {
+          const proj = await sql`SELECT forum_topic_id FROM projects WHERE project_path = ${projectPath} AND forum_topic_id IS NOT NULL LIMIT 1`;
+          forumTopicId = proj[0]?.forum_topic_id ?? null;
+        }
+        if (!forumTopicId) return;
+
+        const label = sessionName ?? `#${sessionId}`;
+        const pathLine = projectPath ? `\n📁 ${projectPath}\n` : "";
+        await bot.api.sendMessage(
+          Number(forumChatId),
+          `⚠️ Сессия <b>${label}</b> завершилась.${pathLine}\n` +
+          `Запусти Claude Code заново — бот подключится автоматически.`,
+          { parse_mode: "HTML", message_thread_id: forumTopicId },
+        );
+      } catch (err) {
+        console.error("[session-notify] failed to send termination notification:", err);
+      }
+    });
   }
 
 

@@ -74,6 +74,7 @@ import { handleProjectAdd } from "./commands/project-add.ts";
 import { handleProjectFacts, handleProjectScan } from "./commands/project-facts.ts";
 import { handleMemoryExport, handleMemoryImport } from "./commands/memory-export.ts";
 import { handleForumSetup, handleForumSync, handleTopicRename, handleTopicClose, handleTopicReopen, handleForumHub } from "./commands/forum.ts";
+import { handleQuickstart } from "./commands/quickstart.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
 import { handleCallbackQuery } from "./callbacks.ts";
 import { handleText } from "./text-handler.ts";
@@ -89,6 +90,7 @@ export function registerHandlers(b: Bot): void {
   b.command("rename", handleRename);
   b.command("start", handleStart);
   b.command("help", handleHelp);
+  b.command("quickstart", handleQuickstart);
 
   // Memory commands
   b.command("remember", handleRemember);

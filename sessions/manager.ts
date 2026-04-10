@@ -5,6 +5,14 @@ import { broadcast } from "../mcp/notification-broadcaster.ts";
 import { logger } from "../logger.ts";
 import { transitionSession, type SessionStatus } from "./state-machine.ts";
 
+export type TerminationCallback = (sessionId: number, projectPath: string | null, sessionName: string | null) => void;
+let terminationCallback: TerminationCallback | null = null;
+
+/** Register a callback to be called when a non-ephemeral session terminates unexpectedly. */
+export function setTerminationCallback(cb: TerminationCallback): void {
+  terminationCallback = cb;
+}
+
 export interface Session {
   id: number;
   name: string | null;
@@ -215,6 +223,10 @@ export class SessionManager {
       // Named/channel session — transition based on source
       const newStatus: SessionStatus = source === 'remote' ? 'inactive' : 'terminated';
       await transitionSession(sql, id, newStatus, { name: name ?? source });
+      if (newStatus === 'terminated' && terminationCallback) {
+        const full = await sql`SELECT project_path FROM sessions WHERE id = ${id}`;
+        terminationCallback(id, full[0]?.project_path ?? null, name ?? null);
+      }
     }
     this.activeClients.delete(clientId);
   }
@@ -247,7 +259,13 @@ export class SessionManager {
       if (!this.liveTransports.has(row.client_id) && !this.activeClients.has(row.client_id)) {
         const newStatus: SessionStatus = row.source === 'remote' ? 'inactive' : 'terminated';
         const applied = await transitionSession(sql, row.id, newStatus, { clientId: row.client_id.slice(0, 8), reason: "stale" });
-        if (applied) count++;
+        if (applied) {
+          count++;
+          if (newStatus === 'terminated' && terminationCallback) {
+            const full = await sql`SELECT project_path, name FROM sessions WHERE id = ${row.id}`;
+            terminationCallback(row.id, full[0]?.project_path ?? null, full[0]?.name ?? null);
+          }
+        }
       }
     }
     return count;
