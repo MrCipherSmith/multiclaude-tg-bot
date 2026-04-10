@@ -71,6 +71,9 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
+  // Fire typing indicator immediately — user sees feedback before routeMessage DB query
+  ctx.replyWithChatAction("typing", forumTopicId ? { message_thread_id: forumTopicId } : undefined).catch(() => {});
+
   const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
 
   appendLog(route.sessionId, chatId, "route", `mode=${route.mode}, session=#${route.sessionId}`);
@@ -93,9 +96,6 @@ export async function handleText(ctx: Context): Promise<void> {
 
   if (route.mode === "cli") {
     appendLog(route.sessionId, chatId, "route", `cli session #${route.sessionId}`);
-
-    // Show typing indicator
-    await ctx.replyWithChatAction("typing");
 
     // Save message to short-term memory
     await addMessage({
