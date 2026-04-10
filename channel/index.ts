@@ -16,6 +16,7 @@ import { SessionManager } from "./session.ts";
 import { StatusManager } from "./status.ts";
 import { PermissionHandler } from "./permissions.ts";
 import { MessageQueuePoller } from "./poller.ts";
+import { SkillEvaluator } from "./skill-evaluator.ts";
 import { registerTools } from "./tools.ts";
 import { channelLogger } from "../logger.ts";
 
@@ -140,6 +141,11 @@ registerTools(
   () => sessionMgr.touchIdleTimer(triggerSummarize),
 );
 
+// --- Skill Evaluator ---
+const skillEval = new SkillEvaluator();
+// Load asynchronously — if registry not found, hints are simply skipped
+skillEval.load(ENV.HOME).catch(() => {});
+
 // --- Poller ---
 const poller = new MessageQueuePoller(
   {
@@ -151,6 +157,7 @@ const poller = new MessageQueuePoller(
   },
   statusMgr,
   () => sessionMgr.touchIdleTimer(triggerSummarize),
+  skillEval,
 );
 
 // --- Main ---

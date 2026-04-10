@@ -5,6 +5,7 @@
 import type postgres from "postgres";
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { StatusManager } from "./status.ts";
+import type { SkillEvaluator } from "./skill-evaluator.ts";
 import { channelLogger } from "../logger.ts";
 
 export interface PollerContext {
@@ -23,6 +24,7 @@ export class MessageQueuePoller {
     private ctx: PollerContext,
     private status: StatusManager,
     private touchIdleTimer: () => void,
+    private skillEvaluator?: SkillEvaluator,
   ) {}
 
   private async setupListenNotify(): Promise<void> {
@@ -82,10 +84,14 @@ export class MessageQueuePoller {
           await this.status.sendStatusMessage(row.chat_id, "Thinking...");
           await this.status.startProgressMonitorForChat(row.chat_id);
 
+          const hint = this.skillEvaluator?.buildHint(row.content) ?? "";
+          const enrichedContent = hint ? `${hint}${row.content}` : row.content;
+          if (hint) channelLogger.debug({ hint: hint.trim() }, "skill hint injected");
+
           await this.ctx.mcp.notification({
             method: "notifications/claude/channel",
             params: {
-              content: row.content,
+              content: enrichedContent,
               meta: {
                 chat_id: row.chat_id,
                 user: row.from_user,
@@ -96,6 +102,7 @@ export class MessageQueuePoller {
             },
           });
           channelLogger.info({ user: row.from_user, preview: row.content.slice(0, 50) }, "message delivered to Claude");
+          this.status.armResponseGuard(row.chat_id);
           this.touchIdleTimer();
         }
       } catch (err) {
