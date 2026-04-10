@@ -135,43 +135,49 @@ export async function handleText(ctx: Context): Promise<void> {
   const projectPath = route.projectPath;
   const queueKey = topicQueueKey(chatId, isForumMessage ? forumTopicId : null);
 
-  enqueueForTopic(queueKey, async () => {
-    await ctx.replyWithChatAction("typing");
+  enqueueForTopic(
+    queueKey,
+    async () => {
+      await ctx.replyWithChatAction("typing");
 
-    appendLog(sessionId, chatId, "receive", `user message: ${text.slice(0, 80)}`);
+      appendLog(sessionId, chatId, "receive", `user message: ${text.slice(0, 80)}`);
 
-    await addMessage({
-      sessionId,
-      projectPath,
-      chatId,
-      role: "user",
-      content: text,
-      metadata: {
-        messageId: ctx.message?.message_id,
-        from: ctx.from?.username ?? ctx.from?.first_name,
-      },
-    });
+      await addMessage({
+        sessionId,
+        projectPath,
+        chatId,
+        role: "user",
+        content: text,
+        metadata: {
+          messageId: ctx.message?.message_id,
+          from: ctx.from?.username ?? ctx.from?.first_name,
+        },
+      });
 
-    const switchCtx = getSwitchContext(chatId);
-    let effectiveText = text;
-    if (switchCtx) {
-      effectiveText = `[Project context from prior session]\n${switchCtx.summary}\n\n[User message]\n${text}`;
-      clearSwitchContext(chatId);
-    }
+      const switchCtx = getSwitchContext(chatId);
+      let effectiveText = text;
+      if (switchCtx) {
+        effectiveText = `[Project context from prior session]\n${switchCtx.summary}\n\n[User message]\n${text}`;
+        clearSwitchContext(chatId);
+      }
 
-    const { system, messages } = await composePrompt(sessionId, chatId, effectiveText);
+      const { system, messages } = await composePrompt(sessionId, chatId, effectiveText);
 
-    try {
-      appendLog(sessionId, chatId, "llm", "streaming response...");
-      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
-      appendLog(sessionId, chatId, "reply", `sent ${response.length} chars`);
-      await addMessage({ sessionId, projectPath, chatId, role: "assistant", content: response });
-    } catch (err: any) {
-      appendLog(sessionId, chatId, "llm", `error: ${err?.message ?? err}`, "error");
-      await replyInThread(ctx, `Error: ${err?.message ?? "unknown error"}`);
-    }
+      try {
+        appendLog(sessionId, chatId, "llm", "streaming response...");
+        const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
+        appendLog(sessionId, chatId, "reply", `sent ${response.length} chars`);
+        await addMessage({ sessionId, projectPath, chatId, role: "assistant", content: response });
+      } catch (err: any) {
+        appendLog(sessionId, chatId, "llm", `error: ${err?.message ?? err}`, "error");
+        await replyInThread(ctx, `Error: ${err?.message ?? "unknown error"}`);
+      }
 
-    touchIdleTimer(sessionId, chatId, projectPath);
-    await checkOverflow(sessionId, chatId, projectPath);
-  });
+      touchIdleTimer(sessionId, chatId, projectPath);
+      await checkOverflow(sessionId, chatId, projectPath);
+    },
+    async (position) => {
+      await replyInThread(ctx, `⏳ В очереди (#${position}). Предыдущий запрос обрабатывается...`);
+    },
+  );
 }
