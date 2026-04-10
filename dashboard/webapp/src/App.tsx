@@ -21,7 +21,7 @@ declare global {
   }
 }
 
-type Tab = "git" | "permissions" | "monitor" | "timeline";
+type Tab = "git" | "permissions" | "monitor" | "timeline" | "sessions";
 
 export function App() {
   const [authed, setAuthed] = useState(false);
@@ -29,7 +29,6 @@ export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [tab, setTab] = useState<Tab>("git");
-  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Init Telegram WebApp
   useEffect(() => {
@@ -74,7 +73,7 @@ export function App() {
         if (firstActive) {
           setSelectedSession(firstActive);
         } else if (nonStandalone.length > 0) {
-          setSidebarOpen(true);
+          setTab("sessions");
         }
       }
     } catch (e: any) {
@@ -104,14 +103,8 @@ export function App() {
   return (
     <div className="flex flex-col h-screen" style={{ background: "var(--tg-bg)", paddingTop: "var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px))" }}>
       {/* Header */}
-      <header className="flex items-center gap-2 px-3 py-2 border-b border-gray-200 dark:border-gray-700 shrink-0"
+      <header className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-200 dark:border-gray-700 shrink-0"
         style={{ background: "var(--tg-secondary-bg)" }}>
-        <button
-          onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="p-1.5 rounded-lg text-[var(--tg-hint)] hover:bg-black/5 active:bg-black/10"
-        >
-          ☰
-        </button>
         <div className="flex-1 min-w-0">
           {selectedSession ? (
             <>
@@ -125,29 +118,24 @@ export function App() {
         <StatusDot status={selectedSession?.status} />
       </header>
 
-      {/* Sidebar */}
-      {sidebarOpen && (
-        <div className="absolute inset-0 z-50 flex">
-          <div className="w-72 max-w-[85vw] h-full flex flex-col overflow-hidden"
-            style={{ background: "var(--tg-secondary-bg)" }}>
-            <div className="flex items-center justify-between px-4 py-3 border-b border-black/10">
-              <span className="font-semibold text-sm">Sessions</span>
-              <button onClick={() => setSidebarOpen(false)} className="text-[var(--tg-hint)] p-1">✕</button>
-            </div>
+      {/* Content */}
+      <div className="flex-1 overflow-hidden">
+        {tab === "sessions" ? (
+          <div className="h-full flex flex-col overflow-hidden">
             <div className="flex-1 overflow-y-auto">
               {sessions.length === 0 && (
-                <div className="p-4 text-[var(--tg-hint)] text-sm text-center">No sessions</div>
+                <div className="p-6 text-[var(--tg-hint)] text-sm text-center">No sessions</div>
               )}
               {sessions.map((s) => (
                 <SessionCard
                   key={s.id}
                   session={s}
                   selected={selectedSession?.id === s.id}
-                  onSelect={() => { setSelectedSession(s); setSidebarOpen(false); }}
+                  onSelect={() => { setSelectedSession(s); setTab("git"); }}
                   onSwitch={async () => {
                     await api.switchSession(s.id);
                     setSelectedSession(s);
-                    setSidebarOpen(false);
+                    setTab("git");
                     await loadSessions();
                   }}
                   onDelete={async () => {
@@ -162,17 +150,11 @@ export function App() {
               <button onClick={loadSessions} className="text-xs text-[var(--tg-link)]">↻ Refresh</button>
             </div>
           </div>
-          <div className="flex-1" onClick={() => setSidebarOpen(false)} />
-        </div>
-      )}
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden">
-        {!selectedSession ? (
+        ) : !selectedSession ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 p-6 text-center">
             <div className="text-3xl">🤖</div>
             <p className="text-[var(--tg-hint)] text-sm">No active sessions.<br />Start a Claude session to begin.</p>
-            <button onClick={() => setSidebarOpen(true)}
+            <button onClick={() => setTab("sessions")}
               className="mt-2 px-4 py-2 rounded-xl text-sm font-medium"
               style={{ background: "var(--tg-button)", color: "var(--tg-button-text)" }}>
               Browse Sessions
@@ -189,26 +171,25 @@ export function App() {
       </div>
 
       {/* Bottom nav */}
-      {selectedSession && (
-        <nav className="flex border-t border-black/10 shrink-0"
-          style={{ background: "var(--tg-secondary-bg)", paddingBottom: "var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}>
-          {([
-            ["git", "📁", "Files"],
-            ["permissions", "🔑", "Perms"],
-            ["monitor", "📊", "Monitor"],
-            ["timeline", "🕐", "Timeline"],
-          ] as [Tab, string, string][]).map(([t, icon, label]) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 flex flex-col items-center py-2 gap-0.5 text-xs ${tab === t ? "text-[var(--tg-button)] font-medium" : "text-[var(--tg-hint)]"}`}
-            >
-              <span className="text-lg leading-none">{icon}</span>
-              {label}
-            </button>
-          ))}
-        </nav>
-      )}
+      <nav className="flex border-t border-black/10 shrink-0"
+        style={{ background: "var(--tg-secondary-bg)", paddingBottom: "var(--tg-safe-area-inset-bottom, env(safe-area-inset-bottom, 0px))" }}>
+        {([
+          ["git", "📁", "Files"],
+          ["permissions", "🔑", "Perms"],
+          ["monitor", "📊", "Monitor"],
+          ["timeline", "🕐", "Timeline"],
+          ["sessions", "☰", "Sessions"],
+        ] as [Tab, string, string][]).map(([t, icon, label]) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 flex flex-col items-center py-2 gap-0.5 text-xs ${tab === t ? "text-[var(--tg-button)] font-medium" : "text-[var(--tg-hint)]"}`}
+          >
+            <span className="text-lg leading-none">{icon}</span>
+            {label}
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }
