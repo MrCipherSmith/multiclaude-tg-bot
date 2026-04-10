@@ -150,3 +150,30 @@ export function maybeAttachVoice(
     })
     .catch((err) => logger.error({ err }, "tts: failed to send voice"));
 }
+
+/**
+ * Same as maybeAttachVoice but uses a raw bot token instead of a grammY Bot.
+ * Used by the channel subprocess which doesn't have a Bot instance.
+ */
+export function maybeAttachVoiceRaw(
+  token: string,
+  chatId: number | string,
+  text: string,
+  threadId?: number | null,
+): void {
+  if (!shouldSendVoice(text)) return;
+
+  synthesize(text)
+    .then(async (buf) => {
+      if (!buf) return;
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("voice", new Blob([buf], { type: "audio/mpeg" }), "voice.mp3");
+      if (threadId) form.append("message_thread_id", String(threadId));
+      await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+        method: "POST",
+        body: form,
+      });
+    })
+    .catch((err) => logger.error({ err }, "tts: failed to send voice (raw)"));
+}

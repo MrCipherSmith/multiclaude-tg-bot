@@ -8,6 +8,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { markdownToTelegramHtml } from "../bot/format.ts";
 import type { StatusManager } from "./status.ts";
 import { sendTelegramMessage, setTelegramReaction, editTelegramMessage } from "./telegram.ts";
+import { maybeAttachVoiceRaw } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
 
 export interface ToolContext {
@@ -257,6 +258,8 @@ export function registerTools(
         }
 
         channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
+        // Fire-and-forget TTS voice attachment for long non-code replies
+        maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null);
         // Mark pending reply as delivered
         if (pendingReplyId) {
           ctx.sql`UPDATE pending_replies SET delivered_at = NOW() WHERE id = ${pendingReplyId}`.catch(() => {});
