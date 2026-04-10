@@ -5,52 +5,11 @@ import { accessMiddleware } from "./access.ts";
 import { registerHandlers, setBotRef } from "./handlers.ts";
 import { logger } from "../logger.ts";
 
-/**
- * Simple per-chat rate limiter transformer.
- * Queues API calls per chat_id to stay within Telegram's ~20 msg/min per group limit.
- * Allows 1 call per MIN_INTERVAL_MS per chat; non-chat calls are pass-through.
- */
-function createChatThrottler(minIntervalMs = 500) {
-  const lastCall = new Map<string, number>();
-  const queues = new Map<string, Promise<void>>();
-
-  return async (prev: any, method: string, payload: any, signal: AbortSignal) => {
-    const chatId = payload?.chat_id != null ? String(payload.chat_id) : null;
-    if (!chatId) return prev(method, payload, signal);
-
-    const enqueue = (fn: () => Promise<unknown>) => {
-      const tail = queues.get(chatId) ?? Promise.resolve();
-      const next = tail.then(fn).catch(() => {});
-      queues.set(chatId, next);
-      next.finally(() => { if (queues.get(chatId) === next) queues.delete(chatId); });
-      return next;
-    };
-
-    return new Promise((resolve, reject) => {
-      enqueue(async () => {
-        const now = Date.now();
-        const last = lastCall.get(chatId) ?? 0;
-        const wait = minIntervalMs - (now - last);
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-        lastCall.set(chatId, Date.now());
-        try {
-          resolve(await prev(method, payload, signal));
-        } catch (err) {
-          reject(err);
-        }
-      });
-    });
-  };
-}
-
 export function createBot(): Bot {
   const bot = new Bot(CONFIG.TELEGRAM_BOT_TOKEN);
 
-  // Per-chat throttler: max 2 API calls/sec per chat (well within Telegram's ~20/min limit)
-  bot.api.config.use(createChatThrottler(500));
-
   // Auto-retry on 429 Too Many Requests — waits retry_after and retries automatically
-  bot.api.config.use(autoRetry({ maxRetryAttempts: 2, rethrowInternalServerErrors: false }));
+  bot.api.config.use(autoRetry({ maxRetryAttempts: 3, rethrowInternalServerErrors: false }));
 
   // Access control middleware
   bot.use(accessMiddleware);
