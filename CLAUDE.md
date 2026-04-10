@@ -30,3 +30,17 @@ Categories: `architecture`, `stack`, `setup`, `conventions`, `entry-points`, `go
 - Transient task state ("I just edited X")
 - Things already documented in source comments or README
 - Per-session events (use type="project_context" for those, they are handled automatically)
+
+---
+
+## Deployment Rules
+
+**NEVER restart Docker containers or run any of these without explicit user confirmation:**
+- `docker compose restart`
+- `docker compose up` / `docker compose down`
+- Any service restart or rebuild that causes downtime
+
+After `docker compose build` completes, STOP and say:
+> "Build ready — restart when you're ready, I'll wait for your go-ahead."
+
+Do not proceed automatically, even in orchestrator/parallel-agent flows where the next logical step is restart. Always checkpoint before any action that disrupts the running service.
