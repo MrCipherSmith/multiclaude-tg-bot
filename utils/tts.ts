@@ -1,19 +1,15 @@
 import type { Bot } from "grammy";
 import { InputFile } from "grammy";
-import { join } from "path";
 import { CONFIG } from "../config.ts";
 import { channelLogger } from "../logger.ts";
 
 const GROQ_API_KEY = CONFIG.GROQ_API_KEY;
 // OpenAI TTS key — read directly since config merges it into OPENROUTER_API_KEY
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
+const YANDEX_API_KEY = CONFIG.YANDEX_API_KEY;
+const YANDEX_FOLDER_ID = CONFIG.YANDEX_FOLDER_ID;
 
-// Piper local TTS — binary and model relative to this file's project root
-const PIPER_DIR = join(import.meta.dir, "../piper");
-const PIPER_BIN = join(PIPER_DIR, "piper/piper");
-const PIPER_MODEL = join(PIPER_DIR, "voices/ru_RU-irina-medium.onnx");
-
-const VOICE_MIN_CHARS = 200;
+const VOICE_MIN_CHARS = 300;
 
 /**
  * Returns true if the text qualifies for a voice attachment:
@@ -31,8 +27,9 @@ export function shouldSendVoice(text: string): boolean {
   }
   if (codeChars / text.length > 0.4) return false;
 
-  // Detect diffs: lines starting with + or - (but not --- / +++ headers)
-  const diffLines = text.split("\n").filter((l) => /^[+\-][^+\-]/.test(l)).length;
+  // Detect diffs: lines starting with + or - but NOT markdown bullets ("- item")
+  // Real diff lines: "+added", "-removed" (no space after marker)
+  const diffLines = text.split("\n").filter((l) => /^[+\-][^ +\-]/.test(l)).length;
   if (diffLines >= 6) return false;
 
   return true;
@@ -54,29 +51,34 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
-/** Synthesize via local Piper TTS (Russian, offline, free). Returns WAV buffer. */
-async function synthesizePiper(text: string): Promise<Buffer | null> {
-  const tmpFile = `/tmp/piper-tts-${Date.now()}.wav`;
-  try {
-    const proc = Bun.spawn(
-      [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", tmpFile],
-      { stdin: new TextEncoder().encode(text), stdout: "ignore", stderr: "ignore" },
-    );
-    const code = await proc.exited;
-    if (code !== 0) {
-      channelLogger.error({ code }, "tts: Piper exited with error");
-      return null;
-    }
-    const buf = await Bun.file(tmpFile).arrayBuffer();
-    return Buffer.from(buf);
-  } catch (err) {
-    channelLogger.error({ err }, "tts: Piper spawn failed");
+/** Synthesize via Yandex SpeechKit (Russian, multilingual). Returns MP3 buffer. */
+async function synthesizeYandex(text: string): Promise<Buffer | null> {
+  if (!YANDEX_API_KEY || !YANDEX_FOLDER_ID) return null;
+
+  const body = new URLSearchParams({
+    text: text.slice(0, 5000),
+    lang: "ru-RU",
+    voice: "alena",
+    format: "mp3",
+    folderId: YANDEX_FOLDER_ID,
+  });
+
+  const res = await fetch("https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize", {
+    method: "POST",
+    headers: {
+      Authorization: `Api-Key ${YANDEX_API_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    channelLogger.error({ status: res.status, err }, "tts: Yandex error");
     return null;
-  } finally {
-    Bun.file(tmpFile).exists().then(exists => {
-      if (exists) Bun.spawnSync(["rm", "-f", tmpFile]);
-    }).catch(() => {});
   }
+
+  return Buffer.from(await res.arrayBuffer());
 }
 
 /** Synthesize via Groq Orpheus (English only — best available Groq TTS as of 2026). */
@@ -135,32 +137,24 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
 
 /**
  * Convert text to speech.
- * Priority: OpenAI (multilingual, if key set) → Piper (local, Russian) → Groq (English only).
- * Returns WAV buffer or null on failure/disabled.
+ * Priority: Yandex SpeechKit (Russian, if keys set) → Groq (fallback).
+ * Returns audio buffer or null on failure/disabled.
  */
 export async function synthesize(text: string): Promise<Buffer | null> {
   const clean = stripMarkdown(text);
   if (clean.length < 10) return null;
 
-  // OpenAI first — best multilingual support
-  if (OPENAI_API_KEY) {
+  // Yandex first — best Russian support
+  if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
     try {
-      const buf = await synthesizeOpenAI(clean);
+      const buf = await synthesizeYandex(clean);
       if (buf) return buf;
     } catch (err) {
-      channelLogger.warn({ err }, "tts: OpenAI failed, trying Piper");
+      channelLogger.warn({ err }, "tts: Yandex failed, trying Groq");
     }
   }
 
-  // Piper — local, free, good Russian
-  try {
-    const buf = await synthesizePiper(clean);
-    if (buf) return buf;
-  } catch (err) {
-    channelLogger.warn({ err }, "tts: Piper failed, trying Groq");
-  }
-
-  // Groq — English only, last resort
+  // Groq fallback
   try {
     return await synthesizeGroq(clean);
   } catch (err) {
@@ -194,14 +188,20 @@ export function maybeAttachVoice(
 /**
  * Same as maybeAttachVoice but uses a raw bot token instead of a grammY Bot.
  * Used by the channel subprocess which doesn't have a Bot instance.
+ * @param forceVoice — skip shouldSendVoice check (e.g. user sent a voice message)
  */
 export function maybeAttachVoiceRaw(
   token: string,
   chatId: number | string,
   text: string,
   threadId?: number | null,
+  forceVoice = false,
 ): void {
-  if (!shouldSendVoice(text)) return;
+  channelLogger.info({ chatId, threadId, textLen: text.length, forceVoice, hasGroqKey: !!GROQ_API_KEY }, "tts: maybeAttachVoiceRaw called");
+  if (!forceVoice && !shouldSendVoice(text)) {
+    channelLogger.info({ chatId, textLen: text.length }, "tts: shouldSendVoice=false, skipping");
+    return;
+  }
 
   // Show "recording voice..." indicator while synthesis is in progress.
   // Telegram clears chat actions after 5s, so repeat every 4s until done.
@@ -222,7 +222,10 @@ export function maybeAttachVoiceRaw(
   synthesize(text)
     .then(async (buf) => {
       clearInterval(actionTimer);
-      if (!buf) return;
+      if (!buf) {
+        channelLogger.warn({ chatId }, "tts: synthesize returned null");
+        return;
+      }
       const form = new FormData();
       form.append("chat_id", String(chatId));
       form.append("voice", new Blob([buf], { type: "audio/wav" }), "voice.wav");

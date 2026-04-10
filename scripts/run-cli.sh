@@ -19,17 +19,24 @@ cd "$PROJECT_DIR" || { echo "[run-cli] Cannot cd to $PROJECT_DIR"; exit 1; }
 echo "[run-cli] Project: $PROJECT_DIR"
 echo "[run-cli] Log: $LOG_FILE"
 
-# Load .env from project root so API keys (GROQ_API_KEY, OPENAI_API_KEY, etc.)
-# are available to the channel subprocess. Skip already-set vars to avoid
+# Load shared API keys from claude-bot .env (GROQ_API_KEY, OPENAI_API_KEY, etc.)
+# then overlay project-specific .env on top. Skip already-set vars to avoid
 # overriding Docker-injected values like DATABASE_URL.
-if [ -f ".env" ]; then
+load_env() {
+  local envfile="$1"
+  [ -f "$envfile" ] || return
   while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue  # skip comments
     [[ -z "${line// }" ]] && continue             # skip blank lines
     key="${line%%=*}"
     [[ -z "${!key}" ]] && export "$line" 2>/dev/null  # only if not already set
-  done < .env
-  echo "[run-cli] Loaded .env"
+  done < "$envfile"
+}
+
+CLAUDE_BOT_DIR="$(dirname "$(dirname "$(realpath "$0")")")"
+load_env "$CLAUDE_BOT_DIR/.env" && echo "[run-cli] Loaded claude-bot .env"
+if [ "$PROJECT_DIR" != "$CLAUDE_BOT_DIR" ] && [ -f ".env" ]; then
+  load_env ".env" && echo "[run-cli] Loaded project .env"
 fi
 
 # Detect if we're inside tmux

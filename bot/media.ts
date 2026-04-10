@@ -306,11 +306,12 @@ export async function handleVoice(ctx: Context): Promise<void> {
             metadata: { voiceFile: filePath, messageId: ctx.message?.message_id },
           });
           await sql`
-            INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
+            INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id, attachments)
             VALUES (
               ${route.sessionId}, ${chatId},
               ${ctx.from?.username ?? ctx.from?.first_name ?? "user"},
-              ${content}, ${tgMsgId}
+              ${content}, ${tgMsgId},
+              ${JSON.stringify({ isVoice: true })}
             )
           `;
           appendLog(route.sessionId, chatId, "queue", "voice message queued for CLI");

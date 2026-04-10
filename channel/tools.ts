@@ -24,6 +24,8 @@ export interface ToolContext {
   forumChatId?: () => string | null;
   /** Forum topic ID for this project */
   forumTopicId?: () => number | null;
+  /** Returns true if the current message was a voice message → force TTS reply */
+  forceVoice?: () => boolean;
 }
 
 async function embed(text: string, ollamaUrl: string, embeddingModel: string): Promise<number[]> {
@@ -258,8 +260,8 @@ export function registerTools(
         }
 
         channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
-        // Fire-and-forget TTS voice attachment for long non-code replies
-        maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null);
+        // Fire-and-forget TTS voice attachment (forced if user sent voice, otherwise ≥300 chars)
+        maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null, ctx.forceVoice?.() ?? false);
         // Mark pending reply as delivered
         if (pendingReplyId) {
           ctx.sql`UPDATE pending_replies SET delivered_at = NOW() WHERE id = ${pendingReplyId}`.catch(() => {});

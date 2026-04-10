@@ -80,6 +80,9 @@ const channelSource: "remote" | "local" | null =
 let forumChatId: string | null = null;
 let forumTopicId: number | null = null;
 
+// --- Voice reply flag (set by poller, read by tools) ---
+let forceVoice = false;
+
 // --- Session ---
 const sessionMgr = new SessionManager({
   sql,
@@ -136,6 +139,7 @@ registerTools(
     embeddingModel: ENV.EMBEDDING_MODEL,
     forumChatId: () => forumChatId,
     forumTopicId: () => forumTopicId,
+    forceVoice: () => forceVoice,
   },
   statusMgr,
   () => sessionMgr.touchIdleTimer(triggerSummarize),
@@ -154,6 +158,7 @@ const poller = new MessageQueuePoller(
     sessionId: () => sessionMgr.sessionId,
     pollIntervalMs: 500,
     databaseUrl: ENV.DATABASE_URL,
+    setForceVoice: (v) => { forceVoice = v; },
   },
   statusMgr,
   () => sessionMgr.touchIdleTimer(triggerSummarize),

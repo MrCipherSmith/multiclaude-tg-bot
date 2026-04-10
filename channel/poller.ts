@@ -14,6 +14,8 @@ export interface PollerContext {
   sessionId: () => number | null;
   pollIntervalMs: number;
   databaseUrl: string;
+  /** Called after each dequeue to tell tools whether to force a voice reply */
+  setForceVoice?: (v: boolean) => void;
 }
 
 export class MessageQueuePoller {
@@ -84,7 +86,13 @@ export class MessageQueuePoller {
           channelLogger.info({ phase: "poller", step: "dequeued", msgId: row.id, sessionId: sid, chatId: row.chat_id, queueAgeMs: queueAge, t: tDequeue }, "perf");
 
           const hint = this.skillEvaluator?.buildHint(row.content) ?? "";
-          const enrichedContent = hint ? `${hint}${row.content}` : row.content;
+          const isVoiceMsg = !!(row.attachments as Record<string, unknown> | null)?.isVoice;
+          this.ctx.setForceVoice?.(isVoiceMsg);
+          // Always prepend TTS awareness note so Claude knows voice is automatic
+          const ttsNote = isVoiceMsg
+            ? "[Channel system: The user sent a voice message. ALWAYS send a voice reply regardless of length — it is sent automatically after reply, you do NOT need to do anything extra.]\n"
+            : "[Channel system: Replies ≥300 chars are automatically sent as a voice message after you call reply — you do NOT need to do anything extra, and you CAN send voice (automatically). Never claim you cannot.]\n";
+          const enrichedContent = `${ttsNote}${hint}${row.content}`;
           if (hint) channelLogger.debug({ hint: hint.trim() }, "skill hint injected");
 
           // 1. Deliver to Claude immediately — don't wait for Telegram HTTP

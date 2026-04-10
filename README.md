@@ -124,7 +124,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / Google AI / OpenRouter / Ollama) with automatic retry on 429/5xx
-- **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback
+- **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback; voice replies via Yandex SpeechKit (primary) or Groq Orpheus (English fallback)
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
 - **File Forwarding** — photos, documents, and videos forwarded to Claude via MCP with base64 (≤5 MB images) or file path; if sent without caption, bot asks what to do before forwarding
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
@@ -241,6 +241,21 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
               ◀───────────▶│                  │
               inline btns  └──────────────────┘
 ```
+
+### Voice Replies (TTS)
+
+After every `reply` call, the bot automatically attaches a voice message if:
+
+1. The user sent a voice message (always — regardless of reply length)
+2. The reply text is ≥300 characters and not mostly code or diffs
+
+**Provider priority:** Yandex SpeechKit → Groq Orpheus (fallback)
+
+| Provider | Set in `.env` | Notes |
+|---|---|---|
+| **Yandex SpeechKit** | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Best Russian quality; service account needs `ai.speechkit.tts` IAM role |
+| **Groq Orpheus** | `GROQ_API_KEY` | English-only; free tier: 3600 tokens/day |
+| **OpenAI TTS** | `OPENAI_API_KEY` | Good multilingual including Russian; not wired by default |
 
 ### Message Flows
 
