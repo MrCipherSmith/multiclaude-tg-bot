@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { type Bot, webhookCallback } from "grammy";
+import { type Bot } from "grammy";
 import { randomUUID } from "crypto";
 import { basename } from "path";
 import { z } from "zod";
@@ -186,15 +186,16 @@ function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined
   return server;
 }
 
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = "";
+    req.on("data", (chunk) => { data += String(chunk); });
+    req.on("end", () => resolve(data));
+    req.on("error", reject);
+  });
+}
+
 export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createServer> {
-  // Pre-create webhook handler if in webhook mode
-  const webhookHandler = CONFIG.TELEGRAM_TRANSPORT === "webhook" && bot
-    ? webhookCallback(bot, "http", {
-        secretToken: CONFIG.TELEGRAM_WEBHOOK_SECRET || undefined,
-        timeoutMilliseconds: 180_000,
-        onTimeout: "return",
-      })
-    : null;
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = new URL(req.url ?? "/", `http://localhost:${CONFIG.PORT}`);
@@ -377,16 +378,30 @@ export function startMcpHttpServer(bot: Bot | null): ReturnType<typeof createSer
       return;
     }
 
-    // Telegram webhook endpoint
-    if (webhookHandler && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
+    // Telegram webhook endpoint — return 200 immediately, process in background
+    if (bot && CONFIG.TELEGRAM_TRANSPORT === "webhook" && req.method === "POST" && url.pathname === CONFIG.TELEGRAM_WEBHOOK_PATH) {
+      // Validate secret token
+      const secretToken = req.headers["x-telegram-bot-api-secret-token"];
+      if (CONFIG.TELEGRAM_WEBHOOK_SECRET && secretToken !== CONFIG.TELEGRAM_WEBHOOK_SECRET) {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+
+      const body = await readBody(req);
+
+      // Acknowledge immediately — prevents Telegram retries and unblocks next update
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end("{}");
+
+      // Process update in background (non-blocking)
       try {
-        await webhookHandler(req, res);
+        const update = JSON.parse(body);
+        bot.handleUpdate(update).catch((err: any) =>
+          console.error("[webhook] handleUpdate error:", err?.message ?? err)
+        );
       } catch (err: any) {
-        console.error("[webhook] unhandled error:", err?.message ?? err);
-        if (!res.headersSent) {
-          res.writeHead(200); // 200 to prevent Telegram retries
-          res.end();
-        }
+        console.error("[webhook] parse error:", err?.message);
       }
       return;
     }

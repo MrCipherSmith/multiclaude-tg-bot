@@ -10,6 +10,7 @@ import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, ge
 import { getSwitchContext, clearSwitchContext } from "./switch-cache.ts";
 import { replyInThread } from "./format.ts";
 import { getForumChatId } from "./forum-cache.ts";
+import { enqueueForTopic, topicQueueKey } from "./topic-queue.ts";
 export { replyInThread } from "./format.ts";
 
 export async function enqueueToolCommand(
@@ -122,58 +123,49 @@ export async function handleText(ctx: Context): Promise<void> {
     return;
   }
 
-  // Standalone mode: process with available provider (anthropic/openrouter/ollama)
+  // Standalone mode: enqueue per-topic so different topics run in parallel
+  // but messages within the same topic stay sequential.
   const sessionId = route.sessionId;
+  const projectPath = route.projectPath;
+  const queueKey = topicQueueKey(chatId, isForumMessage ? forumTopicId : null);
 
-  // Show typing indicator
-  await ctx.replyWithChatAction("typing");
+  enqueueForTopic(queueKey, async () => {
+    await ctx.replyWithChatAction("typing");
 
-  appendLog(sessionId, chatId, "receive", `user message: ${text.slice(0, 80)}`);
+    appendLog(sessionId, chatId, "receive", `user message: ${text.slice(0, 80)}`);
 
-  // Save user message
-  await addMessage({
-    sessionId,
-    projectPath: route.projectPath,
-    chatId,
-    role: "user",
-    content: text,
-    metadata: {
-      messageId: ctx.message?.message_id,
-      from: ctx.from?.username ?? ctx.from?.first_name,
-    },
-  });
-
-  // Inject switch context briefing if available (once, then clear)
-  const switchCtx = getSwitchContext(chatId);
-  let effectiveText = text;
-  if (switchCtx) {
-    effectiveText = `[Project context from prior session]\n${switchCtx.summary}\n\n[User message]\n${text}`;
-    clearSwitchContext(chatId);
-  }
-
-  // Compose prompt with memory context
-  const { system, messages } = await composePrompt(sessionId, chatId, effectiveText);
-
-  // Stream response
-  try {
-    appendLog(sessionId, chatId, "llm", "streaming response...");
-    const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
-    appendLog(sessionId, chatId, "reply", `sent ${response.length} chars`);
-
-    // Save assistant response
     await addMessage({
       sessionId,
-      projectPath: route.projectPath,
+      projectPath,
       chatId,
-      role: "assistant",
-      content: response,
+      role: "user",
+      content: text,
+      metadata: {
+        messageId: ctx.message?.message_id,
+        from: ctx.from?.username ?? ctx.from?.first_name,
+      },
     });
-  } catch (err: any) {
-    appendLog(sessionId, chatId, "llm", `error: ${err?.message ?? err}`, "error");
-    await replyInThread(ctx, `Error: ${err?.message ?? "unknown error"}`);
-  }
 
-  // Touch idle timer and check overflow
-  touchIdleTimer(sessionId, chatId, route.projectPath);
-  await checkOverflow(sessionId, chatId, route.projectPath);
+    const switchCtx = getSwitchContext(chatId);
+    let effectiveText = text;
+    if (switchCtx) {
+      effectiveText = `[Project context from prior session]\n${switchCtx.summary}\n\n[User message]\n${text}`;
+      clearSwitchContext(chatId);
+    }
+
+    const { system, messages } = await composePrompt(sessionId, chatId, effectiveText);
+
+    try {
+      appendLog(sessionId, chatId, "llm", "streaming response...");
+      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
+      appendLog(sessionId, chatId, "reply", `sent ${response.length} chars`);
+      await addMessage({ sessionId, projectPath, chatId, role: "assistant", content: response });
+    } catch (err: any) {
+      appendLog(sessionId, chatId, "llm", `error: ${err?.message ?? err}`, "error");
+      await replyInThread(ctx, `Error: ${err?.message ?? "unknown error"}`);
+    }
+
+    touchIdleTimer(sessionId, chatId, projectPath);
+    await checkOverflow(sessionId, chatId, projectPath);
+  });
 }
