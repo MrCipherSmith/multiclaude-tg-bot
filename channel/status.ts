@@ -67,11 +67,22 @@ function normalizeStage(stage: string): string {
   return stage.replace(/^⏳\s*/, "");
 }
 
+const STATUS_VISIBLE_LINES = 10;
+const STATUS_MAX_LINES = 40;
+
 function formatStatusText(stage: string, elapsed: string, tokens: string): string {
   const normalized = normalizeStage(stage);
   const header = `⏳ <i>${elapsed}${tokens}</i>`;
   if (normalized.includes("\n")) {
-    return `${header}\n<pre>${escapeHtml(normalized)}</pre>`;
+    const lines = normalized.split("\n").slice(0, STATUS_MAX_LINES);
+    const visible = lines.slice(0, STATUS_VISIBLE_LINES);
+    const hidden = lines.slice(STATUS_VISIBLE_LINES);
+
+    let body = `<pre>${escapeHtml(visible.join("\n"))}</pre>`;
+    if (hidden.length > 0) {
+      body += `<tg-spoiler><pre>${escapeHtml(hidden.join("\n"))}</pre></tg-spoiler>`;
+    }
+    return `${header}\n${body}`;
   }
   return `${header}  ${escapeHtml(normalized)}`;
 }
