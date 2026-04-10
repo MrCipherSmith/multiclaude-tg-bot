@@ -6,6 +6,7 @@ import { embedSafe } from "../memory/embeddings.ts";
 import { chunkText } from "../utils/chunk.ts";
 import { tryAutoLink } from "./pending-expects.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
+import { maybeAttachVoice } from "../utils/tts.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -296,12 +297,14 @@ export async function executeTool(
     case "reply": {
       if (!bot) return text("Telegram bot not available");
       const chatId = Number(args.chat_id);
-      const chunks = chunkText(args.text as string);
+      const replyText = args.text as string;
+      const chunks = chunkText(replyText);
       for (const chunk of chunks) {
         await bot.api.sendMessage(chatId, chunk, {
           parse_mode: args.parse_mode as any,
         });
       }
+      maybeAttachVoice(bot, chatId, replyText);
       return text(`Sent ${chunks.length} message(s) to chat ${args.chat_id}`);
     }
 

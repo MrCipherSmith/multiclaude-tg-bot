@@ -11,6 +11,7 @@ import { sql } from "../memory/db.ts";
 import { logger } from "../logger.ts";
 import { appendLog } from "../utils/stats.ts";
 import { getBotRef, setPendingInput } from "./handlers.ts";
+import { maybeAttachVoice } from "../utils/tts.ts";
 import { getForumChatId } from "./forum-cache.ts";
 import { enqueueForTopic, topicQueueKey } from "./topic-queue.ts";
 
@@ -28,6 +29,7 @@ async function deliverMedia(
   filename?: string,
   mimeType?: string,
   messageId?: number,
+  forumTopicId?: number | null,
 ): Promise<void> {
   const bot = getBotRef();
   const chatId = String(ctx.chat!.id);
@@ -95,9 +97,10 @@ async function deliverMedia(
       ];
       messages[messages.length - 1] = { role: lastMsg.role, content: imageBlocks };
       appendLog(sessionId, chatId, "llm", "analyzing image...");
-      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" });
+      const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" }, forumTopicId);
       appendLog(sessionId, chatId, "reply", `image reply sent ${response.length} chars`);
       await addMessage({ sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
+      maybeAttachVoice(bot, ctx.chat!.id, response, forumTopicId);
       return;
     } catch (err: any) {
       appendLog(sessionId, chatId, "llm", `image analysis failed: ${err?.message}`, "error");
@@ -153,12 +156,13 @@ async function handleMedia(
         replyCtx, route, filePath, hostPath, description,
         userCaption, fileId, filename, mimeType,
         replyCtx.message?.message_id ?? origMessageId,
+        isForumMessage ? forumTopicId : null,
       );
     }, 5 * 60_000); // 5 min TTL — user may take time to decide
     return;
   }
 
-  await deliverMedia(ctx, route, filePath, hostPath, description, caption, fileId, filename, mimeType, ctx.message?.message_id);
+  await deliverMedia(ctx, route, filePath, hostPath, description, caption, fileId, filename, mimeType, ctx.message?.message_id, isForumMessage ? forumTopicId : null);
 }
 
 export async function handlePhoto(ctx: Context): Promise<void> {
@@ -214,97 +218,118 @@ export async function handleVoice(ctx: Context): Promise<void> {
   // Send status immediately (user feedback before queue slot opens)
   const statusMsg = await ctx.reply(`🎤 Voice message (${voice.duration}s) — downloading...`);
 
+  /** Edit statusMsg, retrying once on 429. */
+  const updateStatus = async (text: string) => {
+    try {
+      await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, text);
+    } catch (err: any) {
+      if (err?.error_code === 429) {
+        const retryAfter = (err?.parameters?.retry_after ?? 5) * 1000;
+        await new Promise((r) => setTimeout(r, retryAfter));
+        await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, text).catch(() => {});
+      }
+      // Other errors (e.g. message not modified) — ignore
+    }
+  };
+
   const queueKey = topicQueueKey(chatId, isForumMessage ? forumTopicId : null);
   enqueueForTopic(queueKey, async () => {
-    await ctx.replyWithChatAction("typing");
-
-    // Download voice file
-    let filePath: string;
     try {
-      filePath = await downloadFile(bot, voice.file_id);
-      appendLog(route.sessionId, chatId, "voice", `downloaded: ${filePath}`);
-    } catch (err) {
-      logger.error({ err }, "voice download failed");
-      appendLog(route.sessionId, chatId, "voice", `download failed: ${err}`, "error");
-      await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "🎤 Failed to download voice message.");
-      return;
-    }
+      await ctx.replyWithChatAction("typing");
 
-    // Transcribe — with live elapsed-time progress updates
-    await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "🎤 Transcribing speech...");
-    const fileData = await Bun.file(filePath).arrayBuffer();
-
-    const transcribeStart = Date.now();
-    let progressTimer: ReturnType<typeof setInterval> | null = null;
-    let progressCancelled = false;
-
-    if (voice.duration >= 10) {
-      progressTimer = setInterval(() => {
-        if (progressCancelled) return;
-        const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
-        bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, `🎤 Transcribing... (${elapsed}s)`).catch(() => {});
-      }, 5000);
-    }
-
-    let text: string | null;
-    try {
-      text = await transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
-        sessionId: route.sessionId,
-        chatId,
-        audioDurationSec: voice.duration,
-      });
-    } finally {
-      progressCancelled = true;
-      if (progressTimer) clearInterval(progressTimer);
-    }
-
-    if (text) {
-      appendLog(route.sessionId, chatId, "voice", `transcribed: ${text.slice(0, 80)}`);
-      await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, `🎤 Transcribed: ${text}`);
-
-      const content = `🎤 ${text}`;
-
-      if (route.mode === "cli") {
-        await addMessage({
-          sessionId: route.sessionId,
-          projectPath: route.projectPath,
-          chatId,
-          role: "user",
-          content,
-          metadata: { voiceFile: filePath, messageId: ctx.message?.message_id },
-        });
-        await sql`
-          INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
-          VALUES (
-            ${route.sessionId}, ${chatId},
-            ${ctx.from?.username ?? ctx.from?.first_name ?? "user"},
-            ${content}, ${String(ctx.message?.message_id ?? "")}
-          )
-        `;
-        appendLog(route.sessionId, chatId, "queue", "voice message queued for CLI");
-        touchIdleTimer(route.sessionId, chatId, route.projectPath);
-      } else if (route.mode === "standalone") {
-        await addMessage({
-          sessionId: route.sessionId,
-          projectPath: route.projectPath,
-          chatId,
-          role: "user",
-          content,
-          metadata: { voiceFile: filePath, messageId: ctx.message?.message_id },
-        });
-        const { system, messages } = await composePrompt(route.sessionId, chatId, content);
-        appendLog(route.sessionId, chatId, "llm", "streaming voice response...");
-        const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId: route.sessionId, chatId, operation: "chat" });
-        appendLog(route.sessionId, chatId, "reply", `voice reply sent ${response.length} chars`);
-        await addMessage({ sessionId: route.sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
-        touchIdleTimer(route.sessionId, chatId, route.projectPath);
-      } else {
-        appendLog(route.sessionId, chatId, "voice", `no handler for mode=${route.mode}`, "warn");
+      // Download voice file
+      let filePath: string;
+      try {
+        filePath = await downloadFile(bot, voice.file_id);
+        appendLog(route.sessionId, chatId, "voice", `downloaded: ${filePath}`);
+      } catch (err) {
+        logger.error({ err }, "voice download failed");
+        appendLog(route.sessionId, chatId, "voice", `download failed: ${err}`, "error");
+        await updateStatus("🎤 Failed to download voice message.");
+        return;
       }
-    } else {
-      appendLog(route.sessionId, chatId, "voice", "transcription failed", "error");
-      await bot.api.editMessageText(ctx.chat!.id, statusMsg.message_id, "🎤 Failed to transcribe. Sending as file...");
-      await handleMedia(ctx, voice.file_id, `Voice message (${voice.duration}s, not transcribed)`);
+
+      // Transcribe — with live elapsed-time progress updates
+      await updateStatus("🎤 Transcribing speech...");
+      const fileData = await Bun.file(filePath).arrayBuffer();
+
+      const transcribeStart = Date.now();
+      let progressTimer: ReturnType<typeof setInterval> | null = null;
+      let progressCancelled = false;
+
+      if (voice.duration >= 10) {
+        progressTimer = setInterval(() => {
+          if (progressCancelled) return;
+          const elapsed = Math.round((Date.now() - transcribeStart) / 1000);
+          updateStatus(`🎤 Transcribing... (${elapsed}s)`).catch(() => {});
+        }, 5000);
+      }
+
+      let text: string | null;
+      try {
+        text = await transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
+          sessionId: route.sessionId,
+          chatId,
+          audioDurationSec: voice.duration,
+        });
+      } finally {
+        progressCancelled = true;
+        if (progressTimer) clearInterval(progressTimer);
+      }
+
+      if (text) {
+        appendLog(route.sessionId, chatId, "voice", `transcribed: ${text.slice(0, 80)}`);
+        await updateStatus(`🎤 Transcribed: ${text}`);
+
+        const content = `🎤 ${text}`;
+
+        if (route.mode === "cli") {
+          await addMessage({
+            sessionId: route.sessionId,
+            projectPath: route.projectPath,
+            chatId,
+            role: "user",
+            content,
+            metadata: { voiceFile: filePath, messageId: ctx.message?.message_id },
+          });
+          await sql`
+            INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
+            VALUES (
+              ${route.sessionId}, ${chatId},
+              ${ctx.from?.username ?? ctx.from?.first_name ?? "user"},
+              ${content}, ${String(ctx.message?.message_id ?? "")}
+            )
+          `;
+          appendLog(route.sessionId, chatId, "queue", "voice message queued for CLI");
+          touchIdleTimer(route.sessionId, chatId, route.projectPath);
+        } else if (route.mode === "standalone") {
+          await addMessage({
+            sessionId: route.sessionId,
+            projectPath: route.projectPath,
+            chatId,
+            role: "user",
+            content,
+            metadata: { voiceFile: filePath, messageId: ctx.message?.message_id },
+          });
+          const { system, messages } = await composePrompt(route.sessionId, chatId, content);
+          appendLog(route.sessionId, chatId, "llm", "streaming voice response...");
+          const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId: route.sessionId, chatId, operation: "chat" }, isForumMessage ? forumTopicId : undefined);
+          appendLog(route.sessionId, chatId, "reply", `voice reply sent ${response.length} chars`);
+          await addMessage({ sessionId: route.sessionId, projectPath: route.projectPath, chatId, role: "assistant", content: response });
+          maybeAttachVoice(bot, ctx.chat!.id, response, isForumMessage ? forumTopicId : null);
+          touchIdleTimer(route.sessionId, chatId, route.projectPath);
+        } else {
+          appendLog(route.sessionId, chatId, "voice", `no handler for mode=${route.mode}`, "warn");
+        }
+      } else {
+        appendLog(route.sessionId, chatId, "voice", "transcription failed", "error");
+        await updateStatus("🎤 Failed to transcribe. Sending as file...");
+        await handleMedia(ctx, voice.file_id, `Voice message (${voice.duration}s, not transcribed)`);
+      }
+    } catch (err: any) {
+      logger.error({ err }, "voice handler failed");
+      appendLog(route.sessionId, chatId, "voice", `handler error: ${err?.message ?? err}`, "error");
+      await updateStatus(`🎤 Error: ${err?.message ?? "unknown error"}`);
     }
   });
 }

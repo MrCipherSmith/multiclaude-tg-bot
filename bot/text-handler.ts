@@ -11,6 +11,7 @@ import { getSwitchContext, clearSwitchContext } from "./switch-cache.ts";
 import { replyInThread, escapeHtml } from "./format.ts";
 import { getForumChatId } from "./forum-cache.ts";
 import { enqueueForTopic, topicQueueKey } from "./topic-queue.ts";
+import { maybeAttachVoice } from "../utils/tts.ts";
 export { replyInThread } from "./format.ts";
 
 export async function enqueueToolCommand(
@@ -168,6 +169,7 @@ export async function handleText(ctx: Context): Promise<void> {
         const response = await streamToTelegram(bot, ctx.chat!.id, system, messages, { sessionId, chatId, operation: "chat" }, forumTopicId);
         appendLog(sessionId, chatId, "reply", `sent ${response.length} chars`);
         await addMessage({ sessionId, projectPath, chatId, role: "assistant", content: response });
+        maybeAttachVoice(bot, ctx.chat!.id, response, isForumMessage ? forumTopicId : null);
       } catch (err: any) {
         appendLog(sessionId, chatId, "llm", `error: ${err?.message ?? err}`, "error");
         await replyInThread(ctx, `Error: ${err?.message ?? "unknown error"}`);
