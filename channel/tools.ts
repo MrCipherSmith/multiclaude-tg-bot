@@ -172,6 +172,7 @@ export function registerTools(
     switch (name) {
       case "reply": {
         const chatId = String(args!.chat_id);
+        channelLogger.info({ phase: "tools", step: "reply-called", chatId, t: Date.now() }, "perf");
         status.stopTypingForChat(chatId);
         status.stopProgressMonitorForChat(chatId);
         await status.deleteStatusMessage(chatId);
@@ -255,7 +256,7 @@ export function registerTools(
           }
         }
 
-        channelLogger.info({ chatId }, "reply sent OK");
+        channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
         // Mark pending reply as delivered
         if (pendingReplyId) {
           ctx.sql`UPDATE pending_replies SET delivered_at = NOW() WHERE id = ${pendingReplyId}`.catch(() => {});

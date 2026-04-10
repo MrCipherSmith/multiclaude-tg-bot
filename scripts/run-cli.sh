@@ -29,6 +29,9 @@ fi
 while true; do
   echo "[run-cli] Starting claude at $(date '+%Y-%m-%d %H:%M:%S')" | tee -a "$LOG_FILE"
 
+  CHANNEL_LOG_FILE="/tmp/channel-${PROJECT_NAME}.log"
+  export CHANNEL_LOG_FILE
+
   if [ -z "$IN_TMUX" ]; then
     # Outside tmux: capture terminal output via script for monitoring
     > "$OUTPUT_FILE"  # truncate

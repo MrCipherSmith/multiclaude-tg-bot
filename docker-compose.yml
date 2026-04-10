@@ -25,6 +25,7 @@ services:
       - ./tmux-projects.json:/app/tmux-projects.json
       - ${HOST_PROJECTS_DIR:-${HOME}/bots}:/host-projects:ro
       - ${HOME}:/host-home:ro
+      - ./logs:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:${PORT:-3847}/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 15s

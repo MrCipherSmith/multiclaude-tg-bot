@@ -3,6 +3,7 @@ import { composePrompt } from "../claude/prompt.ts";
 import { addMessage } from "../memory/short-term.ts";
 import { streamToTelegram } from "./streaming.ts";
 import { routeMessage } from "../sessions/router.ts";
+import { logger } from "../logger.ts";
 import { touchIdleTimer, checkOverflow } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
@@ -74,7 +75,11 @@ export async function handleText(ctx: Context): Promise<void> {
   // Fire typing indicator immediately — user sees feedback before routeMessage DB query
   ctx.replyWithChatAction("typing", forumTopicId ? { message_thread_id: forumTopicId } : undefined).catch(() => {});
 
+  const t0 = Date.now();
+  logger.debug({ phase: "text-handler", step: "typing-sent", chatId, msgId: ctx.message?.message_id, t: t0 }, "perf");
+
   const route = await routeMessage(chatId, isForumMessage ? forumTopicId : undefined);
+  logger.debug({ phase: "text-handler", step: "route-done", chatId, mode: route.mode, elapsedMs: Date.now() - t0 }, "perf");
 
   appendLog(route.sessionId, chatId, "route", `mode=${route.mode}, session=#${route.sessionId}`);
 
@@ -98,6 +103,7 @@ export async function handleText(ctx: Context): Promise<void> {
     appendLog(route.sessionId, chatId, "route", `cli session #${route.sessionId}`);
 
     // Save message to short-term memory
+    const t1 = Date.now();
     await addMessage({
       sessionId: route.sessionId,
       projectPath: route.projectPath,
@@ -113,7 +119,10 @@ export async function handleText(ctx: Context): Promise<void> {
     const fromUser = ctx.from?.username ?? ctx.from?.first_name ?? "user";
     const messageId = String(ctx.message?.message_id ?? "");
 
+    logger.debug({ phase: "text-handler", step: "addmsg-done", chatId, sessionId: route.sessionId, elapsedMs: Date.now() - t1 }, "perf");
+
     // ClaudeAdapter: insert into message_queue — channel.ts handles delivery
+    const t2 = Date.now();
     await sql`
       INSERT INTO message_queue (session_id, chat_id, from_user, content, message_id)
       VALUES (
@@ -124,6 +133,7 @@ export async function handleText(ctx: Context): Promise<void> {
         ${messageId}
       )
     `;
+    logger.debug({ phase: "text-handler", step: "queue-inserted", chatId, sessionId: route.sessionId, msgId: messageId, elapsedMs: Date.now() - t2, totalMs: Date.now() - t0 }, "perf");
     appendLog(route.sessionId, chatId, "queue", "message queued for CLI");
 
     touchIdleTimer(route.sessionId, chatId, route.projectPath);

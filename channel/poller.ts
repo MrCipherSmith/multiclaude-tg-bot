@@ -79,7 +79,9 @@ export class MessageQueuePoller {
         `;
 
         for (const row of rows) {
-          channelLogger.info({ msgId: row.id, sessionId: sid, preview: row.content.slice(0, 50) }, "message dequeued");
+          const tDequeue = Date.now();
+          const queueAge = tDequeue - new Date(row.created_at).getTime();
+          channelLogger.info({ phase: "poller", step: "dequeued", msgId: row.id, sessionId: sid, chatId: row.chat_id, queueAgeMs: queueAge, t: tDequeue }, "perf");
 
           const hint = this.skillEvaluator?.buildHint(row.content) ?? "";
           const enrichedContent = hint ? `${hint}${row.content}` : row.content;
@@ -99,7 +101,7 @@ export class MessageQueuePoller {
               },
             },
           });
-          channelLogger.info({ user: row.from_user, preview: row.content.slice(0, 50) }, "message delivered to Claude");
+          channelLogger.info({ phase: "poller", step: "notification-sent", msgId: row.id, chatId: row.chat_id, elapsedMs: Date.now() - tDequeue, totalFromQueueMs: Date.now() - new Date(row.created_at).getTime() }, "perf");
           this.touchIdleTimer();
 
           // Status + typing + monitor fire concurrently after notification (non-blocking)

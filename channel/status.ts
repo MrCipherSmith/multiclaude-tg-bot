@@ -200,9 +200,11 @@ export class StatusManager {
     }
 
     try {
+      const t0 = Date.now();
       const initialText = formatStatusText(`${prefix}${stage}`, "0s", "");
       const extra: Record<string, unknown> = { parse_mode: "HTML", ...(forum?.extra ?? {}) };
       const result = await sendTelegramMessage(token, effectiveChatId, initialText, extra);
+      const tgRtt = Date.now() - t0;
       if (!result.ok) {
         channelLogger.warn({ error: result.errorBody }, "sendStatusMessage failed");
         return `Telegram API error`;
@@ -221,7 +223,7 @@ export class StatusManager {
       state.dbHeartbeatTimer = setInterval(() => this.heartbeatStatusMessage(key), 30_000);
       this.activeStatus.set(key, state);
       this.persistStatusMessage(key, state).catch(() => {});
-      channelLogger.info({ chatId: effectiveChatId, messageId: state.messageId }, "status message created");
+      channelLogger.info({ phase: "status", step: "created", chatId: effectiveChatId, messageId: state.messageId, tgRttMs: tgRtt }, "perf");
       return null;
     } catch (e) {
       channelLogger.error({ err: e }, "sendStatusMessage exception");
@@ -281,7 +283,13 @@ export class StatusManager {
     this.disarmResponseGuard(chatId); // reply received — cancel fallback
     const key = this.stateKey(chatId);
     const state = this.activeStatus.get(key);
-    if (!state) return;
+    const tDelete = Date.now();
+    if (!state) {
+      channelLogger.debug({ phase: "status", step: "delete-no-state", chatId }, "perf");
+      return;
+    }
+    const statusLifeMs = tDelete - state.startedAt;
+    channelLogger.info({ phase: "status", step: "deleting", chatId, statusLifeMs, messageId: state.messageId }, "perf");
     if (state.timer) clearInterval(state.timer);
     if (state.dbHeartbeatTimer) clearInterval(state.dbHeartbeatTimer);
     this.activeStatus.delete(key);
