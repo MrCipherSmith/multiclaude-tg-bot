@@ -158,7 +158,7 @@ export class PermissionHandler {
       `;
     }
 
-    await this.pollForResponse(request_id, chatId, token, previewMsgId, sendResult.messageId, desc);
+    await this.pollForResponse(request_id, chatId, token, previewMsgId, sendResult.messageId, desc, 600_000, forumExtra);
   }
 
   private parseInput(params: any): Record<string, any> {
@@ -244,10 +244,14 @@ export class PermissionHandler {
     previewMsgId: number | null,
     telegramMsgId: number | null,
     desc: string,
-    timeoutMs = 120_000,
+    timeoutMs = 600_000,
+    forumExtra: Record<string, unknown> = {},
   ): Promise<void> {
     const startTime = Date.now();
     let resolved = false;
+    let lastReminderAt = startTime;
+    let reminderMsgId: number | null = null;
+    const REMINDER_INTERVAL_MS = 60_000;
 
     while (Date.now() - startTime < timeoutMs) {
       const rows = await this.ctx.sql`
@@ -261,16 +265,18 @@ export class PermissionHandler {
         });
         channelLogger.info({ requestId: request_id, behavior }, "permission resolved via telegram");
         if (previewMsgId) deleteTelegramMessage(token, chatId, previewMsgId);
+        if (reminderMsgId) deleteTelegramMessage(token, chatId, reminderMsgId);
         await this.status.updateStatus(chatId, "Processing...");
         this.loadAutoApproveRules().catch(() => {});
         resolved = true;
         break;
       }
 
-      const exists = await this.ctx.sql`SELECT 1 FROM permission_requests WHERE id = ${request_id}`;
+      const exists = await this.ctx.sql`SELECT 1 FROM permission_requests WHERE id = ${request_id} AND archived_at IS NULL`;
       if (exists.length === 0) {
         channelLogger.info({ requestId: request_id }, "permission resolved externally");
         if (previewMsgId) deleteTelegramMessage(token, chatId, previewMsgId);
+        if (reminderMsgId) deleteTelegramMessage(token, chatId, reminderMsgId);
         if (telegramMsgId) {
           await editTelegramMessage(token, chatId, telegramMsgId, `⚡ Resolved in terminal\n\n${desc}`);
         }
@@ -279,8 +285,21 @@ export class PermissionHandler {
         break;
       }
 
+      // Send reminder every 60s
+      if (Date.now() - lastReminderAt >= REMINDER_INTERVAL_MS) {
+        const elapsedSec = Math.round((Date.now() - startTime) / 1000);
+        const remainingSec = Math.round((timeoutMs - (Date.now() - startTime)) / 1000);
+        const reminderText = `🔔 Pending permission (${elapsedSec}s elapsed, ${remainingSec}s left):\n<code>${escapeHtml(desc.slice(0, 200))}</code>`;
+        if (reminderMsgId) deleteTelegramMessage(token, chatId, reminderMsgId);
+        const result = await sendTelegramMessage(token, chatId, reminderText, { parse_mode: "HTML", ...forumExtra });
+        if (result.ok && result.messageId) reminderMsgId = result.messageId;
+        lastReminderAt = Date.now();
+      }
+
       await new Promise((r) => setTimeout(r, 500));
     }
+
+    if (reminderMsgId) deleteTelegramMessage(token, chatId, reminderMsgId);
 
     if (!resolved) {
       channelLogger.warn({ requestId: request_id }, "permission timeout, denying");
@@ -295,6 +314,6 @@ export class PermissionHandler {
       }
     }
 
-    await this.ctx.sql`DELETE FROM permission_requests WHERE id = ${request_id}`;
+    await this.ctx.sql`UPDATE permission_requests SET archived_at = NOW() WHERE id = ${request_id}`;
   }
 }

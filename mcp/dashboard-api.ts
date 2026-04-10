@@ -671,8 +671,20 @@ async function handleGetPermissions(res: ServerResponse, sessionId: number): Pro
   const rows = await sql`
     SELECT id, tool_name, description, status, created_at
     FROM permission_requests
-    WHERE session_id = ${sessionId} AND status = 'pending'
+    WHERE session_id = ${sessionId} AND status = 'pending' AND archived_at IS NULL
     ORDER BY created_at ASC
+  `;
+  sendJson(res, rows);
+}
+
+async function handleGetPendingPermissions(res: ServerResponse): Promise<void> {
+  const rows = await sql`
+    SELECT pr.id, pr.tool_name, pr.description, pr.status, pr.created_at,
+           pr.session_id, s.name AS session_name, s.project_path
+    FROM permission_requests pr
+    LEFT JOIN sessions s ON s.id = pr.session_id
+    WHERE pr.status = 'pending'
+    ORDER BY pr.created_at ASC
   `;
   sendJson(res, rows);
 }
@@ -1075,6 +1087,10 @@ export async function handleDashboardRequest(
     // Permissions API
     if (pathname === "/api/permissions/stats" && method === "GET") {
       await handlePermissionStats(res, url);
+      return true;
+    }
+    if (pathname === "/api/permissions/pending" && method === "GET") {
+      await handleGetPendingPermissions(res);
       return true;
     }
     const permMatch = pathname.match(/^\/api\/permissions\/(\d+)$/);
