@@ -1,5 +1,5 @@
 # Helyx
-![Helyx Banner](https://github.com/MrCipherSmith/helyx/assets/banner.png)
+![Helyx Banner](https://github.com/MrCipherSmith/helyx/blob/main/assets/banner.jpg)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build](https://github.com/MrCipherSmith/helyx/actions/workflows/build.yml/badge.svg)](https://github.com/MrCipherSmith/helyx/actions)
