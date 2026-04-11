@@ -7,7 +7,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { markdownToTelegramHtml } from "../bot/format.ts";
 import type { StatusManager } from "./status.ts";
-import { sendTelegramMessage, setTelegramReaction, editTelegramMessage } from "./telegram.ts";
+import { sendTelegramMessage, setTelegramReaction, editTelegramMessage, sendTelegramPoll, deleteTelegramMessage } from "./telegram.ts";
 import { maybeAttachVoiceRaw } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
 
@@ -161,6 +161,31 @@ export function registerTools(
           required: ["chat_id", "message_id", "text"],
         },
       },
+      {
+        name: "send_poll",
+        description: "Send a questionnaire to the user as Telegram polls. Use this when you need clarification with multiple-choice answers. The user answers each poll and clicks Submit — their answers are automatically sent back to you.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            chat_id: { type: "string", description: "Telegram chat ID" },
+            title: { type: "string", description: "Brief description of what the questions are for (shown before polls)" },
+            questions: {
+              type: "array",
+              description: "List of questions with options (2–10 options each, max 300 chars per question, max 100 chars per option)",
+              items: {
+                type: "object",
+                properties: {
+                  question: { type: "string" },
+                  options: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 10 },
+                },
+                required: ["question", "options"],
+              },
+              minItems: 1,
+            },
+          },
+          required: ["chat_id", "questions"],
+        },
+      },
     ],
   }));
 
@@ -305,6 +330,89 @@ export function registerTools(
           return text(`Telegram API error: ${htmlResult.errorBody}`);
         }
         return text(`Message ${args!.message_id} updated`);
+      }
+
+      case "send_poll": {
+        const token = ctx.token();
+        if (!token) return text("TELEGRAM_BOT_TOKEN not set");
+        if (!sessionId) return text("No active session");
+
+        const chatId = String(args!.chat_id);
+        const title = args!.title ? String(args!.title) : null;
+        const questions = args!.questions as Array<{ question: string; options: string[] }>;
+
+        if (!questions?.length) return text("No questions provided");
+
+        // Bug 7: Dedup — return existing pending session if Claude retries within 5 minutes
+        const existing = await ctx.sql`
+          SELECT id FROM poll_sessions
+          WHERE session_id = ${sessionId} AND chat_id = ${chatId}
+            AND status = 'pending' AND created_at > NOW() - INTERVAL '5 minutes'
+          LIMIT 1
+        `;
+        if (existing.length) return text(`Poll session already active (id=${existing[0].id}). Waiting for user answers.`);
+
+        // Forum mode: resolve thread ID so polls land in the project topic
+        const forumChatId = ctx.forumChatId?.();
+        let forumTopicId: number | null = null;
+        if (forumChatId && chatId === forumChatId) {
+          const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
+          forumTopicId = rows[0]?.forum_topic_id ?? null;
+        }
+        const threadExtra = forumTopicId ? { message_thread_id: forumTopicId } : {};
+
+        // Bug 8: Send intro message and store its ID so we can delete it on failure
+        let introMessageId: number | null = null;
+        if (title) {
+          const introRes = await sendTelegramMessage(token, chatId, `📋 <b>${title}</b>`, { parse_mode: "HTML", ...threadExtra });
+          introMessageId = introRes.messageId;
+        }
+
+        // Send each question as a poll
+        const telegramPollIds: string[] = [];
+        for (const q of questions) {
+          if (!q.options || q.options.length < 2) {
+            if (introMessageId) deleteTelegramMessage(token, chatId, introMessageId);
+            return text(`Question "${q.question}" must have at least 2 options`);
+          }
+          const pollRes = await sendTelegramPoll(token, chatId, q.question, q.options, threadExtra);
+          if (!pollRes.ok) {
+            channelLogger.warn({ error: pollRes.errorBody }, "send_poll: failed to send poll");
+            if (introMessageId) deleteTelegramMessage(token, chatId, introMessageId);
+            return text(`Failed to send poll: ${pollRes.errorBody}`);
+          }
+          if (pollRes.pollId) telegramPollIds.push(pollRes.pollId);
+        }
+
+        // Bug 1: Validate all polls were created successfully (no null pollIds)
+        if (telegramPollIds.length !== questions.length) {
+          if (introMessageId) deleteTelegramMessage(token, chatId, introMessageId);
+          return text(`Failed to send polls: ${questions.length - telegramPollIds.length} poll(s) returned no ID`);
+        }
+
+        // Store poll session in DB
+        const [pollSession] = await ctx.sql`
+          INSERT INTO poll_sessions (session_id, chat_id, title, questions, telegram_poll_ids)
+          VALUES (${sessionId}, ${chatId}, ${title}, ${ctx.sql.json(questions)}, ${ctx.sql.json(telegramPollIds)})
+          RETURNING id
+        `;
+
+        // Send Submit button (also in the correct thread)
+        const submitRes = await sendTelegramMessage(token, chatId, "Ответьте на вопросы выше и нажмите <b>Готово</b>", {
+          parse_mode: "HTML",
+          reply_markup: JSON.stringify({
+            inline_keyboard: [[{ text: "Готово ✅", callback_data: `poll_submit:${pollSession.id}` }]],
+          }),
+          ...threadExtra,
+        });
+
+        // Store submit message ID for later removal
+        if (submitRes.messageId) {
+          await ctx.sql`UPDATE poll_sessions SET submit_message_id = ${submitRes.messageId} WHERE id = ${pollSession.id}`;
+        }
+
+        channelLogger.info({ pollSessionId: pollSession.id, chatId, questionCount: questions.length, forumTopicId }, "poll session created");
+        return text(`Poll session created (id=${pollSession.id}). Waiting for user answers.`);
       }
 
       case "remember": {
