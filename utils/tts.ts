@@ -9,6 +9,52 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const YANDEX_API_KEY = CONFIG.YANDEX_API_KEY;
 const YANDEX_FOLDER_ID = CONFIG.YANDEX_FOLDER_ID;
 
+// Lazily loaded Kokoro model instance
+let _kokoroTTS: any | null = null;
+async function getKokoro(): Promise<any> {
+  if (_kokoroTTS) return _kokoroTTS;
+  const { KokoroTTS } = await import("kokoro-js");
+  channelLogger.info({ dtype: CONFIG.KOKORO_DTYPE }, "tts: loading Kokoro model...");
+  const t0 = Date.now();
+  _kokoroTTS = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0", {
+    dtype: CONFIG.KOKORO_DTYPE,
+    device: "cpu",
+  });
+  channelLogger.info({ elapsedMs: Date.now() - t0 }, "tts: Kokoro model loaded");
+  return _kokoroTTS;
+}
+
+/** Encode Float32Array PCM (24kHz mono) to WAV buffer */
+function pcmToWav(pcm: Float32Array, sampleRate = 24000): Buffer {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const dataSize = pcm.length * bytesPerSample;
+  const buf = Buffer.alloc(44 + dataSize);
+
+  // RIFF header
+  buf.write("RIFF", 0);
+  buf.writeUInt32LE(36 + dataSize, 4);
+  buf.write("WAVE", 8);
+  buf.write("fmt ", 12);
+  buf.writeUInt32LE(16, 16);           // PCM chunk size
+  buf.writeUInt16LE(1, 20);            // PCM format
+  buf.writeUInt16LE(numChannels, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * numChannels * bytesPerSample, 28); // byte rate
+  buf.writeUInt16LE(numChannels * bytesPerSample, 32);              // block align
+  buf.writeUInt16LE(bitsPerSample, 34);
+  buf.write("data", 36);
+  buf.writeUInt32LE(dataSize, 40);
+
+  // Convert Float32 → Int16
+  for (let i = 0; i < pcm.length; i++) {
+    const s = Math.max(-1, Math.min(1, pcm[i]!));
+    buf.writeInt16LE(s < 0 ? s * 0x8000 : s * 0x7fff, 44 + i * 2);
+  }
+  return buf;
+}
+
 const VOICE_MIN_CHARS = 300;
 
 /**
@@ -148,8 +194,8 @@ async function synthesizeYandex(text: string): Promise<Buffer | null> {
 
   const body = new URLSearchParams({
     text: text.slice(0, 5000),
-    lang: "ru-RU",
-    voice: "alena",
+    lang: CONFIG.YANDEX_LANG,
+    voice: CONFIG.YANDEX_VOICE,
     format: "mp3",
     folderId: YANDEX_FOLDER_ID,
   });
@@ -226,9 +272,25 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/** Synthesize via Kokoro local TTS (English only). Returns WAV buffer. */
+async function synthesizeKokoro(text: string): Promise<Buffer | null> {
+  try {
+    const tts = await getKokoro();
+    const audio = await tts.generate(text.slice(0, 2000), { voice: CONFIG.KOKORO_VOICE });
+    // audio.audio is a Float32Array of PCM samples at 24kHz
+    return pcmToWav(audio.audio as Float32Array, 24000);
+  } catch (err) {
+    channelLogger.error({ err }, "tts: Kokoro error");
+    return null;
+  }
+}
+
 /**
  * Convert text to speech.
- * Priority: Yandex SpeechKit (Russian, if keys set) → Groq (fallback).
+ * Provider selection via TTS_PROVIDER env var:
+ *   "yandex" — Yandex SpeechKit only (Russian, best quality)
+ *   "kokoro"  — Kokoro local TTS only (English, offline)
+ *   "auto"    — Yandex if keys set, else Kokoro, else Groq
  * Returns audio buffer or null on failure/disabled.
  */
 export async function synthesize(text: string): Promise<Buffer | null> {
@@ -238,17 +300,40 @@ export async function synthesize(text: string): Promise<Buffer | null> {
   // LLM-normalize before TTS: convert paths, symbols, code to natural speech
   const clean = await normalizeForSpeech(stripped);
 
-  // Yandex first — best Russian support
+  const provider = CONFIG.TTS_PROVIDER;
+
+  if (provider === "yandex") {
+    if (!YANDEX_API_KEY || !YANDEX_FOLDER_ID) {
+      channelLogger.warn({}, "tts: TTS_PROVIDER=yandex but YANDEX_API_KEY/YANDEX_FOLDER_ID not set");
+      return null;
+    }
+    return synthesizeYandex(clean).catch((err) => {
+      channelLogger.error({ err }, "tts: Yandex failed");
+      return null;
+    });
+  }
+
+  if (provider === "kokoro") {
+    return synthesizeKokoro(clean);
+  }
+
+  // auto: Yandex → Kokoro → Groq
   if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
     try {
       const buf = await synthesizeYandex(clean);
       if (buf) return buf;
     } catch (err) {
-      channelLogger.warn({ err }, "tts: Yandex failed, trying Groq");
+      channelLogger.warn({ err }, "tts: Yandex failed, trying next provider");
     }
   }
 
-  // Groq fallback
+  try {
+    const buf = await synthesizeKokoro(clean);
+    if (buf) return buf;
+  } catch {
+    // fall through to Groq
+  }
+
   try {
     return await synthesizeGroq(clean);
   } catch (err) {

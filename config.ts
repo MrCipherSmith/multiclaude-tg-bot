@@ -60,9 +60,19 @@ const EnvSchema = z.object({
   GROQ_API_KEY: z.string().default(""),
   WHISPER_URL: z.string().default("http://localhost:9000"),
 
+  // TTS provider selection
+  // "yandex" | "kokoro" | "auto" (auto = yandex if keys set, else kokoro)
+  TTS_PROVIDER: z.enum(["yandex", "kokoro", "auto"]).default("auto"),
+
   // Yandex SpeechKit TTS
   YANDEX_API_KEY: z.string().default(""),
   YANDEX_FOLDER_ID: z.string().default(""),
+  YANDEX_VOICE: z.string().default("alena"),
+  YANDEX_LANG: z.string().default("ru-RU"),
+
+  // Kokoro local TTS
+  KOKORO_DTYPE: z.enum(["q4", "q8", "fp16", "fp32"]).default("q8"),
+  KOKORO_VOICE: z.string().default("af_bella"),
 
   // GitHub
   GITHUB_TOKEN: z.string().default(""),
@@ -159,8 +169,15 @@ export const CONFIG = {
   // Voice transcription
   GROQ_API_KEY: env.GROQ_API_KEY,
   WHISPER_URL: env.WHISPER_URL,
+
+  // TTS
+  TTS_PROVIDER: env.TTS_PROVIDER,
   YANDEX_API_KEY: env.YANDEX_API_KEY,
   YANDEX_FOLDER_ID: env.YANDEX_FOLDER_ID,
+  YANDEX_VOICE: env.YANDEX_VOICE,
+  YANDEX_LANG: env.YANDEX_LANG,
+  KOKORO_DTYPE: env.KOKORO_DTYPE,
+  KOKORO_VOICE: env.KOKORO_VOICE,
 
   // Security / paths
   JWT_SECRET: env.JWT_SECRET,
