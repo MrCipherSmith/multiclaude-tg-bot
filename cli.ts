@@ -332,6 +332,22 @@ Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashbo
   await setupStopHook();
   done();
 
+  // Install systemd service (helyx@USER) for auto-start on boot
+  step("Installing systemd service");
+  const svcUser = process.env.USER ?? basename(homedir());
+  const svcSrc = resolve(BOT_DIR, "scripts/helyx.service");
+  const svcDst = `/etc/systemd/system/helyx@${svcUser}.service`;
+  const svcCopy = await run(["sudo", "cp", svcSrc, svcDst]);
+  if (svcCopy.ok) {
+    await run(["sudo", "systemctl", "daemon-reload"], { silent: true });
+    await run(["sudo", "systemctl", "enable", `helyx@${svcUser}`], { silent: true });
+    done();
+  } else {
+    console.log(` ${c.yellow("skipped")} (no sudo — run manually):`);
+    console.log(`    sudo cp scripts/helyx.service ${svcDst}`);
+    console.log(`    sudo systemctl enable --now helyx@${svcUser}`);
+  }
+
   // Register projects
   console.log(`  ${c.bold("Add projects (optional)")}`);
   console.log(`  You can register project directories now, or later with ${c.cyan("helyx add .")}\n`);
@@ -724,6 +740,22 @@ async function startWindow(p: Project, first: boolean, usePanes: boolean, paneCo
   }
 }
 
+async function ensureAdminDaemon(): Promise<void> {
+  const running = await run(["pgrep", "-f", "admin-daemon.ts"], { silent: true });
+  if (running.ok) {
+    console.log(`  ${c.dim("·")} admin-daemon — already running`);
+    return;
+  }
+  const logFile = "/tmp/admin-daemon.log";
+  Bun.spawn(["bun", resolve(BOT_DIR, "scripts/admin-daemon.ts")], {
+    stdout: Bun.file(logFile),
+    stderr: Bun.file(logFile),
+    stdin: "ignore",
+    cwd: BOT_DIR,
+  });
+  console.log(`  ${c.green("✓")} admin-daemon — started (log: ${logFile})`);
+}
+
 async function tmuxStart() {
   const exists = await run(["tmux", "has-session", "-t", TMUX_SESSION], { silent: true });
 
@@ -761,6 +793,7 @@ async function tmuxStart() {
       console.log(`\n  ${c.dim("All windows already running.")}`);
     }
     console.log(`\n  Attach: ${c.cyan(`tmux attach -t ${TMUX_SESSION}`)}`);
+    await ensureAdminDaemon();
     return;
   }
 
@@ -787,6 +820,8 @@ async function tmuxStart() {
   } else {
     console.log(`  Navigate: ${c.dim("Ctrl+B,N (next) / Ctrl+B,P (prev) / Ctrl+B,W (list)")}`);
   }
+
+  await ensureAdminDaemon();
 
   if (process.argv.includes("--attach") || process.argv.includes("-a")) {
     const proc = Bun.spawn(["tmux", "attach", "-t", TMUX_SESSION], {
