@@ -51,6 +51,97 @@ function stripMarkdown(text: string): string {
     .trim();
 }
 
+const TTS_NORMALIZE_PROMPT = `Rewrite the text for text-to-speech so it sounds natural when spoken aloud.
+
+Rules:
+- File paths → only the filename (channel/session.ts → session.ts, /home/user/bot/file.ts → file.ts)
+- snake_case identifiers → replace underscores with spaces (lease_expires_at → lease expires at)
+- camelCase identifiers → split into words (forceVoice → force voice, shouldSendVoice → should send voice)
+- Function call parentheses → remove (acquireLease() → acquire lease)
+- Short git hashes (7 hex chars like a1b2c3d) → omit or say "the commit"
+- Branch names with slashes → replace slash with space (fix/session-lease → fix session lease)
+- Comparison operators: < → less than, > → greater than, = → equals (or Russian equivalent)
+- key=value pairs → "key equals value" or just the key
+- Pipe | and backslash → remove
+- URLs → omit or say "по ссылке"
+- Keep the same language as the input (Russian stays Russian)
+- Output ONLY the rewritten text, nothing else`;
+
+/**
+ * Normalize text for TTS via Groq llama-3.1-8b-instant (~250ms).
+ * Falls back to OpenRouter if Groq unavailable.
+ * Returns the original text on error/timeout — TTS is never blocked.
+ */
+async function normalizeForSpeech(text: string): Promise<string> {
+  if (!GROQ_API_KEY && !CONFIG.OPENROUTER_API_KEY) return text;
+
+  const t0 = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  const messages = [
+    { role: "system", content: TTS_NORMALIZE_PROMPT },
+    { role: "user", content: text.slice(0, 2000) },
+  ];
+
+  try {
+    // Groq llama-3.1-8b-instant — ~250ms, separate rate limits from TTS model
+    if (GROQ_API_KEY) {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${GROQ_API_KEY}` },
+        signal: controller.signal,
+        body: JSON.stringify({ model: "llama-3.1-8b-instant", messages, temperature: 0.1, max_tokens: 500 }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+        const normalized = data.choices?.[0]?.message?.content?.trim();
+        if (normalized && normalized.length > 5) {
+          channelLogger.info({ elapsedMs: Date.now() - t0 }, "tts: normalize ok (groq)");
+          return normalized;
+        }
+      } else {
+        channelLogger.warn({ status: res.status }, "tts: groq normalize failed, trying openrouter");
+      }
+    }
+  } catch (err: any) {
+    if (err?.name !== "AbortError") {
+      channelLogger.warn({ err: err?.message }, "tts: normalize request error, trying openrouter");
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  // OpenRouter fallback (Gemma 31B — slower ~7-12s but higher quality)
+  if (CONFIG.OPENROUTER_API_KEY) {
+    const controller2 = new AbortController();
+    const timeout2 = setTimeout(() => controller2.abort(), 15000);
+    try {
+      const res = await fetch(`${CONFIG.OPENROUTER_BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${CONFIG.OPENROUTER_API_KEY}` },
+        signal: controller2.signal,
+        body: JSON.stringify({ model: CONFIG.OPENROUTER_MODEL, messages, temperature: 0.1, max_tokens: 500 }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { choices?: { message?: { content?: string } }[] };
+        const normalized = data.choices?.[0]?.message?.content?.trim();
+        if (normalized && normalized.length > 5) {
+          channelLogger.info({ elapsedMs: Date.now() - t0, model: CONFIG.OPENROUTER_MODEL }, "tts: normalize ok (openrouter)");
+          return normalized;
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      clearTimeout(timeout2);
+    }
+  }
+
+  channelLogger.info({ elapsedMs: Date.now() - t0 }, "tts: normalize skipped, using stripped text");
+  return text;
+}
+
 /** Synthesize via Yandex SpeechKit (Russian, multilingual). Returns MP3 buffer. */
 async function synthesizeYandex(text: string): Promise<Buffer | null> {
   if (!YANDEX_API_KEY || !YANDEX_FOLDER_ID) return null;
@@ -141,8 +232,11 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
  * Returns audio buffer or null on failure/disabled.
  */
 export async function synthesize(text: string): Promise<Buffer | null> {
-  const clean = stripMarkdown(text);
-  if (clean.length < 10) return null;
+  const stripped = stripMarkdown(text);
+  if (stripped.length < 10) return null;
+
+  // LLM-normalize before TTS: convert paths, symbols, code to natural speech
+  const clean = await normalizeForSpeech(stripped);
 
   // Yandex first — best Russian support
   if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
