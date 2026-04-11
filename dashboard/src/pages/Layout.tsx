@@ -68,7 +68,7 @@ export function Layout() {
                 <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
                   <Bot className="w-4 h-4 text-white" />
                 </div>
-                <span className="text-base font-semibold text-white tracking-tight">Claude Bot</span>
+                <span className="text-base font-semibold text-white tracking-tight">Helyx</span>
               </div>
             )}
             <button
@@ -188,7 +188,7 @@ export function Layout() {
             </button>
             <div className="flex items-center gap-2 ml-3">
               <Bot className="w-5 h-5 text-indigo-400" />
-              <span className="text-sm font-semibold text-white">Claude Bot</span>
+              <span className="text-sm font-semibold text-white">Helyx</span>
             </div>
           </header>
 

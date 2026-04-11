@@ -1,8 +1,8 @@
-# Claude Bot — Telegram WebApp Specification
+# Helyx — Telegram WebApp Specification
 
 ## Overview
 
-A Telegram Mini App embedded in the Claude Bot, providing a mobile-optimized interface for managing Claude Code sessions. The webapp is served at `/webapp/` and opens via the bot's menu button.
+A Telegram Mini App embedded in Helyx, providing a mobile-optimized interface for managing Claude Code sessions. The webapp is served at `/webapp/` and opens via the bot's menu button.
 
 ## Architecture
 

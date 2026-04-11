@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in contributing to Claude Bot! This guide will help you get started.
+Thanks for your interest in contributing to Helyx! This guide will help you get started.
 
 ## Getting Started
 

@@ -13,7 +13,7 @@ const translations = {
     'layout.logout': 'Logout',
 
     // Login
-    'login.title': 'Claude Bot Dashboard',
+    'login.title': 'Helyx Dashboard',
     'login.subtitle': 'Login with your Telegram account',
     'login.error': 'Authorization failed',
     'login.notice': 'Only authorized users can access this dashboard',
@@ -169,7 +169,7 @@ const translations = {
     'layout.logout': 'Выйти',
 
     // Login
-    'login.title': 'Claude Bot Dashboard',
+    'login.title': 'Helyx Dashboard',
     'login.subtitle': 'Войдите через Telegram',
     'login.error': 'Ошибка авторизации',
     'login.notice': 'Доступ только для авторизованных пользователей',
