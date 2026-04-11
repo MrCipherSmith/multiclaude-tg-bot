@@ -4,7 +4,7 @@
  */
 import { test, expect } from "../fixtures";
 
-const BASE = process.env.TEST_BASE_URL ?? "https://claude-bot.mrciphersmith.com";
+const BASE = process.env.TEST_BASE_URL ?? "https://helyx.mrciphersmith.com";
 
 test.describe("GET /api/sessions", () => {
   test("returns array of sessions", async ({ request, authHeaders }) => {

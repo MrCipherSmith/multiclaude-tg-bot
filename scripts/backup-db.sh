@@ -1,16 +1,16 @@
 #!/bin/bash
-# Daily PostgreSQL backup for claude-bot.
+# Daily PostgreSQL backup for Helyx.
 # Usage: scripts/backup-db.sh
-# Cron:  0 3 * * * /home/altsay/bots/claude-bot/scripts/backup-db.sh
+# Cron:  0 3 * * * /home/altsay/bots/helyx/scripts/backup-db.sh
 #
 # Keeps last 7 backups, gzipped.
 
-BACKUP_DIR="${BACKUP_DIR:-/home/altsay/backups/claude-bot}"
+BACKUP_DIR="${BACKUP_DIR:-/home/altsay/backups/helyx}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-5433}"
-DB_USER="${DB_USER:-claude_bot}"
-DB_NAME="${DB_NAME:-claude_bot}"
-DB_PASSWORD="${DB_PASSWORD:-claude_bot_secret}"
+DB_USER="${DB_USER:-helyx}"
+DB_NAME="${DB_NAME:-helyx}"
+DB_PASSWORD="${DB_PASSWORD:-helyx_secret}"
 KEEP_DAYS=7
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

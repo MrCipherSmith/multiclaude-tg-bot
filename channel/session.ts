@@ -125,9 +125,23 @@ export class SessionManager {
         }
       }
       // Lease held by another process (e.g. stale subprocess from previous bounce).
-      // Fall through to create a new session instead of exiting — the old one will
-      // expire naturally when its lease TTL runs out.
-      channelLogger.warn({ existingId: existing[0].id }, "remote session lease held after max attempts — creating new session");
+      // Force-steal the lease on the existing session — creating a new row would
+      // violate the idx_sessions_project_remote unique constraint anyway.
+      channelLogger.warn({ existingId: existing[0].id }, "remote session lease held after max attempts — force-stealing lease");
+      await sql`
+        UPDATE sessions
+        SET lease_owner = ${this.leaseOwner},
+            lease_expires_at = now() + ${LEASE_TTL}::interval,
+            status = 'active',
+            last_active = now()
+        WHERE id = ${existing[0].id}
+      `;
+      this.sessionId = existing[0].id as number;
+      this.leaseAcquired = true;
+      const [proj2] = await sql`SELECT id FROM projects WHERE path = ${projectPath}`;
+      await sql`UPDATE sessions SET project_id = ${proj2?.id ?? null} WHERE id = ${this.sessionId!}`;
+      channelLogger.info({ sessionId: this.sessionId, name: this.sessionName }, "attached to remote session (force-stolen lease)");
+      return this.sessionId!;
     }
 
     const clientId = `channel-${projectName}-remote-${Date.now()}`;
@@ -138,9 +152,9 @@ export class SessionManager {
       VALUES (${this.sessionName}, ${projectName}, 'remote', ${projectPath}, ${projectId}, ${clientId}, 'active')
       RETURNING id
     `;
-    this.sessionId = row.id;
+    this.sessionId = row.id as number;
     this.leaseAcquired = true;
-    const acquired = await this.acquireLease(this.sessionId);
+    const acquired = await this.acquireLease(this.sessionId!);
     if (!acquired) {
       channelLogger.warn({ sessionId: this.sessionId }, "failed to acquire lease on newly created session (race?)");
     }

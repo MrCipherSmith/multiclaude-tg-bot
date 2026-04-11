@@ -1,6 +1,6 @@
 #!/bin/bash
 # Claude Code Stop hook — extract and save project facts after session ends.
-# Registered in ~/.claude/settings.json hooks.Stop by claude-bot setup wizard.
+# Registered in ~/.claude/settings.json hooks.Stop by helyx setup wizard.
 #
 # Receives JSON on stdin: { "session_id": "...", "transcript_path": "..." }
 # Calls bot API which reads transcript and extracts durable project facts.

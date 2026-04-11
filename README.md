@@ -1,7 +1,7 @@
-# Claude Bot
+# Helyx
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build](https://github.com/MrCipherSmith/multiclaude-tg-bot/actions/workflows/build.yml/badge.svg)](https://github.com/MrCipherSmith/multiclaude-tg-bot/actions)
+[![Build](https://github.com/MrCipherSmith/helyx/actions/workflows/build.yml/badge.svg)](https://github.com/MrCipherSmith/helyx/actions)
 [![Bun](https://img.shields.io/badge/runtime-Bun-f9f1e1)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/lang-TypeScript-3178c6)](https://www.typescriptlang.org)
 
@@ -14,21 +14,21 @@ Connect multiple Claude Code CLI instances to a single Telegram bot. Each projec
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/helyx/main/install.sh | bash
 ```
 
-The installer checks prerequisites, clones the repo, installs dependencies, sets up the `claude-bot` CLI, and launches the setup wizard.
+The installer checks prerequisites, clones the repo, installs dependencies, sets up the `helyx` CLI, and launches the setup wizard.
 
 Then connect any project:
 ```bash
-cd your-project && claude-bot connect . --tmux
+cd your-project && helyx connect . --tmux
 ```
 
 Done. Open Telegram, run `/forum_setup` in your group — your projects appear as topics.
 
 ## Forum Group Setup
 
-The recommended way to use Claude Bot is with a **Telegram Forum Supergroup** where each project gets its own topic.
+The recommended way to use Helyx is with a **Telegram Forum Supergroup** where each project gets its own topic.
 
 ### Step 1 — Create a Supergroup
 
@@ -39,7 +39,7 @@ The recommended way to use Claude Bot is with a **Telegram Forum Supergroup** wh
 ### Step 2 — Add the bot as admin
 
 1. Open group **⋮ → Manage Group → Administrators → Add Admin**
-2. Search your bot (e.g. `@GoodeaAIBot`)
+2. Search your bot (e.g. `@HelyxBot`)
 3. Enable **Manage Topics** permission
 4. Save
 
@@ -54,7 +54,7 @@ Open the **General** topic and send:
 The bot will:
 - Verify the group has Topics enabled
 - Save the group chat ID to `bot_config`
-- Create one topic per registered project (`keryx`, `claude-bot`, `vantage-frontend`, …)
+- Create one topic per registered project (`keryx`, `helyx`, `vantage-frontend`, …)
 - Pin a **Dev Hub** button in General topic (opens the Mini App WebApp)
 - Reply: `✅ Forum configured. N topics created.`
 
@@ -76,7 +76,7 @@ No `/switch` ever needed. The topic IS the project.
 | Action | How |
 |--------|-----|
 | Talk to keryx | Open **keryx** topic, type normally |
-| Talk to claude-bot | Open **claude-bot** topic, type normally |
+| Talk to helyx | Open **helyx** topic, type normally |
 | Check all projects | `/projects` in General topic |
 | Add new project | `/project_add /path/to/project` — topic auto-created |
 | Re-sync topics | `/forum_sync` in General topic |
@@ -124,7 +124,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / Google AI / OpenRouter / Ollama) with automatic retry on 429/5xx
-- **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback
+- **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback; voice replies via Yandex SpeechKit (primary) or Groq Orpheus (English fallback)
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
 - **File Forwarding** — photos, documents, and videos forwarded to Claude via MCP with base64 (≤5 MB images) or file path; if sent without caption, bot asks what to do before forwarding
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
@@ -242,6 +242,21 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
               inline btns  └──────────────────┘
 ```
 
+### Voice Replies (TTS)
+
+After every `reply` call, the bot automatically attaches a voice message if:
+
+1. The user sent a voice message (always — regardless of reply length)
+2. The reply text is ≥300 characters and not mostly code or diffs
+
+**Provider priority:** Yandex SpeechKit → Groq Orpheus (fallback)
+
+| Provider | Set in `.env` | Notes |
+|---|---|---|
+| **Yandex SpeechKit** | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Best Russian quality; service account needs `ai.speechkit.tts` IAM role |
+| **Groq Orpheus** | `GROQ_API_KEY` | English-only; free tier: 3600 tokens/day |
+| **OpenAI TTS** | `OPENAI_API_KEY` | Good multilingual including Russian; not wired by default |
+
 ### Message Flows
 
 **CLI mode:**
@@ -265,24 +280,24 @@ Background sessions prefix messages with `[session-name]` so you can distinguish
 ### One-Line Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/helyx/main/install.sh | bash
 ```
 
-This will check prerequisites, clone the repo to `~/bots/claude-bot`, install dependencies, set up the `claude-bot` CLI globally, and launch the setup wizard.
+This will check prerequisites, clone the repo to `~/bots/helyx`, install dependencies, set up the `helyx` CLI globally, and launch the setup wizard.
 
 Custom install directory:
 ```bash
-CLAUDE_BOT_DIR=~/my-bot curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
+CLAUDE_BOT_DIR=~/my-bot curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/helyx/main/install.sh | bash
 ```
 
 ### Manual Install
 
 ```bash
-git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git ~/bots/claude-bot
-cd ~/bots/claude-bot
+git clone https://github.com/MrCipherSmith/helyx.git ~/bots/helyx
+cd ~/bots/helyx
 bun install
-ln -sf ~/bots/claude-bot/cli.ts ~/.local/bin/claude-bot
-claude-bot setup
+ln -sf ~/bots/helyx/cli.ts ~/.local/bin/helyx
+helyx setup
 ```
 
 ### Prerequisites
@@ -353,7 +368,7 @@ ollama pull nomic-embed-text
 
 ### Setup Wizard
 
-Run `claude-bot setup` (or the installer runs it automatically). The wizard asks:
+Run `helyx setup` (or the installer runs it automatically). The wizard asks:
 
 ```
 Deployment type:
@@ -392,7 +407,7 @@ Groq API Key for voice (Enter to skip, free at console.groq.com):
 Optional. Enables fast voice transcription (~200ms). Get a free key at [console.groq.com](https://console.groq.com). Skip if you don't need voice messages.
 
 ```
-PostgreSQL password [claude_bot_secret]:
+PostgreSQL password [helyx_secret]:
 Bot port [3847]:
 ```
 
@@ -406,7 +421,7 @@ Press Enter to accept defaults. The wizard then:
 
 ### Usage Scenarios
 
-Four ways to run claude-bot: **Laptop** (simple, single project), **Laptop+tmux** (with live Telegram monitoring), **Server** (multiple projects, always-on tmux), and **Remote** (laptop → server via SSH tunnel).
+Four ways to run helyx: **Laptop** (simple, single project), **Laptop+tmux** (with live Telegram monitoring), **Server** (multiple projects, always-on tmux), and **Remote** (laptop → server via SSH tunnel).
 
 See [Usage Scenarios](guides/usage-scenarios.md) for full setup instructions and tmux navigation reference.
 
@@ -414,36 +429,36 @@ See [Usage Scenarios](guides/usage-scenarios.md) for full setup instructions and
 
 ```
 Setup:
-  claude-bot setup              Interactive installation wizard
-  claude-bot remote             Connect laptop to remote server
-  claude-bot mcp-register       Re-register MCP servers
+  helyx setup              Interactive installation wizard
+  helyx remote             Connect laptop to remote server
+  helyx mcp-register       Re-register MCP servers
 
 Bot (Docker service):
-  claude-bot bot-start          Start Docker containers (docker compose up -d)
-  claude-bot bot-stop           Stop Docker + tmux
-  claude-bot bot-restart        Rebuild and restart bot
-  claude-bot bot-status         Bot health, uptime, docker status
-  claude-bot bot-logs           Follow bot logs
-  claude-bot bounce             Stop tmux + restart (quick reload)
+  helyx bot-start          Start Docker containers (docker compose up -d)
+  helyx bot-stop           Stop Docker + tmux
+  helyx bot-restart        Rebuild and restart bot
+  helyx bot-status         Bot health, uptime, docker status
+  helyx bot-logs           Follow bot logs
+  helyx bounce             Stop tmux + restart (quick reload)
 
 Data:
-  claude-bot sessions           List active sessions
-  claude-bot prune              Remove stale sessions (interactive)
-  claude-bot backup             Database backup
-  claude-bot cleanup [--dry-run]   Clean old queue, logs, stats (--dry-run to preview)
+  helyx sessions           List active sessions
+  helyx prune              Remove stale sessions (interactive)
+  helyx backup             Database backup
+  helyx cleanup [--dry-run]   Clean old queue, logs, stats (--dry-run to preview)
 
 Tmux:
-  claude-bot up [-a] [-s]       Start all projects in tmux (-s split panes)
-  claude-bot down               Stop all tmux sessions + clean DB
-  claude-bot ps                 List configured projects
-  claude-bot add [dir] [--name] [--provider]  Register project in config + bot DB (no launch)
-  claude-bot run [dir]              Launch project in current terminal
-  claude-bot attach [dir]           Add window to running tmux session (bots)
-  claude-bot remove <name>          Remove project from config
+  helyx up [-a] [-s]       Start all projects in tmux (-s split panes)
+  helyx down               Stop all tmux sessions + clean DB
+  helyx ps                 List configured projects
+  helyx add [dir] [--name] [--provider]  Register project in config + bot DB (no launch)
+  helyx run [dir]              Launch project in current terminal
+  helyx attach [dir]           Add window to running tmux session (bots)
+  helyx remove <name>          Remove project from config
 
 Connect:
-  claude-bot open [dir]             Launch Claude Code in current terminal
-  claude-bot connect [dir] [-t]     Start single CLI session
+  helyx open [dir]             Launch Claude Code in current terminal
+  helyx connect [dir] [-t]     Start single CLI session
 ```
 
 ## Telegram Commands
@@ -551,7 +566,7 @@ Lists configured hooks from `settings.json`:
 
 Register a directory as a Claude Code session. If you're in an active session, the project path is auto-detected. Otherwise the bot prompts for the path.
 
-Registered sessions are immediately switchable via `/switch`. To launch the Claude Code CLI, use `claude-bot start <path>` from the terminal.
+Registered sessions are immediately switchable via `/switch`. To launch the Claude Code CLI, use `helyx start <path>` from the terminal.
 
 ### `/model` — Select Model
 
@@ -570,7 +585,7 @@ Adapters are registered at startup (`adapters/index.ts`). The `sessions/router.t
 
 ## MCP Tools
 
-Claude Bot exposes MCP tools via HTTP server (`port 3847`) and the stdio channel adapter. Key tools: `remember`, `recall`, `reply`, `update_status`, `list_sessions`, `search_project_context`.
+Helyx exposes MCP tools via HTTP server (`port 3847`) and the stdio channel adapter. Key tools: `remember`, `recall`, `reply`, `update_status`, `list_sessions`, `search_project_context`.
 
 See [MCP Tools Reference](guides/mcp-tools.md) for the full tool list with parameters and usage examples.
 
@@ -634,9 +649,9 @@ Prerequisites: [Bun](https://bun.sh), PostgreSQL 16+ with [pgvector](https://git
 
 ```bash
 # Database
-psql -U postgres -c "CREATE USER claude_bot WITH PASSWORD 'your_password';"
-psql -U postgres -c "CREATE DATABASE claude_bot OWNER claude_bot;"
-psql -U postgres -d claude_bot -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -U postgres -c "CREATE USER helyx WITH PASSWORD 'your_password';"
+psql -U postgres -c "CREATE DATABASE helyx OWNER helyx;"
+psql -U postgres -d helyx -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 # Install and run
 bun install
@@ -663,33 +678,33 @@ See [CLAUDE_MD_GUIDE.md](CLAUDE_MD_GUIDE.md) for detailed configuration options 
 ### Remote Connection (laptop to server)
 
 ```bash
-claude-bot remote    # Interactive wizard
+helyx remote    # Interactive wizard
 ```
 
 Or manually via SSH tunnel:
 ```bash
 ssh -L 3847:localhost:3847 -L 5433:localhost:5433 user@server
-claude-bot connect . --tmux
+helyx connect . --tmux
 ```
 
 ## Production
 
 ### Docker Compose
 ```bash
-claude-bot bot-start      # docker compose up -d
-claude-bot bot-restart    # rebuild and restart
-claude-bot bot-logs       # follow logs
-claude-bot bot-stop       # tmux down + docker compose down
-claude-bot bounce         # quick reload (stop tmux → wait → start)
+helyx bot-start      # docker compose up -d
+helyx bot-restart    # rebuild and restart
+helyx bot-logs       # follow logs
+helyx bot-stop       # tmux down + docker compose down
+helyx bounce         # quick reload (stop tmux → wait → start)
 ```
 
 ### Database Backup
 ```bash
-claude-bot backup     # manual backup
+helyx backup     # manual backup
 # Or schedule: 0 3 * * * /path/to/scripts/backup-db.sh
 ```
 
-Backups saved to `~/backups/claude-bot/` (gzipped, last 7 retained).
+Backups saved to `~/backups/helyx/` (gzipped, last 7 retained).
 
 ## Tech Stack
 
@@ -759,7 +774,7 @@ Files and photos received without a caption now trigger a prompt: `📎 filename
 
 ### Cleanup Jobs with Dry-Run (П.3)
 
-`cleanup/jobs.ts` exposes `runAllCleanupJobs(dryRun)` with per-job row counts. `handleCleanup` in the bot and `claude-bot cleanup --dry-run` in the CLI use it to preview or apply cleanup.
+`cleanup/jobs.ts` exposes `runAllCleanupJobs(dryRun)` with per-job row counts. `handleCleanup` in the bot and `helyx cleanup --dry-run` in the CLI use it to preview or apply cleanup.
 
 ### Security Fail-Fast (П.4)
 
@@ -803,7 +818,7 @@ See [ROADMAP](docs/ROADMAP.md) for the full version history.
 
 ### Google AI Provider in Setup Wizard
 
-Re-added Google AI (Gemma 4) as an interactive option in `claude-bot setup`. The wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama. Selecting Google AI prompts for `GOOGLE_AI_API_KEY` and `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`).
+Re-added Google AI (Gemma 4) as an interactive option in `helyx setup`. The wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama. Selecting Google AI prompts for `GOOGLE_AI_API_KEY` and `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`).
 
 ### MCP Tools: react and edit_message in Channel Adapter
 
@@ -834,16 +849,16 @@ Three distinct modes now instead of two:
 
 | `CHANNEL_SOURCE` env | Mode | DB behavior |
 |---|---|---|
-| `remote` | `claude-bot up` / tmux | One persistent session per project; reattaches on reconnect |
-| `local` | `claude-bot start` | New temporary session each run; work summary on exit |
+| `remote` | `helyx up` / tmux | One persistent session per project; reattaches on reconnect |
+| `local` | `helyx start` | New temporary session each run; work summary on exit |
 | _(not set)_ | Plain `claude` | No DB registration (`sessionId = null`), no polling |
 
 Previously, unset `CHANNEL_SOURCE` defaulted to `local`. Now it is a distinct standalone mode that skips DB entirely — preventing phantom sessions when running `claude` without the bot.
 
 ### CLI Changes
 
-- **`claude-bot start`** — no longer invokes `run-cli.sh`; spawns `claude` directly with `CHANNEL_SOURCE=local` (simpler path, no auto-restart loop for local sessions)
-- **`claude-bot restart`** — after rebuild, syncs `TELEGRAM_BOT_TOKEN` from `.env` into `~/.claude.json` MCP server config (`syncChannelToken`), so channel auth stays in sync without manual edits
+- **`helyx start`** — no longer invokes `run-cli.sh`; spawns `claude` directly with `CHANNEL_SOURCE=local` (simpler path, no auto-restart loop for local sessions)
+- **`helyx restart`** — after rebuild, syncs `TELEGRAM_BOT_TOKEN` from `.env` into `~/.claude.json` MCP server config (`syncChannelToken`), so channel auth stays in sync without manual edits
 - **`run()` helper** — new `stream: true` option pipes stdout/stderr directly to terminal (used in restart for real-time build output)
 
 ## Recent Changes (v1.11.0)
@@ -935,7 +950,7 @@ Previously, unset `CHANNEL_SOURCE` defaulted to `local`. Now it is a distinct st
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, code style, project structure, and PR guidelines.
 
-For bug reports and feature requests, use [GitHub Issues](https://github.com/MrCipherSmith/multiclaude-tg-bot/issues).
+For bug reports and feature requests, use [GitHub Issues](https://github.com/MrCipherSmith/helyx/issues).
 
 ## License
 

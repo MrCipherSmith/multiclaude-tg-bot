@@ -121,7 +121,7 @@ NEVER add "Co-Authored-By" or any co-authorship attribution in commit messages.
 
 CLI-сессии подключаются к боту через два MCP-сервера:
 
-### `claude-bot` (HTTP, общий)
+### `helyx` (HTTP, общий)
 | Инструмент | Описание |
 |---|---|
 | `set_session_name` | Задать имя сессии (вызывается автоматически) |
@@ -135,7 +135,7 @@ CLI-сессии подключаются к боту через два MCP-се
 | `list_sessions` | Список сессий |
 | `session_info` | Информация о сессии |
 
-### `claude-bot-channel` (stdio, per-session)
+### `helyx-channel` (stdio, per-session)
 | Инструмент | Описание |
 |---|---|
 | `reply` | Ответить в Telegram (прямой доступ к Bot API) |
@@ -155,8 +155,8 @@ CLI-сессии подключаются к боту через два MCP-се
 {
   "permissions": {
     "allow": [
-      "mcp__claude-bot__*",
-      "mcp__claude-bot-channel__*"
+      "mcp__helyx__*",
+      "mcp__helyx-channel__*"
     ]
   }
 }

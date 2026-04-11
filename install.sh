@@ -1,12 +1,12 @@
 #!/bin/bash
-# Claude Bot — one-line installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/multiclaude-tg-bot/main/install.sh | bash
+# Helyx — one-line installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/MrCipherSmith/helyx/main/install.sh | bash
 #
 # What it does:
 # 1. Checks prerequisites (git, bun, docker, claude)
 # 2. Clones the repo (or updates if exists)
 # 3. Installs dependencies
-# 4. Installs 'claude-bot' CLI globally
+# 4. Installs 'helyx' CLI globally
 # 5. Runs the setup wizard
 
 set -e
@@ -19,11 +19,11 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
-REPO="https://github.com/MrCipherSmith/multiclaude-tg-bot.git"
-INSTALL_DIR="${CLAUDE_BOT_DIR:-$HOME/bots/claude-bot}"
+REPO="https://github.com/MrCipherSmith/helyx.git"
+INSTALL_DIR="${HELYX_DIR:-$HOME/bots/helyx}"
 BIN_DIR="${HOME}/.local/bin"
 
-echo -e "\n${BOLD}Claude Bot Installer${NC}\n"
+echo -e "\n${BOLD}Helyx Installer${NC}\n"
 
 # --- Check prerequisites ---
 
@@ -63,7 +63,7 @@ fi
 
 # --- Clone or update ---
 
-echo -e "\n${BOLD}Installing claude-bot...${NC}"
+echo -e "\n${BOLD}Installing helyx...${NC}"
 
 if [ -d "$INSTALL_DIR/.git" ]; then
   echo -e "  ${CYAN}Updating${NC} existing installation at $INSTALL_DIR"
@@ -86,12 +86,12 @@ bun install --silent 2>/dev/null || bun install
 
 mkdir -p "$BIN_DIR"
 
-cat > "$BIN_DIR/claude-bot" << EOF
+cat > "$BIN_DIR/helyx" << EOF
 #!/bin/bash
 exec bun --cwd "$INSTALL_DIR" "$INSTALL_DIR/cli.ts" "\$@"
 EOF
 
-chmod +x "$BIN_DIR/claude-bot"
+chmod +x "$BIN_DIR/helyx"
 
 # Ensure ~/.local/bin is in PATH
 if ! echo "$PATH" | grep -q "$BIN_DIR"; then
@@ -108,8 +108,8 @@ fi
 # --- Done ---
 
 echo -e "\n${GREEN}${BOLD}Installed!${NC}\n"
-echo -e "  CLI:  ${CYAN}claude-bot${NC} (in $BIN_DIR)"
+echo -e "  CLI:  ${CYAN}helyx${NC} (in $BIN_DIR)"
 echo -e "  Repo: $INSTALL_DIR\n"
 echo -e "${BOLD}Running setup wizard...${NC}\n"
 
-exec claude-bot setup < /dev/tty
+exec helyx setup < /dev/tty

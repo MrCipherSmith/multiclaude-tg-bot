@@ -1,6 +1,6 @@
 # Usage Scenarios
 
-This guide covers the four main ways to run claude-bot. Choose based on your setup.
+This guide covers the four main ways to run helyx. Choose based on your setup.
 
 ---
 
@@ -10,16 +10,16 @@ The simplest setup — run everything locally, connect one project at a time.
 
 ```bash
 # 1. Start the bot (if not already running)
-claude-bot docker-start
+helyx docker-start
 
 # 2. Open your project and connect
 cd ~/my-project
-claude-bot connect .
+helyx connect .
 ```
 
 Open Telegram, type `/sessions` — your project appears. Send messages, voice, photos — Claude CLI processes them in this terminal.
 
-Stop with `Ctrl+C`. Connect a different project at any time by running `claude-bot connect .` in another directory.
+Stop with `Ctrl+C`. Connect a different project at any time by running `helyx connect .` in another directory.
 
 > **Note:** Without `--tmux`, real-time status updates ("Reading files...", "Running tests...") won't appear in Telegram. Everything else works: messages, permissions, replies.
 
@@ -30,9 +30,9 @@ Stop with `Ctrl+C`. Connect a different project at any time by running `claude-b
 Same as above, but with live progress monitoring in Telegram:
 
 ```bash
-claude-bot docker-start
+helyx docker-start
 cd ~/my-project
-claude-bot connect . --tmux
+helyx connect . --tmux
 ```
 
 Telegram shows what Claude is doing in real-time as it happens.
@@ -49,15 +49,15 @@ For headless servers where you want multiple projects running 24/7 in persistent
 
 ```bash
 # Register your projects
-claude-bot add ~/project-a
-claude-bot add ~/project-b
-claude-bot add ~/project-c
+helyx add ~/project-a
+helyx add ~/project-b
+helyx add ~/project-c
 
 # Start all at once in tmux (separate windows)
-claude-bot up -a
+helyx up -a
 
 # Or all visible at once as split panes
-claude-bot up -a -s
+helyx up -a -s
 ```
 
 Each project runs in its own tmux window (or pane with `-s`) with auto-restart on crash.
@@ -71,11 +71,11 @@ ssh user@server -t "tmux attach -t bots"
 ### Project management
 
 ```bash
-claude-bot ps                     # List configured projects and status
-claude-bot up -a                  # Start all + attach (windows layout)
-claude-bot up -a -s               # Start all + attach (split panes layout)
-claude-bot down                   # Stop all sessions + clean DB
-claude-bot remove project-b       # Remove project from config
+helyx ps                     # List configured projects and status
+helyx up -a                  # Start all + attach (windows layout)
+helyx up -a -s               # Start all + attach (split panes layout)
+helyx down                   # Stop all sessions + clean DB
+helyx remove project-b       # Remove project from config
 ```
 
 ### Tmux navigation
@@ -103,7 +103,7 @@ See [Remote Laptop Setup](remote-laptop-setup.md) for a full walkthrough.
 Quick summary:
 ```bash
 # On your laptop:
-claude-bot remote   # Interactive wizard
+helyx remote   # Interactive wizard
 ```
 
 The wizard sets up SSH tunnels and registers MCP servers on your laptop so Claude CLI can communicate with the remote bot.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Claude Bot CLI — setup wizard and management commands.
+ * Helyx CLI — setup wizard and management commands.
  *
  * Usage:
  *   bun cli.ts setup          Interactive installation wizard
@@ -85,7 +85,7 @@ function fail(msg?: string) {
 // --- Setup wizard ---
 
 async function setup() {
-  console.log(`\n  ${c.bold("Claude Bot Setup")}`);
+  console.log(`\n  ${c.bold("Helyx Setup")}`);
   console.log(`  ${"─".repeat(40)}\n`);
 
   // 1. Deployment type
@@ -163,7 +163,7 @@ async function setup() {
   const groqKey = ask("Groq API Key for voice (Enter to skip, free at console.groq.com)");
 
   // 5. Database password
-  const dbPassword = ask("PostgreSQL password", "claude_bot_secret");
+  const dbPassword = ask("PostgreSQL password", "helyx_secret");
 
   // 6. Port
   const port = ask("Bot port", "3847");
@@ -173,8 +173,8 @@ async function setup() {
   step("Creating .env");
 
   const dbUrl = useDocker
-    ? `postgres://claude_bot:${dbPassword}@localhost:5433/claude_bot`
-    : `postgres://claude_bot:${dbPassword}@localhost:5432/claude_bot`;
+    ? `postgres://helyx:${dbPassword}@localhost:5433/helyx`
+    : `postgres://helyx:${dbPassword}@localhost:5432/helyx`;
 
   const envLines = [
     "# Telegram",
@@ -240,7 +240,7 @@ async function setup() {
     // Wait for DB
     step("Waiting for database");
     for (let i = 0; i < 30; i++) {
-      const check = await run(["docker", "compose", "exec", "-T", "postgres", "pg_isready", "-U", "claude_bot"], { silent: true });
+      const check = await run(["docker", "compose", "exec", "-T", "postgres", "pg_isready", "-U", "helyx"], { silent: true });
       if (check.ok) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
@@ -264,10 +264,10 @@ async function setup() {
 
   // Register MCP servers
   step("Registering MCP servers in Claude Code");
-  await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
-  await run(["claude", "mcp", "remove", "claude-bot-channel", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "helyx", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "helyx-channel", "-s", "user"], { silent: true });
 
-  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${port}/mcp`]);
+  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "helyx", `http://localhost:${port}/mcp`]);
 
   const channelConfig = JSON.stringify({
     type: "stdio",
@@ -279,7 +279,7 @@ async function setup() {
       TELEGRAM_BOT_TOKEN: botToken,
     },
   });
-  await run(["claude", "mcp", "add-json", "-s", "user", "claude-bot-channel", channelConfig]);
+  await run(["claude", "mcp", "add-json", "-s", "user", "helyx-channel", channelConfig]);
   done();
 
   // Copy CLAUDE.md template
@@ -334,7 +334,7 @@ Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashbo
 
   // Register projects
   console.log(`  ${c.bold("Add projects (optional)")}`);
-  console.log(`  You can register project directories now, or later with ${c.cyan("claude-bot add .")}\n`);
+  console.log(`  You can register project directories now, or later with ${c.cyan("helyx add .")}\n`);
   let addMore = true;
   while (addMore) {
     const projPath = ask("Project path to register (Enter to skip)");
@@ -354,7 +354,7 @@ Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashbo
       "--name", basename(absPath),
     ]);
     if (!result.ok) {
-      console.log(c.yellow(`  Add later with: claude-bot add ${absPath}`));
+      console.log(c.yellow(`  Add later with: helyx add ${absPath}`));
     }
 
     const again = ask("Add another project? (y/N)", "N");
@@ -365,19 +365,19 @@ Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashbo
   console.log(`\n  ${c.green(c.bold("Setup complete!"))}\n`);
   console.log(`  ${c.bold("Next steps:")}\n`);
   console.log(`  1. Start all project sessions:`);
-  console.log(`    ${c.cyan("claude-bot up")}\n`);
+  console.log(`    ${c.cyan("helyx up")}\n`);
   console.log(`  2. (Optional) Set up Telegram Forum for per-project topics:`);
   console.log(`    • Create a Telegram supergroup and enable Topics`);
   console.log(`    • Add the bot as admin with ${c.bold("Manage Topics")} permission`);
   console.log(`    • Send ${c.cyan("/forum_setup")} in the group\n`);
   console.log(`  3. Add projects:`);
   console.log(`    ${c.cyan("/project_add /path/to/project")} — in Telegram`);
-  console.log(`    ${c.cyan("claude-bot add /path/to/project")} — from CLI\n`);
+  console.log(`    ${c.cyan("helyx add /path/to/project")} — from CLI\n`);
   console.log(`  Manage the bot:`);
-  console.log(`    ${c.cyan("claude-bot up")}       — start all sessions`);
-  console.log(`    ${c.cyan("claude-bot bounce")}   — restart all sessions`);
-  console.log(`    ${c.cyan("claude-bot ps")}       — list session status`);
-  console.log(`    ${c.cyan("claude-bot down")}     — stop all sessions\n`);
+  console.log(`    ${c.cyan("helyx up")}       — start all sessions`);
+  console.log(`    ${c.cyan("helyx bounce")}   — restart all sessions`);
+  console.log(`    ${c.cyan("helyx ps")}       — list session status`);
+  console.log(`    ${c.cyan("helyx down")}     — stop all sessions\n`);
 }
 
 // --- Stop hook registration ---
@@ -431,7 +431,7 @@ async function start(dir?: string) {
   // Local session: spawn claude directly with CHANNEL_SOURCE=local so channel.ts creates
   // a temporary DB session (summarized and deleted on exit), not a persistent remote session.
   const proc = Bun.spawn(
-    ["claude", "--dangerously-load-development-channels", "server:claude-bot-channel"],
+    ["claude", "--dangerously-load-development-channels", "server:helyx-channel"],
     {
       stdout: "inherit", stderr: "inherit", stdin: "inherit", cwd: projectDir,
       env: { ...process.env, CHANNEL_SOURCE: "local" },
@@ -464,8 +464,8 @@ async function syncChannelToken() {
   const claudeJson = resolve(homedir(), ".claude.json");
   if (!existsSync(claudeJson)) return;
   const data = JSON.parse(readFileSync(claudeJson, "utf8"));
-  if (data?.mcpServers?.["claude-bot-channel"]?.env) {
-    data.mcpServers["claude-bot-channel"].env.TELEGRAM_BOT_TOKEN = botToken;
+  if (data?.mcpServers?.["helyx-channel"]?.env) {
+    data.mcpServers["helyx-channel"].env.TELEGRAM_BOT_TOKEN = botToken;
     writeFileSync(claudeJson, JSON.stringify(data, null, 4));
     console.log(`  ${c.dim("channel token synced from .env")}`);
   }
@@ -515,7 +515,7 @@ async function sessions() {
   // Query sessions via docker exec
   const query = await run([
     "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "psql", "-U", "helyx", "-d", "helyx", "-t", "-A",
     "-c", "SELECT id, name, status, EXTRACT(EPOCH FROM (now() - last_active))::int as ago FROM sessions WHERE name NOT LIKE 'cli-%' ORDER BY id",
   ], { silent: true });
 
@@ -576,7 +576,7 @@ async function cleanup() {
   for (const job of jobs) {
     const res = await run([
       "docker", "compose", "exec", "-T", "postgres",
-      "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A", "-c", job.query,
+      "psql", "-U", "helyx", "-d", "helyx", "-t", "-A", "-c", job.query,
     ], { silent: true });
     const count = parseInt(res.output?.trim() ?? "0") || 0;
     total += count;
@@ -596,7 +596,7 @@ async function prune() {
   // Show current sessions
   const query = await run([
     "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "psql", "-U", "helyx", "-d", "helyx", "-t", "-A",
     "-c", "SELECT id, name, status, EXTRACT(EPOCH FROM (now() - last_active))::int as ago FROM sessions WHERE id != 0 ORDER BY id",
   ], { silent: true });
 
@@ -626,7 +626,7 @@ async function prune() {
   // Get project paths
   const pathQuery = await run([
     "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "psql", "-U", "helyx", "-d", "helyx", "-t", "-A",
     "-c", "SELECT id, name, project_path FROM sessions WHERE id != 0 ORDER BY id",
   ], { silent: true });
 
@@ -675,7 +675,7 @@ async function prune() {
 
   await run([
     "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-t", "-A",
+    "psql", "-U", "helyx", "-d", "helyx", "-t", "-A",
     "-c", `DELETE FROM sessions WHERE id IN (${staleIds.join(",")});
       SELECT setval('sessions_id_seq', GREATEST((SELECT MAX(id) FROM sessions), 1));`,
   ], { silent: true });
@@ -731,9 +731,9 @@ async function tmuxStart() {
   if (projects.length === 0) {
     console.log(`\n  ${c.yellow("No projects configured.")}`);
     console.log(`  Add projects first:\n`);
-    console.log(`    ${c.cyan("claude-bot add /path/to/project")}`);
-    console.log(`    ${c.cyan("claude-bot add .")} ${c.dim("(current directory)")}`);
-    console.log(`    ${c.cyan("claude-bot add . --name work-session")} ${c.dim("(custom session name)")}\n`);
+    console.log(`    ${c.cyan("helyx add /path/to/project")}`);
+    console.log(`    ${c.cyan("helyx add .")} ${c.dim("(current directory)")}`);
+    console.log(`    ${c.cyan("helyx add . --name work-session")} ${c.dim("(custom session name)")}\n`);
     return;
   }
 
@@ -800,7 +800,7 @@ async function tmuxAttach(dir?: string) {
   // Check tmux session is running
   const exists = await run(["tmux", "has-session", "-t", TMUX_SESSION], { silent: true });
   if (!exists.ok) {
-    console.log(c.red(`  Tmux session '${TMUX_SESSION}' not running. Start it first: claude-bot up`));
+    console.log(c.red(`  Tmux session '${TMUX_SESSION}' not running. Start it first: helyx up`));
     return;
   }
 
@@ -855,13 +855,13 @@ async function tmuxStop() {
   step("Cleaning DB sessions");
   await run([
     "docker", "compose", "exec", "-T", "postgres",
-    "psql", "-U", "claude_bot", "-d", "claude_bot", "-c",
+    "psql", "-U", "helyx", "-d", "helyx", "-c",
     "DELETE FROM sessions WHERE name LIKE 'cli-%'; UPDATE sessions SET status = 'inactive', lease_owner = NULL, lease_expires_at = NULL WHERE source = 'remote' AND id != 0;",
   ], { silent: true });
   done();
 
   console.log(`\n  ${c.green("Tmux sessions stopped, standalone untouched.")}`);
-  console.log(`  Restart: ${c.cyan("claude-bot up")}`);
+  console.log(`  Restart: ${c.cyan("helyx up")}`);
 }
 
 async function tmuxAdd(dir?: string) {
@@ -893,7 +893,7 @@ async function tmuxAdd(dir?: string) {
   }
   await saveProjects(projects);
   console.log(`  ${c.green("✓")} Saved: ${windowName({ name, path: projectDir })}`);
-  console.log(`\n  ${c.dim(`Run: claude-bot up to start all projects`)}`);
+  console.log(`\n  ${c.dim(`Run: helyx up to start all projects`)}`);
 }
 
 async function tmuxRun(dir?: string) {
@@ -916,7 +916,7 @@ async function tmuxRun(dir?: string) {
 
 async function tmuxRemove(name?: string) {
   if (!name) {
-    console.log(c.red("  Usage: claude-bot remove <project-name>"));
+    console.log(c.red("  Usage: helyx remove <project-name>"));
     return;
   }
 
@@ -956,7 +956,7 @@ async function tmuxList() {
   }
 
   if (!tmuxRunning) {
-    console.log(`\n  ${c.dim(`tmux not running. Start: claude-bot up`)}`);
+    console.log(`\n  ${c.dim(`tmux not running. Start: helyx up`)}`);
   }
 }
 
@@ -991,7 +991,7 @@ async function connect(dir?: string) {
     console.log(`  Starting ${c.cyan(name)} in tmux (full Telegram monitoring)...\n`);
     await run(["tmux", "new-session", "-d", "-s", name, "-c", projectDir]);
     await run(["tmux", "send-keys", "-t", name,
-      "claude --dangerously-load-development-channels server:claude-bot-channel", "Enter"]);
+      "claude --dangerously-load-development-channels server:helyx-channel", "Enter"]);
 
     // Wait for channel confirmation prompt and auto-confirm
     console.log(`  Waiting for Claude to start...`);
@@ -1016,7 +1016,7 @@ async function connect(dir?: string) {
     console.log(`  Connecting ${c.cyan(name)} to Telegram bot...`);
     console.log(`  ${c.dim("Tip: use --tmux for full progress monitoring in Telegram")}\n`);
     const proc = Bun.spawn(
-      ["claude", "--dangerously-load-development-channels", "server:claude-bot-channel"],
+      ["claude", "--dangerously-load-development-channels", "server:helyx-channel"],
       { cwd: projectDir, stdout: "inherit", stderr: "inherit", stdin: "inherit" },
     );
     await proc.exited;
@@ -1045,12 +1045,12 @@ async function mcpRegister() {
   const botToken = env.TELEGRAM_BOT_TOKEN ?? "";
 
   step("Removing old MCP registrations");
-  await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
-  await run(["claude", "mcp", "remove", "claude-bot-channel", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "helyx", "-s", "user"], { silent: true });
+  await run(["claude", "mcp", "remove", "helyx-channel", "-s", "user"], { silent: true });
   done();
 
   step("Registering HTTP MCP server");
-  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${port}/mcp`]);
+  await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "helyx", `http://localhost:${port}/mcp`]);
   done();
 
   step("Registering stdio channel adapter");
@@ -1060,7 +1060,7 @@ async function mcpRegister() {
     args: [`${BOT_DIR}/channel.ts`],
     env: { DATABASE_URL: dbUrl, OLLAMA_URL: ollamaUrl, TELEGRAM_BOT_TOKEN: botToken },
   });
-  await run(["claude", "mcp", "add-json", "-s", "user", "claude-bot-channel", config]);
+  await run(["claude", "mcp", "add-json", "-s", "user", "helyx-channel", config]);
   done();
 
   console.log(`\n  ${c.green("MCP servers registered.")}`);
@@ -1083,7 +1083,7 @@ async function remote() {
   const botPort = ask("Bot port on server", "3847");
   const dbPort = ask("PostgreSQL port on server", "5433");
   const botToken = ask("Telegram Bot Token (same as on server)");
-  const botPath = ask("Path to claude-bot on server", "/home/" + serverUser + "/bots/claude-bot");
+  const botPath = ask("Path to helyx on server", "/home/" + serverUser + "/bots/helyx");
 
   // Method choice
   const methodIdx = askChoice("Connection method:", [
@@ -1101,12 +1101,12 @@ async function remote() {
     const registerNow = ask("Register MCP servers now? (y/n)", "y");
     if (registerNow.toLowerCase() === "y") {
       step("Removing old MCP registrations");
-      await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
-      await run(["claude", "mcp", "remove", "claude-bot-channel", "-s", "user"], { silent: true });
+      await run(["claude", "mcp", "remove", "helyx", "-s", "user"], { silent: true });
+      await run(["claude", "mcp", "remove", "helyx-channel", "-s", "user"], { silent: true });
       done();
 
       step("Registering HTTP MCP server");
-      await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${botPort}/mcp`]);
+      await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "helyx", `http://localhost:${botPort}/mcp`]);
       done();
 
       step("Registering stdio channel adapter");
@@ -1115,12 +1115,12 @@ async function remote() {
         command: "bun",
         args: [`${botPath}/channel.ts`],
         env: {
-          DATABASE_URL: `postgres://claude_bot:claude_bot_secret@localhost:${dbPort}/claude_bot`,
+          DATABASE_URL: `postgres://helyx:helyx_secret@localhost:${dbPort}/helyx`,
           OLLAMA_URL: `http://localhost:11434`,
           TELEGRAM_BOT_TOKEN: botToken,
         },
       });
-      await run(["claude", "mcp", "add-json", "-s", "user", "claude-bot-channel", channelConfig]);
+      await run(["claude", "mcp", "add-json", "-s", "user", "helyx-channel", channelConfig]);
       done();
 
       console.log(`\n  ${c.yellow("Important:")} channel.ts runs locally but connects to server DB via tunnel.`);
@@ -1130,7 +1130,7 @@ async function remote() {
 
     console.log(`  ${c.bold("Step 3:")} Connect a project:\n`);
     console.log(`  ${c.cyan("cd your-project")}`);
-    console.log(`  ${c.cyan("claude --dangerously-load-development-channels server:claude-bot-channel")}\n`);
+    console.log(`  ${c.cyan("claude --dangerously-load-development-channels server:helyx-channel")}\n`);
 
   } else {
     // HTTP-only method
@@ -1141,11 +1141,11 @@ async function remote() {
     const registerNow = ask("Register HTTP MCP server now? (y/n)", "y");
     if (registerNow.toLowerCase() === "y") {
       step("Removing old MCP registration");
-      await run(["claude", "mcp", "remove", "claude-bot", "-s", "user"], { silent: true });
+      await run(["claude", "mcp", "remove", "helyx", "-s", "user"], { silent: true });
       done();
 
       step("Registering HTTP MCP server");
-      await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "claude-bot", `http://localhost:${botPort}/mcp`]);
+      await run(["claude", "mcp", "add", "--transport", "http", "-s", "user", "helyx", `http://localhost:${botPort}/mcp`]);
       done();
     }
 
@@ -1219,7 +1219,7 @@ function formatUptime(seconds: number): string {
 
 function help() {
   console.log(`
-  ${c.bold("Claude Bot CLI")}
+  ${c.bold("Helyx CLI")}
 
   ${c.bold("Usage:")} bun cli.ts <command>
 

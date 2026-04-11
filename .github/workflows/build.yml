@@ -23,4 +23,4 @@ jobs:
         run: bun build main.ts --target=bun --outdir=/tmp/build-check
 
       - name: Build Docker image
-        run: docker build -t claude-bot .
+        run: docker build -t helyx .

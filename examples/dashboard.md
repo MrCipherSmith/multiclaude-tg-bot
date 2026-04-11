@@ -1,6 +1,6 @@
 # Dashboard
 
-Web dashboard for monitoring and managing your Claude Bot instance. Access it at `http://localhost:3847` (or your configured domain).
+Web dashboard for monitoring and managing your Helyx instance. Access it at `http://localhost:3847` (or your configured domain).
 
 Authentication via Telegram Login Widget — only users listed in `ALLOWED_USERS` can access.
 

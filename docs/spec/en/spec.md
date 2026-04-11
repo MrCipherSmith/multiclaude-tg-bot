@@ -1,4 +1,4 @@
-# Claude Bot — Full Specification
+# Helyx — Full Specification
 
 **Specification Version:** 1.14.0  
 **Last Updated:** April 9, 2026
@@ -7,7 +7,7 @@
 
 ## 1. Project Overview
 
-**Claude Bot** is a Telegram bot that enables remote control of multiple Claude Code CLI instances. It bridges the gap between mobile/laptop interfaces and terminal-based AI agents by:
+**Helyx** is a Telegram bot that enables remote control of multiple Claude Code CLI instances. It bridges the gap between mobile/laptop interfaces and terminal-based AI agents by:
 
 - **Accepting user messages via Telegram** (text, voice, images) and routing them to active Claude Code processes
 - **Collecting and preserving context** across sessions using dual-layer memory (short-term sliding window + long-term pgvector embeddings)
@@ -327,7 +327,7 @@ Features:
 
 ---
 
-### 3.10 CLI Tool (`claude-bot` command)
+### 3.10 CLI Tool (`helyx` command)
 
 | Command | Description |
 |---------|-------------|
@@ -487,8 +487,8 @@ Features:
 
 ```bash
 # Clone
-git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git ~/bots/claude-bot
-cd ~/bots/claude-bot
+git clone https://github.com/MrCipherSmith/multiclaude-tg-bot.git ~/bots/helyx
+cd ~/bots/helyx
 
 # Configure
 cp .env.example .env
@@ -528,14 +528,14 @@ bun main.ts        # start bot
 
 ```bash
 # Backup
-docker exec claude-bot-postgres-1 pg_dump -U claude_bot claude_bot > backup.sql
+docker exec helyx-postgres-1 pg_dump -U helyx helyx > backup.sql
 
 # Update
 git pull origin main && bun install
 docker compose down && docker compose up -d
 
 # Monitoring
-docker logs -f claude-bot-bot-1
+docker logs -f helyx-bot-1
 # or via bot: /status, /stats
 ```
 

@@ -96,7 +96,7 @@ This sends the diff as a separate code-formatted message above the status, usefu
 Claude automatically names sessions after the project directory on startup:
 
 ```
-set_session_name(name="claude-bot", project_path="/home/user/bots/claude-bot")
+set_session_name(name="helyx", project_path="/home/user/bots/helyx")
 ```
 
 This makes `/sessions` in Telegram show meaningful names instead of random IDs.

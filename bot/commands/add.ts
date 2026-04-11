@@ -23,7 +23,7 @@ export async function handleAdd(ctx: Context): Promise<void> {
 
   await ctx.reply(
     "Enter the absolute path to the project directory to register:\n\n" +
-    "<i>Tip: use <code>claude-bot add .</code> from the shell to register current directory</i>",
+    "<i>Tip: use <code>helyx add .</code> from the shell to register current directory</i>",
     { parse_mode: "HTML" },
   );
   setPendingInput(chatId, async (ctx2) => {
@@ -56,7 +56,7 @@ async function registerProject(
   await ctx.reply(
     `✅ Session #${session.id} registered: <b>${name}</b>\n` +
     `Path: <code>${projectPath}</code>\n\n` +
-    `Start Claude Code with:\n<code>claude-bot start ${projectPath}</code>`,
+    `Start Claude Code with:\n<code>helyx start ${projectPath}</code>`,
     { parse_mode: "HTML" },
   );
 }

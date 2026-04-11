@@ -1,6 +1,6 @@
 # Internal Architecture
 
-This guide covers the implementation-level architecture of Claude Bot — how modules are organized, how data flows, and the design decisions behind key subsystems.
+This guide covers the implementation-level architecture of Helyx — how modules are organized, how data flows, and the design decisions behind key subsystems.
 
 For the user-facing feature overview, see [README](../README.md). For usage workflows, see [Usage Scenarios](usage-scenarios.md).
 
@@ -9,7 +9,7 @@ For the user-facing feature overview, see [README](../README.md). For usage work
 ## Module Map
 
 ```
-claude-bot/
+helyx/
 ├── main.ts                  # Entrypoint — starts bot + HTTP server + timers
 ├── config.ts                # Zod-validated env vars (all process.env reads go here)
 ├── logger.ts                # Pino loggers: logger (stdout) + channelLogger (stderr)

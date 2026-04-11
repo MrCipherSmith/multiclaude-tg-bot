@@ -1,4 +1,4 @@
-# Claude Bot — AI-Readable Machine Specification
+# Helyx — AI-Readable Machine Specification
 
 **Version:** 1.14.0 | **Updated:** 2026-04-09
 
@@ -298,7 +298,7 @@ SEARCH:
 Entry points:
   main.ts                 → server startup, migration, cleanup timer
   channel.ts              → stdio MCP adapter for Claude Code sessions
-  cli.ts                  → claude-bot CLI commands (setup, add, start, etc.)
+  cli.ts                  → helyx CLI commands (setup, add, start, etc.)
   dashboard/src/main.tsx  → React dashboard (built to dashboard/dist/)
   dashboard/webapp/src/main.tsx → Telegram Mini App (built to dashboard/webapp/dist/)
 

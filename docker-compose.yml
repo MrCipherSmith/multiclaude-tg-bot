@@ -7,7 +7,7 @@ services:
     env_file: .env
     environment:
       # Override for Docker-internal networking
-      DATABASE_URL: postgres://claude_bot:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/claude_bot
+      DATABASE_URL: postgres://helyx:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/helyx
       OLLAMA_URL: http://host.docker.internal:11434
       OPENCODE_HOST: host.docker.internal
       DOWNLOADS_DIR: /app/downloads
@@ -36,26 +36,26 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - claude-bot
+      - helyx
 
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
-      POSTGRES_USER: claude_bot
+      POSTGRES_USER: helyx
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: claude_bot
+      POSTGRES_DB: helyx
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U claude_bot -d claude_bot"]
+      test: ["CMD-SHELL", "pg_isready -U helyx -d helyx"]
       interval: 5s
       timeout: 5s
       retries: 5
     networks:
-      - claude-bot
+      - helyx
 
   # Optional: local Whisper ASR fallback (if GROQ_API_KEY is not set)
   # whisper:
@@ -70,11 +70,11 @@ services:
   #     retries: 10
   #     start_period: 30s
   #   networks:
-  #     - claude-bot
+  #     - helyx
 
 volumes:
   pgdata:
-    name: claude-bot-pgdata
+    name: helyx-pgdata
 
 networks:
-  claude-bot:
+  helyx:

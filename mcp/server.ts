@@ -174,7 +174,7 @@ function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => s
 function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined): McpServer {
   const server = new McpServer(
     {
-      name: "claude-bot",
+      name: "helyx",
       version: "0.1.0",
     },
     {

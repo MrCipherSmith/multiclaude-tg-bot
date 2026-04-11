@@ -25,7 +25,7 @@ async function resolveTmuxTarget(projectName: string): Promise<string | null> {
     if ((await proc.exited) === 0) return projectName;
   } catch {}
 
-  // 2. Try as window in "bots" session (claude-bot up uses bots:<window>)
+  // 2. Try as window in "bots" session (helyx up uses bots:<window>)
   const botsTarget = `bots:${projectName}`;
   try {
     const proc = Bun.spawn(["tmux", "has-session", "-t", botsTarget], { stdout: "pipe", stderr: "pipe" });

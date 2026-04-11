@@ -1,5 +1,5 @@
 {
-  "name": "claude-bot-e2e",
+  "name": "helyx-e2e",
   "private": true,
   "scripts": {
     "test": "playwright test --config=playwright.config.ts",

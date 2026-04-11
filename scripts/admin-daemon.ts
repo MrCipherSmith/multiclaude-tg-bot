@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
  * admin-daemon — host-side daemon that processes admin_commands from the DB.
- * Executes tmux/claude-bot commands on the host machine.
+ * Executes tmux/helyx commands on the host machine.
  *
  * Usage:
  *   bun scripts/admin-daemon.ts

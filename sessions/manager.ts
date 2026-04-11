@@ -186,7 +186,7 @@ export class SessionManager {
       return session;
     }
 
-    // No channel.ts session found — standalone Claude launch (not via claude-bot CLI).
+    // No channel.ts session found — standalone Claude launch (not via helyx CLI).
     // Don't create any DB record. Return an in-memory stub so the tool works but bot stays unaware.
     logger.info({ name }, "standalone launch, no DB record created");
     const session: Session = {

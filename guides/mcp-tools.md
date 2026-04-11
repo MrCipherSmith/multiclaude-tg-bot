@@ -1,12 +1,12 @@
 # MCP Tools Reference
 
-Claude Bot exposes MCP (Model Context Protocol) tools to Claude CLI. These tools are available in two configurations depending on how you connect.
+Helyx exposes MCP (Model Context Protocol) tools to Claude CLI. These tools are available in two configurations depending on how you connect.
 
 ---
 
 ## HTTP Server Tools
 
-Available when Claude CLI connects via `claude-bot` HTTP MCP server (`http://localhost:3847/mcp`).
+Available when Claude CLI connects via `helyx` HTTP MCP server (`http://localhost:3847/mcp`).
 
 These tools work in any Claude session — with or without the channel adapter.
 
@@ -40,7 +40,7 @@ These tools work in any Claude session — with or without the channel adapter.
 
 ## Channel Adapter Tools
 
-Available when Claude CLI connects via `claude-bot-channel` stdio MCP server. The channel adapter (`channel/`) is a 7-module stdio bridge: `session.ts` (lifecycle), `permissions.ts` (Telegram forwarding), `tools.ts` (MCP dispatch), `poller.ts` (queue polling), `status.ts` (live status), `telegram.ts` (formatting), `index.ts` (entrypoint).
+Available when Claude CLI connects via `helyx-channel` stdio MCP server. The channel adapter (`channel/`) is a 7-module stdio bridge: `session.ts` (lifecycle), `permissions.ts` (Telegram forwarding), `tools.ts` (MCP dispatch), `poller.ts` (queue polling), `status.ts` (live status), `telegram.ts` (formatting), `index.ts` (entrypoint).
 
 These tools run in the context of a specific session and have direct database access.
 
@@ -103,14 +103,14 @@ Auto-approve rules stored in `settings.local.json`:
 ```json
 {
   "permissions": {
-    "allow": ["Edit(*)", "Bash(*)", "mcp__claude-bot__reply"]
+    "allow": ["Edit(*)", "Bash(*)", "mcp__helyx__reply"]
   }
 }
 ```
 
 Pattern format:
 - Native tools: `ToolName(*)` (e.g., `Edit(*)`, `Bash(*)`)
-- MCP tools: exact tool name (e.g., `mcp__claude-bot__reply`)
+- MCP tools: exact tool name (e.g., `mcp__helyx__reply`)
 
 ---
 
@@ -127,19 +127,19 @@ GET http://localhost:3847/health
 
 ## Registration
 
-MCP servers are registered in Claude Code via `claude-bot setup` or `claude-bot mcp-register`. You can also register manually:
+MCP servers are registered in Claude Code via `helyx setup` or `helyx mcp-register`. You can also register manually:
 
 ```bash
 # HTTP server
-claude mcp add --transport http -s user claude-bot http://localhost:3847/mcp
+claude mcp add --transport http -s user helyx http://localhost:3847/mcp
 
 # Channel adapter (per-session stdio)
-claude mcp add-json -s user claude-bot-channel '{
+claude mcp add-json -s user helyx-channel '{
   "type": "stdio",
   "command": "bun",
-  "args": ["/path/to/claude-bot/channel.ts"],
+  "args": ["/path/to/helyx/channel.ts"],
   "env": {
-    "DATABASE_URL": "postgres://claude_bot:claude_bot_secret@localhost:5433/claude_bot",
+    "DATABASE_URL": "postgres://helyx:helyx_secret@localhost:5433/helyx",
     "TELEGRAM_BOT_TOKEN": "your-bot-token"
   }
 }'
@@ -147,5 +147,5 @@ claude mcp add-json -s user claude-bot-channel '{
 
 To use the channel adapter, launch Claude with:
 ```bash
-claude --dangerously-load-development-channels server:claude-bot-channel
+claude --dangerously-load-development-channels server:helyx-channel
 ```

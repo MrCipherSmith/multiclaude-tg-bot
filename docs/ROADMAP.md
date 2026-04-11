@@ -1,4 +1,4 @@
-# Claude Bot — Roadmap
+# Helyx — Roadmap
 
 ## How to Use This Document
 
@@ -14,7 +14,43 @@
 
 ## ✅ Implemented
 
-### v1.22.0 (Latest)
+### v1.23.0 (Latest)
+
+#### Voice Replies (TTS) — Yandex SpeechKit + Smart Triggers
+
+- **Yandex SpeechKit** replaces Piper as primary TTS provider (`utils/tts.ts`): REST v1 API, voice `alena`, `ru-RU`, format `mp3`, up to 5000 chars per request. Requires `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` in `.env`.
+- **Removed Piper** — local TTS was low quality and required a binary bundle; directory preserved but unused.
+- **Groq Orpheus** (`canopylabs/orpheus-v1-english`) kept as fallback; English-only — avoid for Russian content. Free tier limit: **3600 tokens/day**. Upgrade to Dev Tier for production use.
+- **TTS priority**: Yandex SpeechKit → Groq Orpheus (OpenAI TTS still in code but not wired as default — add `OPENAI_API_KEY` to activate multilingual fallback).
+- **Two voice reply conditions** (`maybeAttachVoiceRaw`): (1) user sent a voice message → always reply with voice regardless of length; (2) reply text ≥300 chars (was 200) → auto-attach voice.
+- **`isVoice` flag in queue** (`bot/media.ts`): voice messages enqueued with `attachments = {"isVoice": true}` so the channel adapter can detect and force a voice reply.
+- **`forceVoice` propagation**: poller reads `row.attachments.isVoice` → sets `forceVoice` flag in `index.ts` → `tools.ts` passes it to `maybeAttachVoiceRaw` → `shouldSendVoice` check bypassed.
+- **System note injected per message** (`channel/poller.ts`): if voice → "ALWAYS send a voice reply"; otherwise → "Replies ≥300 chars sent automatically".
+- **`shouldSendVoice` regex fix** (`utils/tts.ts`): diff detection regex `^[+\-][^+\-]` incorrectly matched markdown list bullets (`- item`). Fixed to `^[+\-][^ +\-]` — only matches real diff lines like `+added` or `-removed`.
+- **Files changed:** `utils/tts.ts`, `bot/media.ts`, `channel/poller.ts`, `channel/tools.ts`, `channel/index.ts`, `config.ts`
+
+#### Session Lease: Force-Steal on Contention
+
+- **Bug fixed** (`channel/session.ts`): when multiple `channel.ts` processes start simultaneously for the same project (e.g. batch restart), the loser would fail to acquire the lease, then try to INSERT a new session row — hitting the `idx_sessions_project_remote` UNIQUE constraint and crashing with a fatal error.
+- **Fix**: after max retry attempts, force-update the lease on the existing session (unconditional `UPDATE`). The unique constraint exists precisely to enforce one remote session per project, so force-stealing is correct behavior.
+- **Files changed:** `channel/session.ts`
+
+#### run-cli.sh: Shared .env Loading
+
+- **Bug fixed** (`scripts/run-cli.sh`): API keys set in `helyx/.env` (e.g. `GROQ_API_KEY`, `YANDEX_API_KEY`) were not available in non-helyx project channels because only the project's own `.env` was loaded.
+- **Fix**: `load_env()` function now loads `helyx/.env` first, then overlays the project-specific `.env`. Already-set vars (e.g. Docker-injected `DATABASE_URL`) are never overridden.
+- **Files changed:** `scripts/run-cli.sh`
+
+#### Findings: TTS Provider Comparison
+
+| Provider | Language | Quality | Limit | Notes |
+|---|---|---|---|---|
+| **Yandex SpeechKit** | ru-RU + multilingual | ★★★★★ | Pay-per-use | Best Russian, REST v1, `Api-Key` auth, `YANDEX_API_KEY` + `YANDEX_FOLDER_ID` required, service account needs `ai.speechkit.tts` IAM role |
+| **Groq Orpheus** | English only | ★★★☆☆ | 3600 TPD (free) | `canopylabs/orpheus-v1-english`, WAV output, terrible for Russian; Dev Tier removes daily limit |
+| **OpenAI TTS** | Multilingual | ★★★★☆ | Pay-per-use | `tts-1`, voice `nova`, MP3, good Russian; `OPENAI_API_KEY` must be set separately (not merged into `OPENROUTER_API_KEY`) |
+| **Piper** | Russian | ★★☆☆☆ | Free, local | Offline, binary bundle, low naturalness; removed |
+
+### v1.22.0
 
 #### UX Improvements — Phase 1 & 2 (P1)
 - **Voice to disconnected topic** (`bot/media.ts`): early exit before Whisper transcription with user-facing error + `/standalone` hint
@@ -220,7 +256,7 @@
 - `.github/workflows/e2e.yml` ready — waiting for GitHub secrets to activate
 
 #### Google AI Provider in Setup Wizard
-- Re-added Google AI (Gemma 4) as interactive option in `claude-bot setup`
+- Re-added Google AI (Gemma 4) as interactive option in `helyx setup`
 - Wizard now presents all four supported providers: Anthropic / Google AI / OpenRouter / Ollama
 - Collects `GOOGLE_AI_API_KEY` and optionally `GOOGLE_AI_MODEL` (default: `gemma-4-31b-it`)
 - **Files changed:** `cli.ts` (~lines 111–130, provider selection block)
@@ -254,8 +290,8 @@
 - **Commits:** 3feb0f5, e88efb3
 
 #### CLI Changes
-- `claude-bot start` — spawns `claude` directly with `CHANNEL_SOURCE=local` (no `run-cli.sh`)
-- `claude-bot restart` — syncs `TELEGRAM_BOT_TOKEN` from `.env` into `~/.claude.json` MCP server config
+- `helyx start` — spawns `claude` directly with `CHANNEL_SOURCE=local` (no `run-cli.sh`)
+- `helyx restart` — syncs `TELEGRAM_BOT_TOKEN` from `.env` into `~/.claude.json` MCP server config
 - `run()` helper — new `stream: true` option pipes stdout/stderr directly to terminal (real-time build output)
 
 ### v1.11.0
@@ -348,9 +384,9 @@ None currently. Latest merged work completed in v1.22.0.
 
 These items have PRDs written and are ready to implement.
 
-### Project Rename: claude-bot → Iryx (temporary name, pending final decision)
+### Project Rename: helyx → Helyx (temporary name, pending final decision)
 - Full rename: CLI, MCP servers, Docker, DB, Telegram bot, domain, GitHub repo
-- **PRD:** `docs/requirements/rename-to-iryx-2026-04-10/en/rename-to-iryx.md`
+- **PRD:** `docs/requirements/rename-to-helyx-2026-04-10/en/rename-to-helyx.md`
 - **Blocked on:** final name decision
 
 ### GitHub Actions E2E CI — Activate Secrets
@@ -358,7 +394,7 @@ These items have PRDs written and are ready to implement.
 - **Blocked on:** adding 3 secrets in GitHub repo Settings → Secrets and variables → Actions:
   - `CLAUDE_BOT_TOKEN` — Telegram bot token
   - `ALLOWED_USERS` — `446593035`
-  - `TEST_BASE_URL` — `https://claude-bot.mrciphersmith.com`
+  - `TEST_BASE_URL` — `https://helyx.mrciphersmith.com`
 - **After:** E2E tests run automatically on every push to main and PRs
 
 ---
@@ -400,7 +436,7 @@ Features identified as valuable but without PRDs yet.
 
 ### Remote Access via SSH Tunnel (Automated)
 - Auto-setup Cloudflare Tunnel or frp tunnel for remote laptop deployment
-- `claude-bot setup-tunnel` command
+- `helyx setup-tunnel` command
 - **Why:** Extended guide exists (`guides/remote-laptop-setup.md`); could be fully automated.
 - **Effort:** High — tunnel management, DNS setup, certificate rotation
 

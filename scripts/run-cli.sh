@@ -19,17 +19,24 @@ cd "$PROJECT_DIR" || { echo "[run-cli] Cannot cd to $PROJECT_DIR"; exit 1; }
 echo "[run-cli] Project: $PROJECT_DIR"
 echo "[run-cli] Log: $LOG_FILE"
 
-# Load .env from project root so API keys (GROQ_API_KEY, OPENAI_API_KEY, etc.)
-# are available to the channel subprocess. Skip already-set vars to avoid
+# Load shared API keys from helyx .env (GROQ_API_KEY, OPENAI_API_KEY, etc.)
+# then overlay project-specific .env on top. Skip already-set vars to avoid
 # overriding Docker-injected values like DATABASE_URL.
-if [ -f ".env" ]; then
+load_env() {
+  local envfile="$1"
+  [ -f "$envfile" ] || return
   while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" =~ ^[[:space:]]*# ]] && continue  # skip comments
     [[ -z "${line// }" ]] && continue             # skip blank lines
     key="${line%%=*}"
     [[ -z "${!key}" ]] && export "$line" 2>/dev/null  # only if not already set
-  done < .env
-  echo "[run-cli] Loaded .env"
+  done < "$envfile"
+}
+
+HELYX_DIR="$(dirname "$(dirname "$(realpath "$0")")")"
+load_env "$HELYX_DIR/.env" && echo "[run-cli] Loaded helyx .env"
+if [ "$PROJECT_DIR" != "$HELYX_DIR" ] && [ -f ".env" ]; then
+  load_env ".env" && echo "[run-cli] Loaded project .env"
 fi
 
 # Detect if we're inside tmux
@@ -48,7 +55,7 @@ while true; do
   if [ -z "$IN_TMUX" ]; then
     # Outside tmux: capture terminal output via script for monitoring
     > "$OUTPUT_FILE"  # truncate
-    script -qfc "CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:claude-bot-channel" "$OUTPUT_FILE"
+    script -qfc "CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:helyx-channel" "$OUTPUT_FILE"
     EXIT_CODE=$?
   else
     # Inside tmux: watch for the channel permission prompt and auto-confirm it.
@@ -69,7 +76,7 @@ while true; do
       done
     ) &
     CONFIRM_PID=$!
-    CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:claude-bot-channel
+    CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:helyx-channel
     EXIT_CODE=$?
     # Clean up the confirm watcher if Claude exited before it finished
     kill "$CONFIRM_PID" 2>/dev/null

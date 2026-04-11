@@ -17,7 +17,7 @@ function startCleanupTimer() {
 }
 
 async function main() {
-  console.log("[main] starting claude-bot...");
+  console.log("[main] starting helyx...");
 
   // 1. Database migrations
   await migrate();

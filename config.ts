@@ -60,6 +60,10 @@ const EnvSchema = z.object({
   GROQ_API_KEY: z.string().default(""),
   WHISPER_URL: z.string().default("http://localhost:9000"),
 
+  // Yandex SpeechKit TTS
+  YANDEX_API_KEY: z.string().default(""),
+  YANDEX_FOLDER_ID: z.string().default(""),
+
   // GitHub
   GITHUB_TOKEN: z.string().default(""),
   GITHUB_USERNAME: z.string().default(""),
@@ -155,6 +159,8 @@ export const CONFIG = {
   // Voice transcription
   GROQ_API_KEY: env.GROQ_API_KEY,
   WHISPER_URL: env.WHISPER_URL,
+  YANDEX_API_KEY: env.YANDEX_API_KEY,
+  YANDEX_FOLDER_ID: env.YANDEX_FOLDER_ID,
 
   // Security / paths
   JWT_SECRET: env.JWT_SECRET,

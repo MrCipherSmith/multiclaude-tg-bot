@@ -1,6 +1,6 @@
 # Memory System
 
-Claude Bot has a two-layer memory system: short-term per session, and long-term semantic across sessions.
+Helyx has a two-layer memory system: short-term per session, and long-term semantic across sessions.
 
 ---
 
@@ -79,7 +79,7 @@ This means that when you start a new session on the same project, Claude loads t
 
 ## Work Summary on Exit
 
-When a **local** session exits (e.g., you `Ctrl+C` out of `claude-bot start`), the session generates a work summary:
+When a **local** session exits (e.g., you `Ctrl+C` out of `helyx start`), the session generates a work summary:
 
 - Structured format: `[DECISIONS][FILES][PROBLEMS][PENDING][CONTEXT]`
 - Vectorized and saved to long-term memory as `project_context`

@@ -10,7 +10,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config({ path: join(resolve(__dirname), "../.env"), override: true });
 
-const BASE_URL = process.env.TEST_BASE_URL ?? "https://claude-bot.mrciphersmith.com";
+const BASE_URL = process.env.TEST_BASE_URL ?? "https://helyx.mrciphersmith.com";
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const TEST_USER_ID = Number(process.env.ALLOWED_USERS?.split(",")[0] ?? "446593035");
 const AUTH_DIR = resolve(__dirname, ".auth");

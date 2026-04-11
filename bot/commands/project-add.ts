@@ -140,7 +140,7 @@ async function addProject(ctx: Context, path: string): Promise<void> {
   );
 }
 
-const BOT_RULES_MARKER = "<!-- claude-bot-rules -->";
+const BOT_RULES_MARKER = "<!-- helyx-rules -->";
 
 const BOT_RULES_SECTION = `
 ${BOT_RULES_MARKER}

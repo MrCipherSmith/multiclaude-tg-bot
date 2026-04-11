@@ -1,6 +1,6 @@
 # Remote Laptop Setup
 
-Connect your laptop to a claude-bot instance running on a remote server. This lets you use Claude CLI locally while the bot, database, and Telegram integration live on the server.
+Connect your laptop to a helyx instance running on a remote server. This lets you use Claude CLI locally while the bot, database, and Telegram integration live on the server.
 
 ---
 
@@ -10,8 +10,8 @@ Connect your laptop to a claude-bot instance running on a remote server. This le
   Your Laptop                        Remote Server
   ─────────────────────              ─────────────────────────────
   Claude CLI                         Docker: bot (port 3847)
-    └─ MCP: claude-bot (HTTP) ──────▶ /mcp endpoint
-    └─ MCP: claude-bot-channel        Docker: PostgreSQL (port 5433)
+    └─ MCP: helyx (HTTP) ──────▶ /mcp endpoint
+    └─ MCP: helyx-channel        Docker: PostgreSQL (port 5433)
          └─ channel.ts (local) ──────▶ DB via SSH tunnel
               ▲
               │ polls message_queue
@@ -27,7 +27,7 @@ Connect your laptop to a claude-bot instance running on a remote server. This le
 
 - SSH access to the server where the bot is running
 - `bun` installed on your laptop (`curl -fsSL https://bun.sh/install | bash`)
-- The claude-bot repository cloned on your laptop (for `channel.ts`)
+- The helyx repository cloned on your laptop (for `channel.ts`)
 - Claude CLI installed on your laptop
 
 ---
@@ -39,7 +39,7 @@ Full integration: real-time Telegram messages, memory, reply, status updates, pe
 ### Step 1: Run the setup wizard
 
 ```bash
-claude-bot remote
+helyx remote
 ```
 
 The wizard asks:
@@ -51,7 +51,7 @@ The wizard asks:
 | Bot port on server | `3847` | The port the bot HTTP API listens on |
 | PostgreSQL port on server | `5433` | The port PostgreSQL is mapped to on the server |
 | Telegram Bot Token | — | Same token as configured on the server |
-| Path to claude-bot on server | `/home/<user>/bots/claude-bot` | Where the repo lives on the server |
+| Path to helyx on server | `/home/<user>/bots/helyx` | Where the repo lives on the server |
 | Connection method | — | Choose **SSH tunnel** |
 
 ### Step 2: Start the SSH tunnel
@@ -70,23 +70,23 @@ This forwards:
 
 If you chose "Register now" during the wizard, two MCP servers are registered in Claude Code:
 
-**1. `claude-bot` — HTTP transport**
+**1. `helyx` — HTTP transport**
 
 ```bash
-claude mcp add --transport http -s user claude-bot http://localhost:3847/mcp
+claude mcp add --transport http -s user helyx http://localhost:3847/mcp
 ```
 
 Provides tools: `reply`, `remember`, `recall`, `list_sessions`, `session_info`, `set_session_name`, `search_project_context`, `update_status`, etc.
 
-**2. `claude-bot-channel` — stdio (channel adapter)**
+**2. `helyx-channel` — stdio (channel adapter)**
 
 ```bash
-claude mcp add-json -s user claude-bot-channel '{
+claude mcp add-json -s user helyx-channel '{
   "type": "stdio",
   "command": "bun",
-  "args": ["/path/to/claude-bot/channel.ts"],
+  "args": ["/path/to/helyx/channel.ts"],
   "env": {
-    "DATABASE_URL": "postgres://claude_bot:claude_bot_secret@localhost:5433/claude_bot",
+    "DATABASE_URL": "postgres://helyx:helyx_secret@localhost:5433/helyx",
     "OLLAMA_URL": "http://localhost:11434",
     "TELEGRAM_BOT_TOKEN": "<your-token>"
   }
@@ -101,7 +101,7 @@ claude mcp add-json -s user claude-bot-channel '{
 
 ```bash
 cd your-project
-claude --dangerously-load-development-channels server:claude-bot-channel
+claude --dangerously-load-development-channels server:helyx-channel
 ```
 
 Open Telegram — your session appears in `/sessions`. Messages, voice, photos all work.
@@ -124,12 +124,12 @@ Or by opening the port on the server (less secure).
 ### Step 2: Run the wizard and choose "HTTP only"
 
 ```bash
-claude-bot remote
+helyx remote
 ```
 
 Registers only:
 ```bash
-claude mcp add --transport http -s user claude-bot http://localhost:3847/mcp
+claude mcp add --transport http -s user helyx http://localhost:3847/mcp
 ```
 
 ### Step 3: Use Claude normally
@@ -152,19 +152,19 @@ If you prefer to configure everything by hand:
 ssh -L 3847:localhost:3847 -L 5433:localhost:5433 user@your-server
 
 # 2. Remove old registrations (if any)
-claude mcp remove claude-bot -s user
-claude mcp remove claude-bot-channel -s user
+claude mcp remove helyx -s user
+claude mcp remove helyx-channel -s user
 
 # 3. Register HTTP MCP server
-claude mcp add --transport http -s user claude-bot http://localhost:3847/mcp
+claude mcp add --transport http -s user helyx http://localhost:3847/mcp
 
 # 4. Register channel adapter
-claude mcp add-json -s user claude-bot-channel '{
+claude mcp add-json -s user helyx-channel '{
   "type": "stdio",
   "command": "bun",
-  "args": ["/home/you/bots/claude-bot/channel.ts"],
+  "args": ["/home/you/bots/helyx/channel.ts"],
   "env": {
-    "DATABASE_URL": "postgres://claude_bot:claude_bot_secret@localhost:5433/claude_bot",
+    "DATABASE_URL": "postgres://helyx:helyx_secret@localhost:5433/helyx",
     "OLLAMA_URL": "http://localhost:11434",
     "TELEGRAM_BOT_TOKEN": "your-bot-token"
   }
@@ -172,7 +172,7 @@ claude mcp add-json -s user claude-bot-channel '{
 
 # 5. Connect your project
 cd your-project
-claude --dangerously-load-development-channels server:claude-bot-channel
+claude --dangerously-load-development-channels server:helyx-channel
 ```
 
 ---
@@ -185,7 +185,7 @@ claude --dangerously-load-development-channels server:claude-bot-channel
 
 **MCP server not found**
 - Run `claude mcp list` to confirm registrations
-- Re-run `claude-bot remote` to re-register
+- Re-run `helyx remote` to re-register
 
 **Messages not appearing in CLI**
 - Confirm the SSH tunnel is active (`ssh -L ...` process is running)

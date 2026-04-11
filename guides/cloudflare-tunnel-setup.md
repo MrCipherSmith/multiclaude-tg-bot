@@ -48,15 +48,15 @@ This guide covers everything from buying a domain to making your local bot acces
 
 1. **Create DNS Entry:**
    ```bash
-   cloudflared tunnel route dns my-tunnel claude-bot.yourdomain.com
+   cloudflared tunnel route dns my-tunnel helyx.yourdomain.com
    ```
-   > If you get a "Record already exists" error, go to Cloudflare Dashboard → DNS → Records and delete the existing CNAME for `claude-bot` first.
+   > If you get a "Record already exists" error, go to Cloudflare Dashboard → DNS → Records and delete the existing CNAME for `helyx` first.
 
 2. **Configure Zero Trust (The "Bridge"):**
    - Go to [Zero Trust Dashboard](https://one.dash.cloudflare.com/) → Networks → Tunnels.
    - Click your tunnel → Configure → Public Hostname.
    - Click **Add a public hostname**:
-     - Subdomain: `claude-bot`
+     - Subdomain: `helyx`
      - Domain: `yourdomain.com`
      - Type: `HTTP`
      - URL: `localhost:3847`
@@ -91,7 +91,7 @@ Once the tunnel is active, switch the bot from polling to webhook:
 1. **Update `.env`:**
    ```env
    TELEGRAM_TRANSPORT=webhook
-   TELEGRAM_WEBHOOK_URL=https://claude-bot.yourdomain.com/telegram/webhook
+   TELEGRAM_WEBHOOK_URL=https://helyx.yourdomain.com/telegram/webhook
    TELEGRAM_WEBHOOK_SECRET=<random-secret-string>
    ```
 
@@ -102,14 +102,14 @@ Once the tunnel is active, switch the bot from polling to webhook:
 
 2. **Rebuild the bot:**
    ```bash
-   claude-bot restart
+   helyx restart
    # or: docker compose up -d --build bot
    ```
 
 3. **Verify:**
    ```bash
    # Check logs for "webhook registered at ..."
-   claude-bot logs
+   helyx logs
 
    # Check webhook status via Telegram API
    curl -s https://api.telegram.org/bot<TOKEN>/getWebhookInfo | jq .
@@ -121,7 +121,7 @@ Once the tunnel is active, switch the bot from polling to webhook:
 
 ```bash
 # Health check through the tunnel
-curl https://claude-bot.yourdomain.com/health
+curl https://helyx.yourdomain.com/health
 ```
 
 You should see:

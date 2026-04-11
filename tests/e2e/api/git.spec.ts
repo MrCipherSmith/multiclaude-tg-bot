@@ -4,7 +4,7 @@
  */
 import { test, expect } from "../fixtures";
 
-const BASE = process.env.TEST_BASE_URL ?? "https://claude-bot.mrciphersmith.com";
+const BASE = process.env.TEST_BASE_URL ?? "https://helyx.mrciphersmith.com";
 
 async function getActiveSessionId(request: any, authHeaders: Record<string, string>): Promise<number | null> {
   const res = await request.get(`${BASE}/api/sessions/active`, { headers: authHeaders });
