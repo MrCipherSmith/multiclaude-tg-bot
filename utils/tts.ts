@@ -16,7 +16,7 @@ async function getKokoro(): Promise<any> {
   const { KokoroTTS } = await import("kokoro-js");
   channelLogger.info({ dtype: CONFIG.KOKORO_DTYPE }, "tts: loading Kokoro model...");
   const t0 = Date.now();
-  _kokoroTTS = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0", {
+  _kokoroTTS = await KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
     dtype: CONFIG.KOKORO_DTYPE,
     device: "cpu",
   });
