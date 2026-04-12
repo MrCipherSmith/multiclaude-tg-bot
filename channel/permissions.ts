@@ -159,7 +159,18 @@ export class PermissionHandler {
       ...forumExtra,
     });
 
-    if (sendResult.ok && sendResult.messageId) {
+    if (!sendResult.ok) {
+      // Telegram send failed — auto-deny immediately rather than polling for 10 min
+      channelLogger.warn({ requestId: request_id, error: sendResult.errorBody }, "permission send failed — auto-denying");
+      await this.ctx.mcp.notification({
+        method: "notifications/claude/channel/permission",
+        params: { request_id, behavior: "deny" },
+      });
+      if (previewMsgId) deleteTelegramMessage(token, chatId, previewMsgId);
+      return;
+    }
+
+    if (sendResult.messageId) {
       await this.ctx.sql`
         INSERT INTO permission_requests (id, session_id, chat_id, tool_name, description, message_id)
         VALUES (${request_id}, ${sessionId}, ${chatId}, ${tool_name ?? "unknown"}, ${desc}, ${sendResult.messageId})
