@@ -436,6 +436,22 @@ const migrations: Migration[] = [
       await tx`ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS tmux_target TEXT`;
     },
   },
+  {
+    version: 17,
+    name: "process_health table",
+    up: async (tx) => {
+      // Written by admin-daemon every 30 s; read by /monitor bot command.
+      // name examples: "admin-daemon", "docker:helyx-bot-1", "docker:helyx-postgres-1"
+      await tx`
+        CREATE TABLE IF NOT EXISTS process_health (
+          name       TEXT PRIMARY KEY,
+          status     TEXT NOT NULL,
+          detail     JSONB,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+    },
+  },
 ];
 
 // --- Public API ---

@@ -41,6 +41,10 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     const { handleTmuxActionCallback } = await import("./commands/tmux-actions.ts");
     return handleTmuxActionCallback(ctx);
   }
+  if (data.startsWith("mon:")) {
+    const { handleMonitorCallback } = await import("./commands/monitor.ts");
+    return handleMonitorCallback(ctx);
+  }
   await ctx.answerCallbackQuery({ text: "Unknown action" });
 }
 

@@ -38,13 +38,63 @@ const sql = postgres(process.env.DATABASE_URL, { max: 3 });
 
 console.log("[admin-daemon] started, polling for commands...");
 
-// Start tmux permission watcher if bot token is available
+// Start tmux watchdog if bot token is available
 const botToken = process.env.TELEGRAM_BOT_TOKEN;
 if (botToken) {
   startTmuxWatchdog(sql, botToken);
 } else {
   console.warn("[admin-daemon] TELEGRAM_BOT_TOKEN not set — tmux watchdog disabled");
 }
+
+// --- Process health heartbeat ---
+// Writes admin-daemon PID + Docker container statuses to `process_health` every 30 s.
+// The /monitor bot command reads from this table.
+const DAEMON_START = Date.now();
+
+async function writeProcessHealth(): Promise<void> {
+  const uptimeMs = Date.now() - DAEMON_START;
+
+  // Own heartbeat
+  await sql`
+    INSERT INTO process_health (name, status, detail, updated_at)
+    VALUES ('admin-daemon', 'running', ${JSON.stringify({ pid: process.pid, uptime_ms: uptimeMs })}::jsonb, now())
+    ON CONFLICT (name) DO UPDATE SET status = 'running', detail = EXCLUDED.detail, updated_at = now()
+  `.catch(() => {});
+
+  // Docker container statuses
+  const dockerOut = await runShell(`docker ps --format "{{.Names}}\\t{{.Status}}" 2>/dev/null || true`);
+  for (const line of dockerOut.split("\n").filter(Boolean)) {
+    const tab = line.indexOf("\t");
+    if (tab === -1) continue;
+    const name = line.slice(0, tab).trim();
+    const status = line.slice(tab + 1).trim();
+    const running = !status.toLowerCase().startsWith("exited") && !status.toLowerCase().startsWith("dead");
+    await sql`
+      INSERT INTO process_health (name, status, detail, updated_at)
+      VALUES (${`docker:${name}`}, ${running ? "running" : "stopped"}, ${JSON.stringify({ status })}::jsonb, now())
+      ON CONFLICT (name) DO UPDATE SET status = EXCLUDED.status, detail = EXCLUDED.detail, updated_at = now()
+    `.catch(() => {});
+  }
+
+  // Remove entries for containers that no longer appear in `docker ps`
+  const activeNames = dockerOut.split("\n").filter(Boolean).map((l) => {
+    const tab = l.indexOf("\t");
+    return tab !== -1 ? `docker:${l.slice(0, tab).trim()}` : null;
+  }).filter(Boolean) as string[];
+
+  if (activeNames.length > 0) {
+    await sql`
+      DELETE FROM process_health
+      WHERE name LIKE 'docker:%' AND name != ALL(${activeNames})
+    `.catch(() => {});
+  }
+}
+
+// Write immediately on startup, then every 30 s
+writeProcessHealth().catch(() => {});
+const healthInterval = setInterval(() => writeProcessHealth().catch(() => {}), 30_000);
+// Prevent the interval from keeping the process alive if everything else exits
+healthInterval.unref?.();
 
 async function runCommand(cmd: string, args: string[] = []): Promise<{ ok: boolean; output: string }> {
   const proc = Bun.spawn(["bun", CLI, cmd, ...args], {
@@ -110,6 +160,30 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
           result = await runCommand("up", ["-s"]);
         }
         break;
+      }
+
+      case "docker_restart": {
+        const { container } = payload as { container: string };
+        if (!container) { result = { ok: false, output: "missing container" }; break; }
+        result = await runShell(`docker restart ${container} 2>&1`);
+        result = { ok: true, output: result.trim() || `restarted ${container}` };
+        break;
+      }
+
+      case "restart_admin_daemon": {
+        // Mark done first, then spawn a fresh instance and exit.
+        await sql`
+          UPDATE admin_commands SET status = 'done', result = 'spawning replacement', executed_at = now()
+          WHERE id = ${row.id}
+        `;
+        await runShell(
+          `nohup bun ${resolve(import.meta.dir, "admin-daemon.ts")} >> /tmp/admin-daemon.log 2>&1 &`
+        );
+        console.log("[admin-daemon] replacement spawned, exiting for restart");
+        await Bun.sleep(300);
+        clearInterval(healthInterval);
+        process.exit(0);
+        break; // unreachable, but satisfies TS
       }
 
       case "tmux_send_keys": {
