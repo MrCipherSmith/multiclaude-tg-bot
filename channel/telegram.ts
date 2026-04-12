@@ -7,10 +7,14 @@
 import { channelLogger } from "../logger.ts";
 
 const TELEGRAM_API = "https://api.telegram.org";
-const MAX_ERROR_RETRIES = 3; // for network errors and 5xx only
+const MAX_ERROR_RETRIES = 3;  // for network errors and 5xx only
+const FETCH_TIMEOUT_MS = 10_000; // 10 s per individual fetch — prevents infinite hang
+const MAX_TOTAL_MS = 60_000;     // 60 s total budget per call (covers 429 retries too)
 
 /** Low-level request with retry on 429 (rate limit) and 5xx errors.
- * 429 retries are unlimited — always waits the retry_after period.
+ * Each fetch is capped at FETCH_TIMEOUT_MS.
+ * Total call budget is MAX_TOTAL_MS — returns error if exceeded.
+ * 429 retries wait retry_after but respect the total budget.
  * Network/5xx errors retry up to MAX_ERROR_RETRIES times.
  */
 async function telegramRequest(
@@ -19,13 +23,20 @@ async function telegramRequest(
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; result?: unknown; errorBody?: string; status?: number }> {
   let errorAttempt = 0;
+  const deadline = Date.now() + MAX_TOTAL_MS;
+
   while (true) {
+    if (Date.now() >= deadline) {
+      return { ok: false, errorBody: `telegramRequest timeout after ${MAX_TOTAL_MS}ms (method: ${method})` };
+    }
+
     let res: Response;
     try {
       res = await fetch(`${TELEGRAM_API}/bot${token}/${method}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
     } catch (err) {
       if (errorAttempt >= MAX_ERROR_RETRIES) return { ok: false, errorBody: String(err) };
@@ -39,12 +50,14 @@ async function telegramRequest(
       return { ok: true, result: data.result };
     }
 
-    // Rate limit — wait retry_after seconds, then retry unconditionally
+    // Rate limit — wait retry_after but respect total deadline
     if (res.status === 429) {
       const data = (await res.json().catch(() => ({}))) as { parameters?: { retry_after?: number } };
       const wait = (data.parameters?.retry_after ?? 5) * 1000;
-      channelLogger.warn({ method, wait }, "Telegram rate limit — retrying");
-      await Bun.sleep(wait);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { ok: false, errorBody: `telegramRequest 429 deadline exceeded (method: ${method})` };
+      channelLogger.warn({ method, wait, remaining }, "Telegram rate limit — retrying");
+      await Bun.sleep(Math.min(wait, remaining));
       continue;
     }
 
