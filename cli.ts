@@ -704,19 +704,26 @@ async function prune() {
 // --- Tmux management ---
 
 const TMUX_SESSION = "bots";
-const TMUX_PROJECTS_FILE = `${BOT_DIR}/tmux-projects.json`;
 
 type Project = { name: string; path: string };
 
-async function loadProjects(): Promise<Project[]> {
-  if (existsSync(TMUX_PROJECTS_FILE)) {
-    return JSON.parse(await Bun.file(TMUX_PROJECTS_FILE).text());
-  }
-  return [];
+/** Run a psql query via docker compose exec, return rows as pipe-separated strings. */
+async function dbQuery(sql: string): Promise<{ ok: boolean; rows: string[] }> {
+  const result = await run([
+    "docker", "compose", "exec", "-T", "postgres",
+    "psql", "-U", "helyx", "-d", "helyx", "-t", "-A", "-c", sql,
+  ], { silent: true });
+  const rows = result.output.split("\n").map(l => l.trim()).filter(Boolean);
+  return { ok: result.ok, rows };
 }
 
-async function saveProjects(projects: Project[]) {
-  await Bun.write(TMUX_PROJECTS_FILE, JSON.stringify(projects, null, 2) + "\n");
+async function loadProjects(): Promise<Project[]> {
+  const { ok, rows } = await dbQuery("SELECT name, path FROM projects ORDER BY created_at");
+  if (!ok || rows.length === 0) return [];
+  return rows.map(row => {
+    const [name, ...rest] = row.split("|");
+    return { name: name.trim(), path: rest.join("|").trim() };
+  });
 }
 
 function windowName(p: Project): string {
@@ -920,15 +927,17 @@ async function tmuxAdd(dir?: string) {
   const customName = nameIdx >= 0 ? process.argv[nameIdx + 1] : undefined;
   const name = customName ?? basename(projectDir);
 
-  // Save to projects file (add or update)
-  const projects = await loadProjects();
-  const existing = projects.find(p => p.path === projectDir);
-  if (existing) {
-    existing.name = name;
-  } else {
-    projects.push({ name, path: projectDir });
+  // Upsert into DB
+  const escapedName = name.replace(/'/g, "''");
+  const escapedPath = projectDir.replace(/'/g, "''");
+  const { ok } = await dbQuery(
+    `INSERT INTO projects (name, path, tmux_session_name) VALUES ('${escapedName}', '${escapedPath}', '${escapedName}')
+     ON CONFLICT (path) DO UPDATE SET name = EXCLUDED.name, tmux_session_name = EXCLUDED.name`
+  );
+  if (!ok) {
+    console.log(c.red(`  Failed to save project to DB. Is Docker running?`));
+    return;
   }
-  await saveProjects(projects);
   console.log(`  ${c.green("✓")} Saved: ${windowName({ name, path: projectDir })}`);
   console.log(`\n  ${c.dim(`Run: helyx up to start all projects`)}`);
 }
@@ -957,18 +966,15 @@ async function tmuxRemove(name?: string) {
     return;
   }
 
-  const projects = await loadProjects();
-  // Match by name, path basename, or full window name
-  const filtered = projects.filter(p =>
-    p.name !== name && basename(p.path) !== name && windowName(p) !== name
+  const escaped = name.replace(/'/g, "''");
+  const { ok, rows } = await dbQuery(
+    `DELETE FROM projects WHERE name = '${escaped}' OR path LIKE '%/${escaped}' RETURNING name`
   );
-
-  if (filtered.length === projects.length) {
-    console.log(`  ${c.yellow(name)} not found in project list.`);
+  if (!ok || rows.length === 0) {
+    console.log(`  ${c.yellow(name)} not found in DB.`);
     return;
   }
 
-  await saveProjects(filtered);
   console.log(`  ${c.green("Removed:")} ${name}`);
 }
 
