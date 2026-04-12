@@ -37,6 +37,10 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     const { handleDeleteSession } = await import("./commands/session.ts");
     return handleDeleteSession(ctx);
   }
+  if (data.startsWith("tmux:")) {
+    const { handleTmuxActionCallback } = await import("./commands/tmux-actions.ts");
+    return handleTmuxActionCallback(ctx);
+  }
   await ctx.answerCallbackQuery({ text: "Unknown action" });
 }
 

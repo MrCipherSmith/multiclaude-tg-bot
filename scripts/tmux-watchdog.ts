@@ -252,11 +252,16 @@ async function sendAlert(
   chatId: string,
   text: string,
   forumExtra: Record<string, unknown> = {},
+  buttons?: Array<{ text: string; callback_data: string }>,
 ): Promise<void> {
+  const reply_markup = buttons?.length
+    ? { inline_keyboard: [buttons] }
+    : undefined;
   await telegramPost(token, "sendMessage", {
     chat_id: Number(chatId),
     text,
     parse_mode: "HTML",
+    ...(reply_markup ? { reply_markup } : {}),
     ...forumExtra,
   });
 }
@@ -502,6 +507,7 @@ async function pollWindows(
           `⚠️ <b>${escapeHtml(winName)}</b>: session may be stuck\n` +
           `Last MCP activity: <b>${staleMin} min ago</b> — Claude is showing spinner but channel is not responding.`,
           chat.forumExtra,
+          [{ text: "⚡ Interrupt", callback_data: `tmux:esc:${winName}` }],
         );
         markAlerted(state, "stall");
       }
@@ -520,6 +526,7 @@ async function pollWindows(
           `📝 <b>${escapeHtml(winName)}</b>: ${editor} opened in terminal\n` +
           `Session is blocked until the editor is closed.`,
           chat.forumExtra,
+          [{ text: "📝 Force close (`:q!`)", callback_data: `tmux:close_editor:${winName}` }],
         );
         markAlerted(state, "editor");
       }

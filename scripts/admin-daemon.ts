@@ -112,6 +112,34 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
         break;
       }
 
+      case "tmux_send_keys": {
+        const { project, action } = payload as { project: string; action: string };
+        if (!project) { result = { ok: false, output: "missing project" }; break; }
+
+        const target = `bots:${project}`;
+
+        if (action === "esc" || action === "interrupt") {
+          // Send Escape to trigger Claude's interrupt flow
+          await runShell(`tmux send-keys -t "${target}" Escape`);
+          // Wait briefly, then auto-confirm if Claude shows a confirmation prompt
+          await Bun.sleep(800);
+          const out = await runShell(`tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`);
+          if (/enter to confirm/i.test(out) || /esc to cancel/i.test(out)) {
+            await runShell(`tmux send-keys -t "${target}" "" Enter`);
+          }
+          result = { ok: true, output: `Sent Escape to ${target}` };
+        } else if (action === "close_editor") {
+          // Force-close vim (:q!) — works for git commit editors opened without -m
+          await runShell(`tmux send-keys -t "${target}" Escape`);
+          await Bun.sleep(200);
+          await runShell(`tmux send-keys -t "${target}" ':q!' Enter`);
+          result = { ok: true, output: `Sent :q! to ${target}` };
+        } else {
+          result = { ok: false, output: `unknown action: ${action}` };
+        }
+        break;
+      }
+
       case "proj_stop": {
         let { name, project_id } = payload;
         if (!name && project_id) {
