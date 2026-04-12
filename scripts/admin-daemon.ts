@@ -91,9 +91,11 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
         const hasSession = await runShell("tmux has-session -t bots 2>/dev/null");
         if (hasSession.ok) {
           const wname = `${name}`;
+          // Use window index (not name) for send-keys to avoid race where the shell
+          // auto-renames the window before send-keys runs.
           result = await runShell(
-            `tmux new-window -t bots -n "${wname}" -c "${path}" && ` +
-            `tmux send-keys -t "bots:${wname}" "${BOT_DIR}/scripts/run-cli.sh ${path}" Enter`
+            `idx=$(tmux new-window -t bots -n "${wname}" -c "${path}" -P -F "#{window_index}") && ` +
+            `tmux send-keys -t "bots:$idx" "${BOT_DIR}/scripts/run-cli.sh ${path}" Enter`
           );
         } else {
           result = await runCommand("up", ["-s"]);
