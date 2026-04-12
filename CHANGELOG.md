@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.24.0
+
+### tmux Watchdog — Session Health Monitoring & External MCP Permissions
+
+Host-side watchdog that polls active Claude Code sessions every 5 s and routes problems to Telegram with actionable buttons.
+
+#### Permission routing for external MCP tools
+
+Claude Code's built-in `permission_request` channel only covers native tools (Bash, Edit, Read). External MCP tools (docker, github, etc.) show an interactive dialog in the terminal. The watchdog intercepts these and routes them to Telegram with the same **✅ Yes / ✅ Always / ❌ No** buttons. User response is fed back via `tmux send-keys`. The **Always** action writes the tool to `settings.local.json` for permanent auto-approval.
+
+#### Stall detection
+
+Detects when a session shows a spinner but `last_active` hasn't been updated for 2.5+ min — the definitive signal of a hung MCP transport. Alert includes **[⚡ Interrupt]** button that sends `Escape` + auto-confirms the interrupt prompt. Cooldown: 10 min.
+
+#### Editor detection
+
+Detects vim/nano opened in the pane (e.g. from `git commit` without `-m`). Alert includes **[📝 Force close]** button that sends `:q!` `Enter`. Cooldown: 5 min, resets when editor closes.
+
+#### Credential prompt detection
+
+Detects `Password:`, passphrase, or git https Username prompts blocking the session. Informational alert. Cooldown: 5 min.
+
+#### Crash / restart detection
+
+Detects `[run-cli] Exited with code N` from the auto-restart wrapper. Informational alert; `run-cli.sh` restarts automatically. Cooldown: 3 min.
+
+#### Architecture
+
+- `scripts/tmux-watchdog.ts` — replaces `tmux-permission-watcher.ts`; all detectors in one file
+- `scripts/admin-daemon.ts` — starts the watchdog; adds `tmux_send_keys` command handler
+- `bot/commands/tmux-actions.ts` — new `tmux:ACTION:PROJECT` callback handler
+- `bot/callbacks.ts` — registers `tmux:` prefix
+- `memory/db.ts` — migration v16: `tmux_target TEXT` column on `permission_requests`
+- `docs/tmux-watchdog.md` — architecture and detector reference
+- `tests/unit/tmux-watchdog.test.ts` — 64 unit tests for all pure detection functions
+
+Only windows with `status = 'active'` DB sessions are polled; idle projects are skipped entirely.
+
+#### Telegram timeout fix (v1.23.x backport)
+
+- `channel/telegram.ts` — `FETCH_TIMEOUT_MS = 10 s` + `MAX_TOTAL_MS = 60 s` total deadline on all Telegram API calls; prevents infinite hang on network stall (root cause of 37-min session freezes)
+- `channel/permissions.ts` — fast-fail auto-deny when `sendTelegramMessage` fails instead of silently polling for 10 min
+
+---
+
 ## v1.23.0
 
 ### Admin Daemon Auto-Start

@@ -126,7 +126,7 @@ const PERM_CHOICE_RE  = /❯\s*1[.)]\s*yes/i;
 const SPINNER_RE      = /^[·✶✻]\s+.+/;
 const VIM_RE          = /--\s*(INSERT|NORMAL|VISUAL|REPLACE)\s*--/;
 const NANO_RE         = /\^G\s*(Get Help|Help)|\^X\s*(Exit|Close)/i;
-const CREDENTIAL_RE   = /(Password\s*:|Enter passphrase for|Username for ['"]https?:\/\/|Token\s*:)\s*$/i;
+const CREDENTIAL_RE   = /(password|passphrase|username for\s+['"]https?:|token).*:\s*$/i;
 const CRASH_RE        = /\[run-cli\] Exited with code ([1-9]\d*)/;
 
 function detectPermissionPrompt(
