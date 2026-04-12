@@ -57,6 +57,15 @@ export function MonitorPage() {
 
   const botContainer = dockerRows.find((r) => r.name.includes('bot-') || r.name.includes('-bot'))
 
+  // Group by prefix
+  const dockerGroups: Record<string, typeof dockerRows> = {}
+  for (const row of dockerRows) {
+    const cname = row.name.slice('docker:'.length)
+    const prefix = cname.includes('-') ? cname.split('-')[0] : cname
+    if (!dockerGroups[prefix]) dockerGroups[prefix] = []
+    dockerGroups[prefix].push(row)
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -111,9 +120,14 @@ export function MonitorPage() {
         {dockerRows.length === 0 ? (
           <p className="text-gray-500 text-sm">No containers found — admin-daemon may not be running.</p>
         ) : (
-          <div className="space-y-2">
-            {dockerRows.map((row) => (
-              <DockerRow key={row.name} row={row} />
+          <div className="divide-y divide-gray-800/50">
+            {Object.entries(dockerGroups).map(([prefix, rows]) => (
+              <div key={prefix} className="py-2 first:pt-0 last:pb-0">
+                <div className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-1.5">{prefix}</div>
+                <div className="space-y-1.5">
+                  {rows.map((row) => <DockerRow key={row.name} row={row} />)}
+                </div>
+              </div>
             ))}
           </div>
         )}

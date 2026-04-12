@@ -78,6 +78,15 @@ export function ProcessHealth() {
     : false;
   const botContainer = dockerRows.find((r) => r.name.includes("bot-") || r.name.includes("-bot"));
 
+  // Group docker containers by prefix (e.g. "helyx", "carlson", "deploy")
+  const dockerGroups: Record<string, ProcessHealthRow[]> = {};
+  for (const row of dockerRows) {
+    const cname = row.name.slice("docker:".length);
+    const prefix = cname.includes("-") ? cname.split("-")[0] : cname;
+    if (!dockerGroups[prefix]) dockerGroups[prefix] = [];
+    dockerGroups[prefix].push(row);
+  }
+
   return (
     <div className="flex flex-col gap-3 p-3 overflow-y-auto">
       {/* Refresh */}
@@ -126,15 +135,25 @@ export function ProcessHealth() {
             </button>
           )}
         </div>
-        <div className="px-4 py-3">
+        <div className="px-1">
           {dockerRows.length === 0 ? (
-            <p className="text-sm text-[var(--tg-hint)]">No containers found</p>
+            <p className="px-4 py-3 text-sm text-[var(--tg-hint)]">No containers found</p>
           ) : (
-            <div className="space-y-2">
-              {dockerRows.map((row) => (
-                <DockerRow key={row.name} row={row} />
-              ))}
-            </div>
+            Object.entries(dockerGroups).map(([prefix, rows], gi) => (
+              <div key={prefix}>
+                {gi > 0 && <div className="mx-4 border-t border-black/5" />}
+                <div className="px-4 pt-2 pb-1">
+                  <span className="text-[10px] font-semibold text-[var(--tg-hint)] uppercase tracking-widest">{prefix}</span>
+                </div>
+                <div className="pb-2">
+                  {rows.map((row) => (
+                    <div key={row.name} className="px-4 py-1">
+                      <DockerRow row={row} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))
           )}
         </div>
       </div>
