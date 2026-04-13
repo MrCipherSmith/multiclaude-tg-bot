@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.27.5
+
+### fix(status): spinner animates at 1 fps instead of every 5 s
+
+Status message edit interval reduced from 5 000 ms to 1 000 ms so the braille
+spinner visibly rotates every second. The edit is cheap — pane snapshot and token
+counters are already cached; only the spinner frame and elapsed counter change on
+each tick.
+
+---
+
 ## v1.27.4
 
 ### feat(bot): `/interrupt` command — interrupt running Claude session via Telegram

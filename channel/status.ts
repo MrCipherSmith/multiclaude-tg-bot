@@ -261,7 +261,7 @@ export class StatusManager {
         spinnerFrame: 0,
         lastUpdateAt: Date.now(),
       };
-      state.timer = setInterval(() => this.editStatusMessage(state), 5000);
+      state.timer = setInterval(() => this.editStatusMessage(state), 1000);
       state.paneTimer = setInterval(() => this.refreshPaneSnapshot(state).catch(() => {}), 10_000);
       state.dbHeartbeatTimer = setInterval(() => this.heartbeatStatusMessage(key), 30_000);
       this.activeStatus.set(key, state);
