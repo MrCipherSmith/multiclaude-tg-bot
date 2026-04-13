@@ -1,5 +1,57 @@
 # Changelog
 
+## v1.27.4
+
+### feat(bot): `/interrupt` command — interrupt running Claude session via Telegram
+
+New `/interrupt` Telegram command (`bot/commands/interrupt.ts`):
+
+- If one active remote session → interrupts immediately, no extra prompts.
+- If multiple active sessions → shows inline keyboard with ⚡ button per session.
+- Inserts `tmux_send_keys` + `esc` action into `admin_commands` queue.
+
+### fix(admin-daemon): poll-based interrupt confirmation instead of fixed sleep
+
+`tmux_send_keys` with `action: "esc"` now polls for the confirmation dialog
+(`Enter to confirm / Esc to cancel`) in a loop (200 ms intervals, 1.5 s deadline)
+instead of a fixed 800 ms sleep. Faster on quick machines, reliable on slow ones.
+Result message distinguishes confirmed vs. Escape-only.
+
+### feat(status): animated braille spinner with stale indicator
+
+`channel/status.ts` now uses a 10-frame braille spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) instead
+of a static ⏳ icon. If no `update_status` call arrives for >60 s, the spinner
+shows ⚠️ to indicate the session may be stalled.
+
+### fix(channel/tools): delete status after reply is sent
+
+`reply` tool previously deleted the status message before sending the reply, so
+the ✅ completion indicator briefly disappeared before the answer appeared.
+Status is now deleted after the reply is confirmed sent.
+
+### fix(run-cli.sh): faster and longer auto-confirm polling
+
+Shell-side "development channels" warning auto-confirmer now polls every 0.5 s
+(was 1 s) for up to 120 iterations (60 s, was 30 s). Comment updated to reflect
+the actual behaviour.
+
+### fix(tmux-watchdog): fallback dev-channel prompt auto-confirm
+
+Added `detectDevChannelPrompt()` as a watchdog fallback for the startup
+`--dangerously-load-development-channels` warning. If `run-cli.sh`'s shell-side
+watcher races or times out, the watchdog silently sends Enter on the next poll
+cycle. No Telegram notification is generated.
+
+### fix(tmux-monitor): visible-only pane capture; normalize status for comparison
+
+`captureTmux()` now captures only the current visible screen (no `-S` scrollback
+lines), eliminating ghost detections from already-answered dialogs and stale tool
+calls. `normalizeForComparison()` strips elapsed time and token counters before
+diffing, preventing status updates from firing every 5 s just because the timer
+incremented.
+
+---
+
 ## v1.27.3
 
 ### fix(projects): idempotency — suppress duplicate start/stop commands

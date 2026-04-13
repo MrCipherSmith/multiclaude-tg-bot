@@ -37,6 +37,8 @@ interface StatusState {
   timer: ReturnType<typeof setInterval> | null;
   paneTimer: ReturnType<typeof setInterval> | null;
   dbHeartbeatTimer: ReturnType<typeof setInterval> | null;
+  spinnerFrame: number;
+  lastUpdateAt: number;
 }
 
 interface SessionStats {
@@ -72,10 +74,18 @@ function normalizeStage(stage: string): string {
 
 const STATUS_VISIBLE_LINES = 10;
 const STATUS_MAX_LINES = 40;
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_STALE_MS = 60_000;
 
-function formatStatusText(stage: string, elapsed: string, tokens: string, paneSnapshot?: string | null): string {
+function getSpinnerIcon(spinnerFrame: number, lastUpdateAt: number): string {
+  if (Date.now() - lastUpdateAt > SPINNER_STALE_MS) return "⚠️";
+  return SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length];
+}
+
+function formatStatusText(stage: string, elapsed: string, tokens: string, paneSnapshot?: string | null, spinnerIcon?: string): string {
   const normalized = normalizeStage(stage);
-  const header = `⏳ <i>${elapsed}${tokens}</i>`;
+  const icon = spinnerIcon ?? SPINNER_FRAMES[0];
+  const header = `${icon} <i>${elapsed}${tokens}</i>`;
 
   let stageBody: string;
   if (normalized.includes("\n")) {
@@ -228,7 +238,7 @@ export class StatusManager {
 
     try {
       const t0 = Date.now();
-      const initialText = formatStatusText(`${prefix}${stage}`, "0s", "");
+      const initialText = formatStatusText(`${prefix}${stage}`, "0s", "", null, SPINNER_FRAMES[0]);
       const extra: Record<string, unknown> = { parse_mode: "HTML", ...(forum?.extra ?? {}) };
       const result = await sendTelegramMessage(token, effectiveChatId, initialText, extra);
       const tgRtt = Date.now() - t0;
@@ -248,6 +258,8 @@ export class StatusManager {
         timer: null,
         paneTimer: null,
         dbHeartbeatTimer: null,
+        spinnerFrame: 0,
+        lastUpdateAt: Date.now(),
       };
       state.timer = setInterval(() => this.editStatusMessage(state), 5000);
       state.paneTimer = setInterval(() => this.refreshPaneSnapshot(state).catch(() => {}), 10_000);
@@ -275,6 +287,7 @@ export class StatusManager {
     // Activity observed — Claude is alive, reset the response guard so it does not
     // fire prematurely during legitimate long-running tasks.
     this.resetResponseGuard(chatId);
+    state.lastUpdateAt = Date.now();
     state.stage = stage;
     await this.editStatusMessage(state);
   }
@@ -302,11 +315,13 @@ export class StatusManager {
   private async editStatusMessage(state: StatusState): Promise<void> {
     const token = this.ctx.token();
     if (!token) return;
+    state.spinnerFrame = (state.spinnerFrame + 1) % SPINNER_FRAMES.length;
+    const spinnerIcon = getSpinnerIcon(state.spinnerFrame, state.lastUpdateAt);
     const elapsed = formatElapsed(Date.now() - state.startedAt);
     const key = state.threadId ? `${state.chatId}:${state.threadId}` : state.chatId;
     const tokens = this.lastTokenInfo.get(key);
     const tokenStr = tokens ? ` · ↓ ${tokens}` : "";
-    const text = formatStatusText(state.stage, elapsed, tokenStr, state.paneSnapshot);
+    const text = formatStatusText(state.stage, elapsed, tokenStr, state.paneSnapshot, spinnerIcon);
     const res = await editTelegramMessage(token, state.chatId, state.messageId, text, { parse_mode: "HTML" });
     if (!res.ok && !res.errorBody?.includes("message is not modified")) {
       channelLogger.warn({ error: res.errorBody, messageId: state.messageId }, "editStatusMessage failed");

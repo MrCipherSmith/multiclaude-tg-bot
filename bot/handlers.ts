@@ -69,6 +69,7 @@ import { handleStats, handleLogs, handleStatus, handlePending, handleTools, hand
 import { handleAdd } from "./commands/add.ts";
 import { handleModel } from "./commands/model.ts";
 import { handleRemoteControl } from "./commands/remote-control.ts";
+import { handleInterrupt } from "./commands/interrupt.ts";
 import { handleMonitor } from "./commands/monitor.ts";
 import { handleProjects } from "./commands/projects.ts";
 import { handleProjectAdd } from "./commands/project-add.ts";
@@ -138,6 +139,7 @@ export function registerHandlers(b: Bot): void {
   b.command("codex_review", handleCodexReview);
 
   // Remote control & project management
+  b.command("interrupt", handleInterrupt);
   b.command("remote_control", handleRemoteControl);
   b.command("monitor", handleMonitor);
   b.command("projects", handleProjects);

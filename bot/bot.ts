@@ -45,6 +45,7 @@ export function createBot(): Bot {
     { command: "rules", description: "Rules from goodai-base" },
     { command: "tools", description: "MCP tools" },
     // Remote control
+    { command: "interrupt", description: "Interrupt running Claude session (send Escape)" },
     { command: "monitor", description: "Process dashboard (daemon, Docker, sessions)" },
     { command: "remote_control", description: "tmux bots status (Kill/Start)" },
     { command: "projects", description: "List projects (Start/Stop)" },

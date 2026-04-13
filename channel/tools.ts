@@ -203,7 +203,6 @@ export function registerTools(
         channelLogger.info({ phase: "tools", step: "reply-called", chatId, t: Date.now() }, "perf");
         status.stopTypingForChat(chatId);
         status.stopProgressMonitorForChat(chatId);
-        await status.deleteStatusMessage(chatId);
 
         const token = ctx.token();
         if (!token) {
@@ -292,6 +291,8 @@ export function registerTools(
         }
 
         channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
+        // Delete status only after the message is actually sent — so ✅ appears together with the reply
+        await status.deleteStatusMessage(chatId);
         // Fire-and-forget TTS voice attachment (forced if user sent voice, otherwise ≥300 chars)
         maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null, ctx.forceVoice?.() ?? false);
         if (sessionId) {

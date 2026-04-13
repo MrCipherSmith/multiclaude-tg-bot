@@ -47,11 +47,15 @@ async function resolveTmuxTarget(projectName: string): Promise<string | null> {
   return null;
 }
 
-/** Capture last N lines from tmux pane */
-async function captureTmux(target: string, lines = 40): Promise<string> {
+/** Capture current visible screen from tmux pane (no scrollback).
+ *  Current activity (spinner, tool calls) is always at the bottom of the
+ *  visible screen — scrollback only adds stale historical content that
+ *  causes ghost detections and inflates the status with old tool calls.
+ */
+async function captureTmux(target: string): Promise<string> {
   try {
     const proc = Bun.spawn(
-      ["tmux", "capture-pane", "-t", target, "-p", "-S", `-${lines}`],
+      ["tmux", "capture-pane", "-t", target, "-p"],
       { stdout: "pipe", stderr: "pipe" },
     );
     const output = await new Response(proc.stdout).text();
@@ -176,6 +180,21 @@ function parseStatus(output: string): string | null {
   return parsed.join("\n");
 }
 
+/** Strip elapsed time/token counters from spinner lines for comparison.
+ *  Prevents re-sending status every 2s just because the timer incremented.
+ *  Example: "⏳ Brewing… (10s · ↓ 386 tokens · thinking)" →
+ *           "⏳ Brewing… ( · ↓  tokens · thinking)"
+ */
+function normalizeForComparison(s: string): string {
+  return s
+    .replace(/\d+m\s*\d+s/g, "") // "1m 23s"
+    .replace(/\d+s/g, "")         // "10s"
+    .replace(/↓\s*\d+\s*tokens/g, "↓ tokens") // "↓ 386 tokens"
+    .replace(/↑\s*\d+\s*tokens/g, "↑ tokens") // "↑ 123 tokens"
+    .replace(/\(\s*[·\s]*\)/g, "")             // empty parens "(  · )"
+    .trim();
+}
+
 /** Start monitoring a tmux session, calling onStatus with updates */
 export async function startTmuxMonitor(
   projectName: string,
@@ -193,7 +212,7 @@ export async function startTmuxMonitor(
         const output = await captureTmux(target);
         const status = parseStatus(output);
 
-        if (status && status !== lastStatus) {
+        if (status && normalizeForComparison(status) !== normalizeForComparison(lastStatus)) {
           lastStatus = status;
           onStatus(status);
         }

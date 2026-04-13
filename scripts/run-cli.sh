@@ -58,12 +58,12 @@ while true; do
     script -qfc "CHANNEL_SOURCE=remote claude --dangerously-load-development-channels server:helyx-channel" "$OUTPUT_FILE"
     EXIT_CODE=$?
   else
-    # Inside tmux: watch for the channel permission prompt and auto-confirm it.
-    # Polls every second for up to 30s; stops as soon as prompt is confirmed or disappears.
+    # Inside tmux: watch for the "development channels" warning prompt and auto-confirm.
+    # Checks immediately, then every 0.5s for up to 60s (120 iterations).
+    # Stops as soon as the prompt is confirmed or Claude moves past it.
     PANE="${TMUX_PANE}"
     (
-      for i in $(seq 1 30); do
-        sleep 1
+      for i in $(seq 1 120); do
         out=$(tmux capture-pane -t "$PANE" -p 2>/dev/null)
         if echo "$out" | grep -q "Enter to confirm"; then
           tmux send-keys -t "$PANE" "" Enter
@@ -73,6 +73,7 @@ while true; do
         if echo "$out" | grep -q "Listening for channel\|run-cli\] Exited"; then
           break
         fi
+        sleep 0.5
       done
     ) &
     CONFIRM_PID=$!

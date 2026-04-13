@@ -162,6 +162,24 @@ const VIM_RE          = /--\s*(INSERT|NORMAL|VISUAL|REPLACE)\s*--/;
 const NANO_RE         = /\^G\s*(Get Help|Help)|\^X\s*(Exit|Close)/i;
 const CREDENTIAL_RE   = /(password|passphrase|username for\s+['"]https?:|token).*:\s*$/i;
 const CRASH_RE        = /\[run-cli\] Exited with code ([1-9]\d*)/;
+// "development channels" startup warning — shown once per new Claude Code process.
+// run-cli.sh already tries to auto-confirm, but this is a watchdog fallback for
+// cases where the shell-side watcher times out or races with a window recreation.
+const DEV_CHANNEL_SIGNAL_RE = /dangerously-load-development-channels/i;
+const DEV_CHANNEL_CONFIRM_RE = /Enter to confirm/i;
+
+/**
+ * Detect the "development channels" startup warning that Claude Code shows when
+ * launched with --dangerously-load-development-channels. Returns true if the
+ * dialog is visible and waiting for Enter.
+ * Only checks the visible screen (no scroll-back) — if it scrolled away, it was
+ * already confirmed.
+ */
+function detectDevChannelPrompt(lines: string[]): boolean {
+  const hasWarning = lines.some((l) => DEV_CHANNEL_SIGNAL_RE.test(l));
+  const hasConfirm = lines.some((l) => DEV_CHANNEL_CONFIRM_RE.test(l));
+  return hasWarning && hasConfirm;
+}
 
 function detectPermissionPrompt(
   lines: string[],
@@ -563,9 +581,19 @@ async function pollWindows(
     // Write last meaningful lines as pane_snapshot for live status display in Telegram
     await writePaneSnapshot(sql, session.sessionId, lines);
 
+    // 0. "Development channels" startup warning — auto-confirm silently.
+    //    run-cli.sh already handles this, but the watchdog acts as a fallback
+    //    if the shell-side watcher races or times out (e.g. slow Claude startup,
+    //    window recreation via proj_start). No Telegram message needed.
+    const visibleLines = await capturePaneVisible(tmuxTarget);
+    if (detectDevChannelPrompt(visibleLines)) {
+      console.log(`[watchdog] dev-channel prompt in ${winName} — auto-confirming`);
+      await runShell(`tmux send-keys -t "${TMUX_SESSION}:${tmuxTarget}" "" Enter`);
+      continue;
+    }
+
     // 1. Permission prompt (highest priority — needs immediate interaction).
     //    Use visible-only capture: dialogs in scroll-back are already answered.
-    const visibleLines = await capturePaneVisible(tmuxTarget);
     const perm = detectPermissionPrompt(visibleLines);
     if (perm) {
       await handlePermissionPrompt(sql, token, tmuxTarget, state, session, perm);

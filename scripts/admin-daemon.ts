@@ -197,15 +197,23 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
         const target = `bots:${project}`;
 
         if (action === "esc" || action === "interrupt") {
-          // Send Escape to trigger Claude's interrupt flow
+          // Send Escape to trigger Claude's interrupt flow.
           await runShell(`tmux send-keys -t "${target}" Escape`);
-          // Wait briefly, then auto-confirm if Claude shows a confirmation prompt
-          await Bun.sleep(800);
-          const out = await runShell(`tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`);
-          if (/enter to confirm/i.test(out) || /esc to cancel/i.test(out)) {
-            await runShell(`tmux send-keys -t "${target}" "" Enter`);
+          // Poll for the confirmation dialog (Enter to confirm / Esc to cancel)
+          // instead of a fixed sleep — faster on fast machines, reliable on slow ones.
+          const CONFIRM_RE = /enter to confirm|esc to cancel/i;
+          const deadline = Date.now() + 1500;
+          let confirmed = false;
+          while (Date.now() < deadline) {
+            await Bun.sleep(200);
+            const out = await runShell(`tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`);
+            if (CONFIRM_RE.test(out)) {
+              await runShell(`tmux send-keys -t "${target}" "" Enter`);
+              confirmed = true;
+              break;
+            }
           }
-          result = { ok: true, output: `Sent Escape to ${target}` };
+          result = { ok: true, output: confirmed ? `Interrupted ${target} (confirmed)` : `Sent Escape to ${target}` };
         } else if (action === "close_editor") {
           // Force-close vim (:q!) — works for git commit editors opened without -m
           await runShell(`tmux send-keys -t "${target}" Escape`);
