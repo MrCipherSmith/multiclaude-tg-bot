@@ -12,6 +12,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { StatusManager } from "./status.ts";
 import { sendTelegramMessage, deleteTelegramMessage, editTelegramMessage } from "./telegram.ts";
 import { channelLogger } from "../logger.ts";
+import { escapeHtml } from "../utils/html.ts";
 
 export interface PermissionContext {
   sql: postgres.Sql;
@@ -26,9 +27,6 @@ export interface PermissionContext {
   forumTopicId?: () => number | null;
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 export class PermissionHandler {
   private autoApprovePatterns = new Set<string>();

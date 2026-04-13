@@ -26,6 +26,7 @@
  */
 
 import type postgres from "postgres";
+import { escapeHtml } from "../utils/html.ts";
 
 // ---------------------------------------------------------------------------
 // Config
@@ -262,10 +263,6 @@ function markAlerted(state: WindowState, kind: AlertKind): void {
 // ---------------------------------------------------------------------------
 // Telegram helpers
 // ---------------------------------------------------------------------------
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function resolveChat(
   session: ActiveSession,

@@ -146,6 +146,10 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
       case "proj_start": {
         const { path } = payload;
         if (!path) { result = { ok: false, output: "missing path" }; break; }
+        // Validate path to prevent shell injection (alphanumeric, /, -, _, .)
+        if (!/^[a-zA-Z0-9/_.-]+$/.test(path)) {
+          result = { ok: false, output: `invalid path: ${path}` }; break;
+        }
         const name = path.split("/").pop() ?? path;
         // Add window to existing tmux session or start a new session
         const hasSession = await runShell("tmux has-session -t bots 2>/dev/null");
@@ -169,8 +173,12 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
       case "docker_restart": {
         const { container } = payload as { container: string };
         if (!container) { result = { ok: false, output: "missing container" }; break; }
-        result = await runShell(`docker restart ${container} 2>&1`);
-        result = { ok: true, output: result.trim() || `restarted ${container}` };
+        // Validate container name to prevent shell injection
+        if (!/^[a-zA-Z0-9_.-]+$/.test(container)) {
+          result = { ok: false, output: `invalid container name: ${container}` }; break;
+        }
+        const shellResult = await runShell(`docker restart ${container} 2>&1`);
+        result = { ok: shellResult.ok, output: shellResult.output.trim() || (shellResult.ok ? `restarted ${container}` : "docker restart failed") };
         break;
       }
 
@@ -193,6 +201,10 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
       case "tmux_send_keys": {
         const { project, action } = payload as { project: string; action: string };
         if (!project) { result = { ok: false, output: "missing project" }; break; }
+        // Validate project name to prevent shell injection
+        if (!/^[a-zA-Z0-9_-]+$/.test(project)) {
+          result = { ok: false, output: `invalid project name: ${project}` }; break;
+        }
 
         const target = `bots:${project}`;
 
@@ -207,7 +219,7 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
           while (Date.now() < deadline) {
             await Bun.sleep(200);
             const out = await runShell(`tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`);
-            if (CONFIRM_RE.test(out)) {
+            if (CONFIRM_RE.test(out.output)) {
               await runShell(`tmux send-keys -t "${target}" "" Enter`);
               confirmed = true;
               break;
@@ -233,6 +245,10 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
           if (prows.length > 0) name = prows[0].name;
         }
         if (!name) { result = { ok: false, output: "missing name" }; break; }
+        // Validate name to prevent shell injection
+        if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+          result = { ok: false, output: `invalid project name: ${name}` }; break;
+        }
         // Kill ALL windows for this project — tmux only kills the first match per call.
         const killResult = await runShell(`count=0; while tmux kill-window -t "bots:${name}" 2>/dev/null; do count=$((count+1)); done; echo "killed $count window(s)"`);
         result = { ok: true, output: killResult.output };
@@ -263,23 +279,20 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
 // Main polling loop
 while (true) {
   try {
-    const rows = await sql`
-      SELECT id, command, payload FROM admin_commands
-      WHERE status = 'pending'
-      ORDER BY created_at
-      LIMIT 5
-    `;
-
-    for (const row of rows) {
-      // Mark as processing to avoid double-execution
-      const claimed = await sql`
-        UPDATE admin_commands SET status = 'processing' WHERE id = ${row.id} AND status = 'pending'
-        RETURNING id
+    await sql.begin(async (tx) => {
+      const rows = await tx`
+        SELECT id, command, payload FROM admin_commands
+        WHERE status = 'pending'
+        ORDER BY created_at
+        LIMIT 5
+        FOR UPDATE SKIP LOCKED
       `;
-      if (claimed.length > 0) {
-        await processCommand(row as any);
+      for (const row of rows) {
+        await tx`UPDATE admin_commands SET status = 'processing' WHERE id = ${row.id}`;
+        // Process outside the transaction to avoid long lock holds
+        setImmediate(() => processCommand(row as any));
       }
-    }
+    });
   } catch (err: any) {
     console.error("[admin-daemon] poll error:", err?.message);
     await Bun.sleep(5000);

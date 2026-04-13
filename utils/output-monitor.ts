@@ -7,6 +7,7 @@
  */
 
 import { existsSync } from "fs";
+import { normalizeForComparison } from "./tmux-monitor.ts";
 
 const POLL_INTERVAL_MS = 2000;
 const TAIL_LINES = 40;
@@ -150,7 +151,7 @@ export async function startOutputMonitor(
         const output = await tailFile(outputFile, TAIL_LINES);
         const status = parseStatus(output);
 
-        if (status && status !== lastStatus) {
+        if (status && normalizeForComparison(status) !== normalizeForComparison(lastStatus)) {
           lastStatus = status;
           onStatus(status);
         }
@@ -160,7 +161,7 @@ export async function startOutputMonitor(
     }
   };
 
-  poll();
+  poll().catch((err) => console.error("[output-monitor] fatal error:", err));
 
   return {
     stop: () => { running = false; },

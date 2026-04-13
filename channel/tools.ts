@@ -222,12 +222,6 @@ export function registerTools(
         const isForumReply = !!(forumChatId && forumTopicId && chatId === forumChatId);
         const forumExtra = isForumReply ? { message_thread_id: forumTopicId } : {};
 
-        // In DM mode: check if this session is the active one (background session badge)
-        const isBackground = !isForumReply && (() => {
-          // async check done inline via flag below
-          return false;
-        })();
-
         let activeSessionId: number | null = null;
         if (!isForumReply) {
           const activeCheck = await ctx.sql`
@@ -450,7 +444,7 @@ export function registerTools(
       }
 
       case "forget": {
-        const result = await ctx.sql`DELETE FROM memories WHERE id = ${Number(args!.id)} RETURNING id`;
+        const result = await ctx.sql`DELETE FROM memories WHERE id = ${Number(args!.id)} AND project_path = ${ctx.projectPath} RETURNING id`;
         return text(result.length > 0 ? `Deleted #${args!.id}` : `#${args!.id} not found`);
       }
 

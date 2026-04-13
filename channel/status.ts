@@ -13,6 +13,7 @@ import { startTmuxMonitor, type TmuxMonitorHandle } from "../utils/tmux-monitor.
 import { startOutputMonitor, getOutputFilePath, type OutputMonitorHandle } from "../utils/output-monitor.ts";
 import { editTelegramMessage, deleteTelegramMessage, sendTelegramMessage } from "./telegram.ts";
 import { channelLogger } from "../logger.ts";
+import { escapeHtml } from "../utils/html.ts";
 
 export interface StatusContext {
   sql: postgres.Sql;
@@ -64,9 +65,6 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(sec / 60)}m ${sec % 60}s`;
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
 
 function normalizeStage(stage: string): string {
   return stage.replace(/^⏳\s*/, "");
@@ -115,6 +113,7 @@ export class StatusManager {
   private lastTokenInfo = new Map<string, string>();
   private sessionStats = new Map<string, SessionStats>();
   private activeTyping = new Map<string, TypingHandle>();
+  private readonly typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private activeMonitors = new Map<string, TmuxMonitorHandle | OutputMonitorHandle>();
   private responseGuards = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly TYPING_TIMEOUT_MS = 30_000;
@@ -432,11 +431,15 @@ export class StatusManager {
     const effectiveChatId = forum?.chatId ?? chatId;
     const handle = startTypingRaw(token, effectiveChatId);
     this.activeTyping.set(key, handle);
-    setTimeout(() => this.stopTypingForChat(chatId), this.TYPING_TIMEOUT_MS);
+    const existing = this.typingTimers.get(key);
+    if (existing) clearTimeout(existing);
+    this.typingTimers.set(key, setTimeout(() => this.stopTypingForChat(chatId), this.TYPING_TIMEOUT_MS));
   }
 
   stopTypingForChat(chatId: string): void {
     const key = this.stateKey(chatId);
+    const t = this.typingTimers.get(key);
+    if (t) { clearTimeout(t); this.typingTimers.delete(key); }
     const handle = this.activeTyping.get(key);
     if (handle) {
       handle.stop();

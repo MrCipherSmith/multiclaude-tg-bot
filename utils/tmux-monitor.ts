@@ -185,7 +185,7 @@ function parseStatus(output: string): string | null {
  *  Example: "⏳ Brewing… (10s · ↓ 386 tokens · thinking)" →
  *           "⏳ Brewing… ( · ↓  tokens · thinking)"
  */
-function normalizeForComparison(s: string): string {
+export function normalizeForComparison(s: string): string {
   return s
     .replace(/\d+m\s*\d+s/g, "") // "1m 23s"
     .replace(/\d+s/g, "")         // "10s"
@@ -222,7 +222,7 @@ export async function startTmuxMonitor(
     }
   };
 
-  poll();
+  poll().catch((err) => console.error("[tmux-monitor] fatal error:", err));
 
   return {
     stop: () => { running = false; },

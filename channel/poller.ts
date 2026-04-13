@@ -24,6 +24,7 @@ export interface PollerContext {
 export class MessageQueuePoller {
   private polling = true;
   private wakeResolve: (() => void) | null = null;
+  private listenSql: import("postgres").default | null = null;
 
   constructor(
     private ctx: PollerContext,
@@ -37,7 +38,8 @@ export class MessageQueuePoller {
     if (sessionId === null) return;
     try {
       const { default: postgres } = await import("postgres");
-      const listenSql = postgres(this.ctx.databaseUrl, { max: 1 });
+      this.listenSql = postgres(this.ctx.databaseUrl, { max: 1 });
+      const listenSql = this.listenSql;
       await listenSql.listen(`message_queue_${sessionId}`, () => {
         if (this.wakeResolve) { this.wakeResolve(); this.wakeResolve = null; }
       });
@@ -57,6 +59,8 @@ export class MessageQueuePoller {
   stop(): void {
     this.polling = false;
     if (this.wakeResolve) { this.wakeResolve(); this.wakeResolve = null; }
+    this.listenSql?.end().catch(() => {});
+    this.listenSql = null;
   }
 
   async start(): Promise<void> {
