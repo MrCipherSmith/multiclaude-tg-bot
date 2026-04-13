@@ -61,8 +61,14 @@ const EnvSchema = z.object({
   WHISPER_URL: z.string().default("http://localhost:9000"),
 
   // TTS provider selection
-  // "yandex" | "kokoro" | "auto" (auto = yandex if keys set, else kokoro)
-  TTS_PROVIDER: z.enum(["yandex", "kokoro", "auto"]).default("auto"),
+  // "auto"   — Piper → Yandex → Groq (Russian), Kokoro → Groq (English)
+  // "piper"  — local Piper only
+  // "yandex" — Yandex SpeechKit only
+  // "kokoro" — local Kokoro only
+  // "openai" — OpenAI TTS only
+  // "groq"   — Groq Orpheus only (English)
+  // "none"   — TTS disabled
+  TTS_PROVIDER: z.enum(["auto", "piper", "yandex", "kokoro", "openai", "groq", "none"]).default("auto"),
 
   // Yandex SpeechKit TTS
   YANDEX_API_KEY: z.string().default(""),

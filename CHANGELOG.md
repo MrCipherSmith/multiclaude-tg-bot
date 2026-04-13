@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.27.2
+
+### feat(setup): TTS configuration in setup wizard
+
+Setup wizard (`bun cli.ts setup`) now includes a full TTS configuration block:
+
+- **Provider selection**: auto / Piper / Yandex SpeechKit / Kokoro / OpenAI / Groq / Disable
+- **Piper**: configure custom `PIPER_DIR` and voice model filename
+- **Yandex SpeechKit**: API key, Folder ID, voice (alena/filipp/jane/omazh/zahar), language
+- **Kokoro**: dtype (q4/q8/fp16/fp32) and voice selection
+- **OpenAI**: API key
+
+All settings are written to `.env` automatically.
+
+Also:
+- `config.ts`: `TTS_PROVIDER` enum extended with `"piper"`, `"openai"`, `"groq"`, `"none"`
+- `utils/tts.ts`: `PIPER_MODEL` now configurable via `PIPER_MODEL` env var; added `none`/`openai`/`groq` provider handling
+
+---
+
 ## v1.27.1
 
 ### fix(channel): prevent duplicate replies on Stop/Start restart

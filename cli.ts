@@ -158,11 +158,71 @@ async function setup() {
     webhookSecret = ask("Webhook secret (random string)", crypto.randomUUID());
   }
 
-  // 5. Voice transcription
+  // 5. Voice transcription (Groq — also used for TTS normalization)
   console.log();
-  const groqKey = ask("Groq API Key for voice (Enter to skip, free at console.groq.com)");
+  const groqKey = ask("Groq API Key for voice transcription (Enter to skip, free at console.groq.com)");
 
-  // 5. Database password
+  // 6. TTS (voice output)
+  console.log();
+  console.log(`  ${c.bold("TTS (voice output)")}`);
+  const ttsIdx = askChoice("TTS provider:", [
+    "auto (Piper → Yandex → Groq, recommended)",
+    "Piper (local, Russian, offline — free)",
+    "Yandex SpeechKit (Russian, best quality)",
+    "Kokoro (local, English, offline — free)",
+    "OpenAI TTS (multilingual)",
+    "Groq Orpheus (English only)",
+    "Disable TTS",
+  ]);
+  const ttsProviders = ["auto", "piper", "yandex", "kokoro", "openai", "groq", "none"] as const;
+  const ttsProvider = ttsProviders[ttsIdx] ?? "auto";
+
+  let piperDir = "";
+  let piperModel = "";
+  let yandexApiKey = "";
+  let yandexFolderId = "";
+  let yandexVoice = "alena";
+  let yandexLang = "ru-RU";
+  let kokoroDtype = "q8";
+  let kokoroVoice = "af_bella";
+  let openaiApiKey = "";
+
+  if (ttsProvider === "piper" || ttsProvider === "auto") {
+    console.log(c.dim("\n  Piper requires the binary + voice model downloaded separately."));
+    console.log(c.dim("  Default: ./piper/ folder next to the bot (piper/piper binary, piper/voices/*.onnx)\n"));
+    piperDir = ask("Piper directory (Enter for default)", "");
+    piperModel = ask("Piper voice model filename", "ru_RU-irina-medium.onnx");
+  }
+
+  if (ttsProvider === "yandex" || ttsProvider === "auto") {
+    console.log();
+    yandexApiKey = ask("Yandex SpeechKit API Key (Enter to skip)");
+    if (yandexApiKey) {
+      yandexFolderId = ask("Yandex Folder ID");
+      const voiceIdx = askChoice("Yandex voice:", [
+        "alena (female, neutral)",
+        "filipp (male, neutral)",
+        "jane (female, friendly)",
+        "omazh (female, emotional)",
+        "zahar (male, confident)",
+      ]);
+      yandexVoice = ["alena", "filipp", "jane", "omazh", "zahar"][voiceIdx] ?? "alena";
+      const langIdx = askChoice("Language:", ["ru-RU (Russian)", "en-US (English)", "kk-KK (Kazakh)"]);
+      yandexLang = ["ru-RU", "en-US", "kk-KK"][langIdx] ?? "ru-RU";
+    }
+  }
+
+  if (ttsProvider === "kokoro") {
+    const dtypeIdx = askChoice("Kokoro precision (q8 recommended):", ["q8", "q4", "fp16", "fp32"]);
+    kokoroDtype = ["q8", "q4", "fp16", "fp32"][dtypeIdx] ?? "q8";
+    kokoroVoice = ask("Kokoro voice", "af_bella");
+  }
+
+  if (ttsProvider === "openai") {
+    openaiApiKey = ask("OpenAI API Key");
+  }
+
+  // 7. Database password
   const dbPassword = ask("PostgreSQL password", "helyx_secret");
 
   // 6. Port
@@ -208,6 +268,18 @@ async function setup() {
     "# Voice transcription",
     `GROQ_API_KEY=${groqKey}`,
     `WHISPER_URL=http://localhost:9000`,
+    "",
+    "# TTS (voice output)",
+    `TTS_PROVIDER=${ttsProvider}`,
+    ...(piperDir ? [`PIPER_DIR=${piperDir}`] : []),
+    ...(piperModel ? [`PIPER_MODEL=${piperModel}`] : []),
+    `YANDEX_API_KEY=${yandexApiKey}`,
+    `YANDEX_FOLDER_ID=${yandexFolderId}`,
+    `YANDEX_VOICE=${yandexVoice}`,
+    `YANDEX_LANG=${yandexLang}`,
+    `KOKORO_DTYPE=${kokoroDtype}`,
+    `KOKORO_VOICE=${kokoroVoice}`,
+    `OPENAI_API_KEY=${openaiApiKey}`,
     "",
     "# Server",
     `PORT=${port}`,

@@ -1,7 +1,13 @@
 import type { Bot } from "grammy";
 import { InputFile } from "grammy";
+import { join } from "path";
 import { CONFIG } from "../config.ts";
 import { channelLogger } from "../logger.ts";
+
+const PIPER_DIR = process.env.PIPER_DIR ?? join(import.meta.dir, "../piper");
+const PIPER_BIN = join(PIPER_DIR, "piper/piper");
+const PIPER_MODEL_FILE = process.env.PIPER_MODEL ?? "ru_RU-irina-medium.onnx";
+const PIPER_MODEL = join(PIPER_DIR, "voices", PIPER_MODEL_FILE);
 
 const GROQ_API_KEY = CONFIG.GROQ_API_KEY;
 // OpenAI TTS key — read directly since config merges it into OPENROUTER_API_KEY
@@ -272,6 +278,35 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/** Synthesize via Piper local TTS (Russian, offline). Returns WAV buffer. */
+async function synthesizePiper(text: string): Promise<Buffer | null> {
+  const tmpFile = `/tmp/piper-tts-${Date.now()}.wav`;
+  try {
+    const proc = Bun.spawn(
+      [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", tmpFile],
+      {
+        cwd: join(PIPER_DIR, "piper"),
+        env: { ...process.env, LD_LIBRARY_PATH: join(PIPER_DIR, "piper") },
+        stdin: new TextEncoder().encode(text.slice(0, 5000)),
+        stdout: "ignore",
+        stderr: "ignore",
+      },
+    );
+    const code = await proc.exited;
+    if (code !== 0) {
+      channelLogger.warn({ code }, "tts: Piper exited with non-zero code");
+      return null;
+    }
+    const buf = await Bun.file(tmpFile).arrayBuffer();
+    return Buffer.from(buf);
+  } catch (err) {
+    channelLogger.error({ err }, "tts: Piper error");
+    return null;
+  } finally {
+    import("fs").then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+  }
+}
+
 /** Synthesize via Kokoro local TTS (English only). Returns WAV buffer. */
 async function synthesizeKokoro(text: string): Promise<Buffer | null> {
   try {
@@ -288,19 +323,25 @@ async function synthesizeKokoro(text: string): Promise<Buffer | null> {
 /**
  * Convert text to speech.
  * Provider selection via TTS_PROVIDER env var:
+ *   "auto"   — Piper → Yandex → Groq (Russian), Kokoro → Groq (English)
+ *   "piper"  — local Piper only (Russian, offline)
  *   "yandex" — Yandex SpeechKit only (Russian, best quality)
- *   "kokoro"  — Kokoro local TTS only (English, offline)
- *   "auto"    — Yandex if keys set, else Kokoro, else Groq
+ *   "kokoro" — local Kokoro only (English, offline)
+ *   "openai" — OpenAI TTS only (multilingual)
+ *   "groq"   — Groq Orpheus only (English)
+ *   "none"   — TTS disabled
  * Returns audio buffer or null on failure/disabled.
  */
 export async function synthesize(text: string): Promise<Buffer | null> {
   const stripped = stripMarkdown(text);
   if (stripped.length < 10) return null;
 
+  const provider = CONFIG.TTS_PROVIDER;
+
+  if (provider === "none") return null;
+
   // LLM-normalize before TTS: convert paths, symbols, code to natural speech
   const clean = await normalizeForSpeech(stripped);
-
-  const provider = CONFIG.TTS_PROVIDER;
 
   if (provider === "yandex") {
     if (!YANDEX_API_KEY || !YANDEX_FOLDER_ID) {
@@ -317,21 +358,49 @@ export async function synthesize(text: string): Promise<Buffer | null> {
     return synthesizeKokoro(clean);
   }
 
-  // auto: Yandex → Kokoro → Groq
-  if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
-    try {
-      const buf = await synthesizeYandex(clean);
-      if (buf) return buf;
-    } catch (err) {
-      channelLogger.warn({ err }, "tts: Yandex failed, trying next provider");
-    }
+  if (provider === "piper") {
+    return synthesizePiper(clean);
   }
 
-  try {
-    const buf = await synthesizeKokoro(clean);
-    if (buf) return buf;
-  } catch {
-    // fall through to Groq
+  if (provider === "openai") {
+    return synthesizeOpenAI(clean);
+  }
+
+  if (provider === "groq") {
+    return synthesizeGroq(clean);
+  }
+
+  // Detect dominant language by character ratio (ignores spaces/punctuation)
+  const cyrillicCount = (clean.match(/[\u0400-\u04FF]/g) ?? []).length;
+  const latinCount = (clean.match(/[a-zA-Z]/g) ?? []).length;
+  const totalLetters = cyrillicCount + latinCount;
+  const isRussian = totalLetters === 0 ? true : cyrillicCount / totalLetters >= 0.4;
+
+  // auto (Russian): Piper → Yandex → Groq
+  // auto (English): Kokoro → Groq
+  if (isRussian) {
+    try {
+      const buf = await synthesizePiper(clean);
+      if (buf) return buf;
+    } catch (err) {
+      channelLogger.warn({ err }, "tts: Piper failed, trying Yandex");
+    }
+
+    if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
+      try {
+        const buf = await synthesizeYandex(clean);
+        if (buf) return buf;
+      } catch (err) {
+        channelLogger.warn({ err }, "tts: Yandex failed, trying Groq");
+      }
+    }
+  } else {
+    try {
+      const buf = await synthesizeKokoro(clean);
+      if (buf) return buf;
+    } catch {
+      // fall through to Groq
+    }
   }
 
   try {
