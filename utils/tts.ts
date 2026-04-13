@@ -6,8 +6,12 @@ import { channelLogger } from "../logger.ts";
 
 const PIPER_DIR = process.env.PIPER_DIR ?? join(import.meta.dir, "../piper");
 const PIPER_BIN = join(PIPER_DIR, "piper/piper");
-const PIPER_MODEL_FILE = process.env.PIPER_MODEL ?? "ru_RU-irina-medium.onnx";
-const PIPER_MODEL = join(PIPER_DIR, "voices", PIPER_MODEL_FILE);
+// Per-language model files — fall back to the generic PIPER_MODEL
+const PIPER_MODEL_FILE     = process.env.PIPER_MODEL    ?? "en_US-lessac-medium.onnx";
+const PIPER_MODEL_FILE_EN  = process.env.PIPER_MODEL_EN ?? PIPER_MODEL_FILE;
+const PIPER_MODEL_FILE_RU  = process.env.PIPER_MODEL_RU ?? PIPER_MODEL_FILE;
+const PIPER_MODEL_EN = join(PIPER_DIR, "voices", PIPER_MODEL_FILE_EN);
+const PIPER_MODEL_RU = join(PIPER_DIR, "voices", PIPER_MODEL_FILE_RU);
 
 const GROQ_API_KEY = CONFIG.GROQ_API_KEY;
 // OpenAI TTS key — read directly since config merges it into OPENROUTER_API_KEY
@@ -278,12 +282,13 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Synthesize via Piper local TTS (Russian, offline). Returns WAV buffer. */
-async function synthesizePiper(text: string): Promise<Buffer | null> {
+/** Synthesize via Piper local TTS (offline). Picks model by language. Returns WAV buffer. */
+async function synthesizePiper(text: string, isRussian = true): Promise<Buffer | null> {
+  const modelPath = isRussian ? PIPER_MODEL_RU : PIPER_MODEL_EN;
   const tmpFile = `/tmp/piper-tts-${Date.now()}.wav`;
   try {
     const proc = Bun.spawn(
-      [PIPER_BIN, "--model", PIPER_MODEL, "--output_file", tmpFile],
+      [PIPER_BIN, "--model", modelPath, "--output_file", tmpFile],
       {
         cwd: join(PIPER_DIR, "piper"),
         env: { ...process.env, LD_LIBRARY_PATH: join(PIPER_DIR, "piper") },
@@ -359,7 +364,11 @@ export async function synthesize(text: string): Promise<Buffer | null> {
   }
 
   if (provider === "piper") {
-    return synthesizePiper(clean);
+    const cyrillicCount = (clean.match(/[\u0400-\u04FF]/g) ?? []).length;
+    const latinCount = (clean.match(/[a-zA-Z]/g) ?? []).length;
+    const totalLetters = cyrillicCount + latinCount;
+    const isRu = totalLetters === 0 ? true : cyrillicCount / totalLetters >= 0.4;
+    return synthesizePiper(clean, isRu);
   }
 
   if (provider === "openai") {
@@ -377,10 +386,10 @@ export async function synthesize(text: string): Promise<Buffer | null> {
   const isRussian = totalLetters === 0 ? true : cyrillicCount / totalLetters >= 0.4;
 
   // auto (Russian): Piper → Yandex → Groq
-  // auto (English): Kokoro → Groq
+  // auto (English): Piper(EN) → Kokoro → Groq
   if (isRussian) {
     try {
-      const buf = await synthesizePiper(clean);
+      const buf = await synthesizePiper(clean, true);
       if (buf) return buf;
     } catch (err) {
       channelLogger.warn({ err }, "tts: Piper failed, trying Yandex");
@@ -395,6 +404,12 @@ export async function synthesize(text: string): Promise<Buffer | null> {
       }
     }
   } else {
+    try {
+      const buf = await synthesizePiper(clean, false);
+      if (buf) return buf;
+    } catch {
+      // fall through to Kokoro
+    }
     try {
       const buf = await synthesizeKokoro(clean);
       if (buf) return buf;

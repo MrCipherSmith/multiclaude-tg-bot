@@ -50,6 +50,42 @@ function askChoice(question: string, options: string[]): number {
   return 0;
 }
 
+/**
+ * Multi-select checkbox prompt. Returns a Set of selected indices.
+ * Items in `required` are always checked and shown as [✓ locked].
+ * User enters comma-separated numbers to toggle, or Enter to confirm.
+ */
+function askMultiCheck(question: string, options: string[], required: number[] = []): Set<number> {
+  const selected = new Set<number>(required);
+  console.log(`\n  ${c.bold(question)}`);
+  console.log(c.dim("  Enter numbers to toggle, Enter to confirm (required items are locked)"));
+
+  const render = () => {
+    options.forEach((opt, i) => {
+      const isRequired = required.includes(i);
+      const isSelected = selected.has(i);
+      const box = isSelected ? c.green("✓") : " ";
+      const lock = isRequired ? c.dim(" (required)") : "";
+      console.log(`  [${box}] ${c.cyan(`${i + 1}.`)} ${opt}${lock}`);
+    });
+  };
+
+  while (true) {
+    render();
+    const answer = ask(">").trim();
+    if (!answer) break;
+    for (const part of answer.split(",")) {
+      const idx = parseInt(part.trim()) - 1;
+      if (idx < 0 || idx >= options.length) continue;
+      if (required.includes(idx)) continue; // can't uncheck required
+      if (selected.has(idx)) selected.delete(idx);
+      else selected.add(idx);
+    }
+    console.log();
+  }
+  return selected;
+}
+
 async function run(cmd: string[], opts?: { cwd?: string; silent?: boolean; stream?: boolean }): Promise<{ ok: boolean; output: string }> {
   const stream = opts?.stream ?? false;
   const proc = Bun.spawn(cmd, {
@@ -186,12 +222,57 @@ async function setup() {
   let kokoroDtype = "q8";
   let kokoroVoice = "af_bella";
   let openaiApiKey = "";
+  let piperModelEn = "en_US-lessac-medium.onnx";
+  let piperModelRu = "";
+  let downloadPiperVoices = false;
+
+  // Piper voice catalog: [label, filename, huggingface path]
+  const PIPER_VOICES: Array<{ label: string; file: string; hfPath: string }> = [
+    { label: "English — en_US-lessac-medium (male, neutral)", file: "en_US-lessac-medium.onnx", hfPath: "en/en_US/lessac/medium/en_US-lessac-medium.onnx" },
+    { label: "Russian — ru_RU-irina-medium (female, neutral)", file: "ru_RU-irina-medium.onnx", hfPath: "ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx" },
+    { label: "Russian — ru_RU-denis-medium (male)", file: "ru_RU-denis-medium.onnx", hfPath: "ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx" },
+    { label: "German — de_DE-thorsten-medium (male)", file: "de_DE-thorsten-medium.onnx", hfPath: "de/de_DE/thorsten/medium/de_DE-thorsten-medium.onnx" },
+    { label: "Spanish — es_ES-sharvard-medium (male)", file: "es_ES-sharvard-medium.onnx", hfPath: "es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx" },
+    { label: "French — fr_FR-upmc-medium (male)", file: "fr_FR-upmc-medium.onnx", hfPath: "fr/fr_FR/upmc/medium/fr_FR-upmc-medium.onnx" },
+  ];
+  const PIPER_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 
   if (ttsProvider === "piper" || ttsProvider === "auto") {
-    console.log(c.dim("\n  Piper requires the binary + voice model downloaded separately."));
-    console.log(c.dim("  Default: ./piper/ folder next to the bot (piper/piper binary, piper/voices/*.onnx)\n"));
+    console.log(c.dim("\n  Piper: local TTS, works offline. Requires piper binary + voice files."));
     piperDir = ask("Piper directory (Enter for default)", "");
-    piperModel = ask("Piper voice model filename", "ru_RU-irina-medium.onnx");
+
+    const voiceLabels = PIPER_VOICES.map(v => v.label);
+    const selectedVoices = askMultiCheck("Select voices to download:", voiceLabels, [0]); // English (index 0) required
+
+    // Pick model filenames for primary EN and RU
+    const selectedVoiceList = [...selectedVoices].map(i => PIPER_VOICES[i]!);
+    const enVoice = selectedVoiceList.find(v => v.file.startsWith("en_US"));
+    const ruVoice = selectedVoiceList.find(v => v.file.startsWith("ru_RU"));
+    piperModelEn = enVoice?.file ?? "en_US-lessac-medium.onnx";
+    piperModelRu = ruVoice?.file ?? "";
+    piperModel = piperModelRu || piperModelEn; // backward-compat primary model
+
+    const doDownload = askChoice("Download selected voice models now?", ["Yes", "No"]);
+    downloadPiperVoices = doDownload === 0;
+
+    if (downloadPiperVoices) {
+      const voicesDir = (piperDir || `${BOT_DIR}/piper`) + "/voices";
+      await run(["mkdir", "-p", voicesDir], { silent: true });
+      for (const idx of selectedVoices) {
+        const voice = PIPER_VOICES[idx]!;
+        const destOnnx = `${voicesDir}/${voice.file}`;
+        const destJson = `${destOnnx}.json`;
+        if (existsSync(destOnnx)) {
+          console.log(`  ${c.dim(`  ${voice.file} — already exists, skipping`)}`);
+          continue;
+        }
+        step(`Downloading ${voice.file}`);
+        const dl = await run(["curl", "-fsSL", "-o", destOnnx, `${PIPER_HF_BASE}/${voice.hfPath}`]);
+        dl.ok ? done() : fail("download failed");
+        // also download .json config
+        await run(["curl", "-fsSL", "-o", destJson, `${PIPER_HF_BASE}/${voice.hfPath}.json`], { silent: true });
+      }
+    }
   }
 
   if (ttsProvider === "yandex" || ttsProvider === "auto") {
@@ -272,6 +353,8 @@ async function setup() {
     "# TTS (voice output)",
     `TTS_PROVIDER=${ttsProvider}`,
     ...(piperDir ? [`PIPER_DIR=${piperDir}`] : []),
+    ...(piperModelEn ? [`PIPER_MODEL_EN=${piperModelEn}`] : []),
+    ...(piperModelRu ? [`PIPER_MODEL_RU=${piperModelRu}`] : []),
     ...(piperModel ? [`PIPER_MODEL=${piperModel}`] : []),
     `YANDEX_API_KEY=${yandexApiKey}`,
     `YANDEX_FOLDER_ID=${yandexFolderId}`,

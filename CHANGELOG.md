@@ -2,7 +2,23 @@
 
 ## v1.27.2
 
-### feat(setup): TTS configuration in setup wizard
+### feat(setup): TTS configuration in setup wizard with Piper voice selection
+
+Setup wizard now includes a full TTS configuration block:
+
+- **Provider selection**: auto / Piper / Yandex SpeechKit / Kokoro / OpenAI / Groq / Disable
+- **Piper voice multi-select**: choose languages to download (English required); voices downloaded automatically from HuggingFace
+  - English: `en_US-lessac-medium` (male)
+  - Russian: `ru_RU-irina-medium` (female), `ru_RU-denis-medium` (male)
+  - German, Spanish, French available
+- **Piper language-aware model selection**: `PIPER_MODEL_EN` / `PIPER_MODEL_RU` env vars; Piper now picks the right model per detected language
+- **Yandex SpeechKit**: API key, Folder ID, voice (alena/filipp/jane/omazh/zahar), language
+- **Kokoro**: dtype and voice selection
+- **OpenAI**: API key
+
+Also:
+- `config.ts`: `TTS_PROVIDER` enum extended with `"piper"`, `"openai"`, `"groq"`, `"none"`
+- `utils/tts.ts`: language-aware Piper model selection; English auto-mode now tries Piper first before Kokoro
 
 Setup wizard (`bun cli.ts setup`) now includes a full TTS configuration block:
 
