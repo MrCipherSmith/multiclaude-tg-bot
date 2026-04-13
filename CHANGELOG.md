@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.27.1
+
+### fix(channel): prevent duplicate replies on Stop/Start restart
+
+When a Claude Code process was killed between a successful Telegram send and the
+`UPDATE pending_replies SET delivered_at = NOW()` call, the `deliverPendingReplies`
+recovery on next startup would resend the already-delivered message — causing
+duplicate replies.
+
+**Fix:** `delivered_at` is now set *before* the Telegram send, not after. This
+gives at-most-once delivery semantics: if the process dies mid-send, recovery
+won't retry (the message may be lost), but it won't send duplicates.
+
+### fix(status): less alarmist response guard message
+
+The 5-minute "no reply" guard message was reworded from "сессия могла упасть
+или зависнуть" to "возможно думает над задачей или сессия зависла" — Claude
+might simply be running extended thinking, not crashed.
+
+---
+
 ## v1.27.0
 
 ### Live pane snapshots for all sessions in split-pane mode

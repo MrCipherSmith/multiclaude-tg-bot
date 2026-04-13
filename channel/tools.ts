@@ -251,6 +251,13 @@ export function registerTools(
           // Non-fatal: continue even if DB write fails
         }
 
+        // Pre-mark as delivered before sending to Telegram — prevents recovery from
+        // resending on restart if the process dies after a successful Telegram send
+        // but before the post-send UPDATE completes (TOCTOU duplicate bug).
+        if (pendingReplyId) {
+          ctx.sql`UPDATE pending_replies SET delivered_at = NOW() WHERE id = ${pendingReplyId}`.catch(() => {});
+        }
+
         let replyText = String(args!.text);
         if (!isActiveDm && sessionId) {
           const bgName = ctx.sessionName() || `#${sessionId}`;
@@ -287,10 +294,6 @@ export function registerTools(
         channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
         // Fire-and-forget TTS voice attachment (forced if user sent voice, otherwise ≥300 chars)
         maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null, ctx.forceVoice?.() ?? false);
-        // Mark pending reply as delivered
-        if (pendingReplyId) {
-          ctx.sql`UPDATE pending_replies SET delivered_at = NOW() WHERE id = ${pendingReplyId}`.catch(() => {});
-        }
         if (sessionId) {
           await ctx.sql`
             INSERT INTO messages (session_id, project_path, chat_id, role, content)

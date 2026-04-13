@@ -138,7 +138,7 @@ export class StatusManager {
       await sendTelegramMessage(
         token,
         effectiveChatId,
-        "⚠️ Claude не ответил — сессия могла упасть или зависнуть.\n/session — статус сессии",
+        "⏳ Claude ещё не ответил (5+ мин) — возможно думает над задачей или сессия зависла.\n/session — статус сессии",
         extra,
       );
     }, this.RESPONSE_GUARD_MS);
