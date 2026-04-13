@@ -114,13 +114,13 @@ Rules:
 - snake_case identifiers → replace underscores with spaces (lease_expires_at → lease expires at)
 - camelCase identifiers → split into words (forceVoice → force voice, shouldSendVoice → should send voice)
 - Function call parentheses → remove (acquireLease() → acquire lease)
-- Short git hashes (7 hex chars like a1b2c3d) → omit or say "the commit"
+- Short git hashes (7 hex chars like a1b2c3d) → omit
 - Branch names with slashes → replace slash with space (fix/session-lease → fix session lease)
-- Comparison operators: < → less than, > → greater than, = → equals (or Russian equivalent)
+- Comparison operators: < → less than, > → greater than, = → equals
 - key=value pairs → "key equals value" or just the key
 - Pipe | and backslash → remove
-- URLs → omit or say "по ссылке"
-- Keep the same language as the input (Russian stays Russian)
+- URLs → omit entirely
+- CRITICAL: Output MUST be in the EXACT same language as the input. NEVER translate. NEVER mix languages. If input is English, output must be English. If input is Russian, output must be Russian.
 - Output ONLY the rewritten text, nothing else`;
 
 /**
@@ -345,6 +345,13 @@ export async function synthesize(text: string): Promise<Buffer | null> {
 
   if (provider === "none") return null;
 
+  // Detect language on the original stripped text — before LLM normalization which
+  // could accidentally introduce Cyrillic (e.g. hardcoded Russian phrases in the prompt).
+  const cyrillicCountRaw = (stripped.match(/[\u0400-\u04FF]/g) ?? []).length;
+  const latinCountRaw    = (stripped.match(/[a-zA-Z]/g) ?? []).length;
+  const totalLettersRaw  = cyrillicCountRaw + latinCountRaw;
+  const isRussian = totalLettersRaw === 0 ? true : cyrillicCountRaw / totalLettersRaw >= 0.4;
+
   // LLM-normalize before TTS: convert paths, symbols, code to natural speech
   const clean = await normalizeForSpeech(stripped);
 
@@ -364,11 +371,7 @@ export async function synthesize(text: string): Promise<Buffer | null> {
   }
 
   if (provider === "piper") {
-    const cyrillicCount = (clean.match(/[\u0400-\u04FF]/g) ?? []).length;
-    const latinCount = (clean.match(/[a-zA-Z]/g) ?? []).length;
-    const totalLetters = cyrillicCount + latinCount;
-    const isRu = totalLetters === 0 ? true : cyrillicCount / totalLetters >= 0.4;
-    return synthesizePiper(clean, isRu);
+    return synthesizePiper(clean, isRussian);
   }
 
   if (provider === "openai") {
@@ -378,12 +381,6 @@ export async function synthesize(text: string): Promise<Buffer | null> {
   if (provider === "groq") {
     return synthesizeGroq(clean);
   }
-
-  // Detect dominant language by character ratio (ignores spaces/punctuation)
-  const cyrillicCount = (clean.match(/[\u0400-\u04FF]/g) ?? []).length;
-  const latinCount = (clean.match(/[a-zA-Z]/g) ?? []).length;
-  const totalLetters = cyrillicCount + latinCount;
-  const isRussian = totalLetters === 0 ? true : cyrillicCount / totalLetters >= 0.4;
 
   // auto (Russian): Piper → Yandex → Groq
   // auto (English): Piper(EN) → Kokoro → Groq
