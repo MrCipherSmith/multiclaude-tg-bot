@@ -465,23 +465,17 @@ export function registerTools(
         await status.updateStatus(chatId, String(args!.status));
 
         if (args!.diff) {
-          const token = ctx.token();
-          if (token) {
-            const fChatId = ctx.forumChatId?.();
-            let fTopicId: number | null = null;
-            if (fChatId && chatId === fChatId) {
-              const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
-              fTopicId = rows[0]?.forum_topic_id ?? null;
-            }
-            const diffExtra = (fChatId && fTopicId && chatId === fChatId)
-              ? { message_thread_id: fTopicId }
-              : {};
-            const htmlDiff = markdownToTelegramHtml(String(args!.diff));
-            let res = await sendTelegramMessage(token, chatId, htmlDiff, { parse_mode: "HTML", ...diffExtra });
-            if (!res.ok && res.errorBody?.includes("can't parse entities")) {
-              await sendTelegramMessage(token, chatId, String(args!.diff), diffExtra);
-            }
+          const fChatId = ctx.forumChatId?.();
+          let fTopicId: number | null = null;
+          if (fChatId && chatId === fChatId) {
+            const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
+            fTopicId = rows[0]?.forum_topic_id ?? null;
           }
+          const diffExtra = (fChatId && fTopicId && chatId === fChatId)
+            ? { message_thread_id: fTopicId }
+            : {};
+          const htmlDiff = markdownToTelegramHtml(String(args!.diff));
+          await status.updateDiff(chatId, htmlDiff, diffExtra);
         }
         return text(`Status updated: ${args!.status}`);
       }

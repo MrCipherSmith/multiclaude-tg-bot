@@ -116,6 +116,8 @@ export class StatusManager {
   private readonly typingTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private activeMonitors = new Map<string, TmuxMonitorHandle | OutputMonitorHandle>();
   private responseGuards = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Tracks the single "diff" companion message per status session — edited in-place on repeat calls. */
+  private diffMessages = new Map<string, number>(); // key → Telegram message_id
   private readonly TYPING_TIMEOUT_MS = 30_000;
   private readonly RESPONSE_GUARD_MS = 5 * 60_000; // 5 min
 
@@ -273,6 +275,34 @@ export class StatusManager {
     }
   }
 
+  /**
+   * Send or edit the "diff companion" message for this status session.
+   * Only one diff message exists per session — subsequent calls edit it in-place
+   * instead of creating new messages. Cleaned up in deleteStatusMessage().
+   */
+  async updateDiff(chatId: string, content: string, extra: Record<string, unknown> = {}): Promise<void> {
+    const token = this.ctx.token();
+    if (!token) return;
+    const key = this.stateKey(chatId);
+    const existingId = this.diffMessages.get(key);
+    if (existingId) {
+      // Edit existing diff message in-place
+      const res = await editTelegramMessage(token, this.activeStatus.get(key)?.chatId ?? chatId, existingId, content, { parse_mode: "HTML", ...extra });
+      if (!res.ok && !res.errorBody?.includes("message is not modified")) {
+        // Message was deleted externally — send a new one
+        this.diffMessages.delete(key);
+        await this.updateDiff(chatId, content, extra);
+      }
+    } else {
+      // Send new companion message
+      const effectiveChatId = this.activeStatus.get(key)?.chatId ?? chatId;
+      const res = await sendTelegramMessage(token, effectiveChatId, content, { parse_mode: "HTML", ...extra });
+      if (res.ok && res.messageId) {
+        this.diffMessages.set(key, res.messageId);
+      }
+    }
+  }
+
   async updateStatus(chatId: string, stage: string): Promise<void> {
     const key = this.stateKey(chatId);
     this.accumulateStats(key, stage);
@@ -359,8 +389,18 @@ export class StatusManager {
     this.ctx.sql`DELETE FROM active_status_messages WHERE key = ${key}`.catch(() => {});
     this.stopTypingForChat(chatId);
 
+    // Delete the diff companion message if one was sent during this session
+    const diffMsgId = this.diffMessages.get(key);
+    if (diffMsgId) {
+      this.diffMessages.delete(key);
+    }
+
     const token = this.ctx.token();
     if (!token) return;
+
+    if (diffMsgId) {
+      deleteTelegramMessage(token, state.chatId, diffMsgId);
+    }
 
     const elapsed = formatElapsed(Date.now() - state.startedAt);
     const tokens = this.lastTokenInfo.get(key);
