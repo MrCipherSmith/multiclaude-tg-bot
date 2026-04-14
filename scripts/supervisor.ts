@@ -52,6 +52,34 @@ type RunShell = (cmd: string) => Promise<{ ok: boolean; output: string }>;
 
 // --- Telegram helpers ---
 
+/** POST to Telegram API with one 429-retry. Returns parsed JSON or null on error. */
+async function tgPost(method: string, body: Record<string, unknown>): Promise<any | null> {
+  const url = `https://api.telegram.org/bot${BOT_TOKEN}/${method}`;
+  const opts = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10_000),
+  };
+  let res = await fetch(url, opts);
+  if (res.status === 429) {
+    let wait = 6;
+    try {
+      const data = await res.json() as { parameters?: { retry_after?: number } };
+      wait = (data.parameters?.retry_after ?? 5) + 1;
+    } catch { /* use default */ }
+    console.error(`[supervisor] tgPost ${method} 429 — retrying in ${wait}s`);
+    await new Promise(r => setTimeout(r, wait * 1000));
+    res = await fetch(url, opts);
+  }
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    console.error(`[supervisor] tgPost ${method} failed: ${res.status} ${errText.slice(0, 150)}`);
+    return null;
+  }
+  return res.json().catch(() => null);
+}
+
 async function sendAlert(text: string, topicId?: number): Promise<void> {
   if (!BOT_TOKEN || !SUPERVISOR_CHAT_ID) return;
 
@@ -64,25 +92,9 @@ async function sendAlert(text: string, topicId?: number): Promise<void> {
   if (tid) body.message_thread_id = tid;
 
   try {
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.status === 429) {
-      const data = await res.json() as { parameters?: { retry_after?: number } };
-      const wait = (data.parameters?.retry_after ?? 5) + 1;
-      await new Promise(r => setTimeout(r, wait * 1000));
-      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10_000),
-      });
-    }
+    await tgPost("sendMessage", body);
   } catch {
-    // Non-blocking — alert delivery failure doesn't crash supervisor
+    // Non-blocking
   }
 }
 
@@ -91,12 +103,7 @@ async function editTelegramMsg(chatId: string, messageId: number, text: string, 
   const body: Record<string, unknown> = { chat_id: chatId, message_id: messageId, text };
   if (threadId) body.message_thread_id = threadId;
   try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    });
+    await tgPost("editMessageText", body);
   } catch { /* best-effort */ }
 }
 
@@ -479,25 +486,18 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
         parse_mode: "HTML",
       };
       if (SUPERVISOR_TOPIC_ID) editBody.message_thread_id = SUPERVISOR_TOPIC_ID;
-      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editBody),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (res.ok) {
+      const editResult = await tgPost("editMessageText", editBody);
+      if (editResult?.ok) {
         console.error("[supervisor] status message updated");
         return;
       }
       // Edit failed (message too old or deleted) — fall through to send new
-      const errBody = await res.text().catch(() => "");
-      console.error(`[supervisor] edit failed ${res.status}: ${errBody.slice(0, 100)}`);
       statusMessageId = null;
     }
 
     // Send new status message
     if (!BOT_TOKEN || !SUPERVISOR_CHAT_ID) {
-      console.log("[supervisor] status broadcast (no Telegram):", text.replace(/<[^>]+>/g, ""));
+      console.error("[supervisor] status broadcast (no Telegram):", text.replace(/<[^>]+>/g, ""));
       return;
     }
     const sendBody: Record<string, unknown> = {
@@ -506,19 +506,10 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
       parse_mode: "HTML",
     };
     if (SUPERVISOR_TOPIC_ID) sendBody.message_thread_id = SUPERVISOR_TOPIC_ID;
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sendBody),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (res.ok) {
-      const data = await res.json() as { result?: { message_id?: number } };
-      statusMessageId = data.result?.message_id ?? null;
+    const sendResult = await tgPost("sendMessage", sendBody);
+    if (sendResult?.result?.message_id) {
+      statusMessageId = sendResult.result.message_id;
       console.error("[supervisor] status broadcast sent (msg_id:", statusMessageId, ")");
-    } else {
-      const body = await res.text().catch(() => "");
-      console.error(`[supervisor] status broadcast failed: ${res.status} ${body.slice(0, 200)}`);
     }
   } catch (err: any) {
     console.error(`[supervisor] sendStatusBroadcast error: ${err?.message}`);
