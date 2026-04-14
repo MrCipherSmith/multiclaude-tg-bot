@@ -493,6 +493,31 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 21,
+    name: "supervisor_incidents table",
+    up: async (tx) => {
+      // Audit log for all incidents detected and handled by the session supervisor.
+      // supervisor.ts writes here; /monitor reads incident_count for display.
+      await tx`
+        CREATE TABLE IF NOT EXISTS supervisor_incidents (
+          id               BIGSERIAL PRIMARY KEY,
+          incident_type    TEXT NOT NULL,
+          project          TEXT,
+          session_id       BIGINT,
+          detected_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+          resolved_at      TIMESTAMPTZ,
+          action_taken     TEXT,
+          result           TEXT,
+          llm_explanation  TEXT
+        )
+      `;
+      await tx.unsafe(`
+        CREATE INDEX IF NOT EXISTS idx_supervisor_incidents_detected
+        ON supervisor_incidents(detected_at DESC)
+      `);
+    },
+  },
 ];
 
 // --- Public API ---

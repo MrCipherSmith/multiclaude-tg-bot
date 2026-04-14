@@ -12,6 +12,7 @@
 
 import { resolve } from "path";
 import { startTmuxWatchdog } from "./tmux-watchdog.ts";
+import { startSupervisor } from "./supervisor.ts";
 
 const BOT_DIR = resolve(import.meta.dir, "..");
 const CLI = resolve(BOT_DIR, "cli.ts");
@@ -45,6 +46,9 @@ if (botToken) {
 } else {
   console.warn("[admin-daemon] TELEGRAM_BOT_TOKEN not set — tmux watchdog disabled");
 }
+
+// Start session health supervisor
+startSupervisor(sql, runShell as any);
 
 // --- Process health heartbeat ---
 // Writes admin-daemon PID + Docker container statuses to `process_health` every 30 s.

@@ -30,9 +30,16 @@ function fmtAge(updatedAt: Date): string {
 }
 
 export async function handleMonitor(ctx: Context): Promise<void> {
-  const [health, sessions] = await Promise.all([
+  const [health, sessions, incidentStats] = await Promise.all([
     sql`SELECT name, status, detail, updated_at FROM process_health ORDER BY name`,
     sql`SELECT COUNT(*) AS cnt FROM sessions WHERE status = 'active' AND id != 0`,
+    sql`
+      SELECT
+        COUNT(*) FILTER (WHERE detected_at > NOW() - INTERVAL '1 hour')  AS last_hour,
+        COUNT(*) FILTER (WHERE detected_at > NOW() - INTERVAL '24 hours') AS last_day,
+        MAX(detected_at) AS last_at
+      FROM supervisor_incidents
+    `.catch(() => [{ last_hour: 0, last_day: 0, last_at: null }]),
   ]);
 
   const lines: string[] = [];
@@ -51,6 +58,22 @@ export async function handleMonitor(ctx: Context): Promise<void> {
   } else {
     lines.push(`🔴 <b>admin-daemon</b>  not running`);
     lines.push(`   Run: <code>bun scripts/admin-daemon.ts</code>`);
+  }
+
+  // --- Supervisor ---
+  const supervisorRow = health.find((r) => r.name === "supervisor");
+  if (supervisorRow) {
+    const detail = supervisorRow.detail as { uptime_ms?: number; incident_count?: number; last_incident_at?: number | null } | null;
+    const uptime = detail?.uptime_ms != null ? fmtUptime(detail.uptime_ms) : "?";
+    const stale  = Date.now() - new Date(supervisorRow.updated_at).getTime() > 90_000;
+    const st     = stale ? "🟡" : "🛡";
+    const stats  = incidentStats[0] as any;
+    const h1     = Number(stats?.last_hour ?? 0);
+    const h24    = Number(stats?.last_day ?? 0);
+    lines.push(`${st} <b>supervisor</b>  ${uptime} · incidents: ${h1}/1h ${h24}/24h`);
+    if (stale) lines.push(`   ⚠️ last heartbeat ${fmtAge(new Date(supervisorRow.updated_at))}`);
+  } else {
+    lines.push(`⚪ <b>supervisor</b>  not running (starts with admin-daemon)`);
   }
 
   lines.push("");
