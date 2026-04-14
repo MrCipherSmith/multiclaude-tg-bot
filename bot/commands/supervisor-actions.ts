@@ -55,15 +55,10 @@ export async function handleSupervisorCallback(ctx: Context): Promise<void> {
 export async function handleSupervisorMessage(ctx: Context): Promise<void> {
   const text = (ctx.message?.text ?? "").toLowerCase().trim();
 
-  const isStatusQuery =
-    text === "?" ||
-    text === "/status" ||
-    text === "status" ||
-    text === "статус" ||
-    text === "состояние" ||
-    text.startsWith("/status ");
-
-  if (!isStatusQuery) return;
+  // Respond to any message in the supervisor topic (status queries and general questions)
+  // — this topic is supervisor-only, so all text gets a status response
+  const isIgnored = !text; // skip empty
+  if (isIgnored) return;
 
   const [sessions, qRow, health, incRow] = await Promise.all([
     sql`
