@@ -511,10 +511,22 @@ export function maybeAttachVoiceRaw(
       form.append("voice", new Blob([buf.buffer as ArrayBuffer], { type: mimeType }), filename);
       if (threadId) form.append("message_thread_id", String(threadId));
       channelLogger.info({ chatId, threadId, bufSize: buf.length, fmt }, "tts: sending voice");
-      const res = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+      const sendVoice = () => fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
         method: "POST",
         body: form,
       });
+      let res = await sendVoice();
+      // Retry once on 429 Too Many Requests, respecting retry_after
+      if (res.status === 429) {
+        let retryAfter = 5;
+        try {
+          const body = await res.json() as { parameters?: { retry_after?: number } };
+          retryAfter = body.parameters?.retry_after ?? 5;
+        } catch { /* use default */ }
+        channelLogger.warn({ chatId, retryAfter }, "tts: sendVoice 429, retrying after delay");
+        await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+        res = await sendVoice();
+      }
       if (!res.ok) {
         const err = await res.text();
         channelLogger.error({ status: res.status, err, fmt }, "tts: sendVoice failed");
