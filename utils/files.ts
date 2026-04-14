@@ -22,7 +22,11 @@ export async function downloadFile(
   await mkdir(INBOX_DIR, { recursive: true });
 
   const file = await bot.api.getFile(fileId);
-  const filePath = file.file_path!;
+  if (!file.file_path) {
+    // Happens when the file exceeds the Bot API 20 MB limit — Telegram omits file_path.
+    throw new Error(`File not accessible via Bot API (possibly >20 MB, file_id=${fileId})`);
+  }
+  const filePath = file.file_path;
   const ext = filePath.split(".").pop() ?? "bin";
   const safeName = filename
     ? basename(filename).replace(/[^a-zA-Z0-9._\-]/g, "_") || `${fileId}.${ext}`

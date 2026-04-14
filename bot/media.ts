@@ -251,10 +251,11 @@ export async function handleVoice(ctx: Context): Promise<void> {
       try {
         filePath = await downloadFile(bot, voice.file_id);
         appendLog(route.sessionId, chatId, "voice", `downloaded: ${filePath}`);
-      } catch (err) {
+      } catch (err: any) {
         logger.error({ err }, "voice download failed");
         appendLog(route.sessionId, chatId, "voice", `download failed: ${err}`, "error");
-        await updateStatus("🎤 Failed to download voice message.");
+        const reason = err?.message ?? String(err);
+        await updateStatus(`🎤 Failed to download voice message.\n${reason}`);
         return;
       }
 
