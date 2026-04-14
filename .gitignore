@@ -14,3 +14,6 @@ tmux-projects.json
 
 # Piper TTS binary and voice models
 piper/
+
+# Orchestrator job artifacts
+jobs/
