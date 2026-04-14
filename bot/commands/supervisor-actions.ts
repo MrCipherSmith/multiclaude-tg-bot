@@ -163,7 +163,7 @@ export async function handleSupervisorMessage(ctx: Context): Promise<void> {
     incidentsLastHour: Number((incRow[0] as any)?.last_hour ?? 0),
     daemonOk: !!daemon && Date.now() - new Date(daemon.updated_at).getTime() < 90_000,
     supervisorOk: !!supervisor && Date.now() - new Date(supervisor.updated_at).getTime() < 90_000,
-  });
+  }, text);
 
   if (summary) lines.push("", `💬 ${summary}`);
 
@@ -182,17 +182,26 @@ interface StatusSnapshot {
   supervisorOk: boolean;
 }
 
-async function getOllamaSummary(ollamaUrl: string, snap: StatusSnapshot): Promise<string> {
-  const system = `Ты — ассистент мониторинга Telegram-бота Helyx. Анализируй данные о состоянии системы и давай краткий (2-3 предложения) вывод на русском: что происходит, есть ли проблемы, что рекомендуешь. Только факты и конкретные советы. Не выходи за рамки мониторинга бота.`;
+async function getOllamaSummary(ollamaUrl: string, snap: StatusSnapshot, userMessage?: string): Promise<string> {
+  const system = `Ты — Helyx Supervisor, интеллектуальный мониторинг Telegram-бота Helyx.
 
-  const prompt = `Данные системы:
-- Сессий активных: ${snap.sessionCount} (работают сейчас: ${snap.workingSessions})
-- Очередь: ${snap.pendingQueue} pending, ${snap.stuckQueue} зависших
-- Инцидентов за час: ${snap.incidentsLastHour}
-- admin-daemon: ${snap.daemonOk ? "ok" : "не отвечает"}
-- supervisor: ${snap.supervisorOk ? "ok" : "не отвечает"}
+Helyx — это бот, который управляет сессиями Claude Code для разработчиков. Каждая сессия — это отдельный проект (helyx, goodai, vantage-backend и т.д.), где Claude выполняет задачи программирования. Ты следишь за здоровьем этих сессий.
 
-Дай краткий вывод и рекомендации.`;
+Твоя роль:
+- Оценивать состояние системы и давать живые, осмысленные комментарии
+- Предупреждать если что-то выглядит подозрительно (давно не активно, очередь растёт)
+- Отвечать на вопросы администратора только в контексте работы Helyx и его компонентов
+- Говорить по-русски, кратко и по делу (3-5 предложений)
+- Не выходить за рамки мониторинга Helyx — если вопрос не о боте, игнорируй его`;
+
+  const prompt = `Текущее состояние системы:
+- Активных сессий: ${snap.sessionCount} (сейчас работают: ${snap.workingSessions})
+- Очередь сообщений: ${snap.pendingQueue} pending, ${snap.stuckQueue} зависших (>5 мин)
+- Инцидентов за последний час: ${snap.incidentsLastHour}
+- admin-daemon: ${snap.daemonOk ? "✅ работает" : "❌ не отвечает"}
+- supervisor: ${snap.supervisorOk ? "✅ работает" : "❌ не отвечает"}
+
+${userMessage && userMessage !== "?" ? `Вопрос администратора: ${userMessage}` : "Дай оценку текущего состояния, укажи на любые подозрительные моменты."}`;
 
   try {
     const res = await fetch(`${ollamaUrl}/api/chat`, {
