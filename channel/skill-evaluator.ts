@@ -43,7 +43,6 @@ export class SkillEvaluator {
   /** Load rules.json from goodai-base. Call once at startup. */
   async load(homeDir: string): Promise<void> {
     const candidates = [
-      `${homeDir}/goodea/goodai-base/rules.json`,
       `${homeDir}/goodai-base/rules.json`,
     ];
 

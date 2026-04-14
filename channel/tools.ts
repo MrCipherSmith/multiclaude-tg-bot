@@ -10,6 +10,7 @@ import type { StatusManager } from "./status.ts";
 import { sendTelegramMessage, setTelegramReaction, editTelegramMessage, sendTelegramPoll, deleteTelegramMessage } from "./telegram.ts";
 import { maybeAttachVoiceRaw } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
+import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 
 export interface ToolContext {
   sql: postgres.Sql;
@@ -133,6 +134,17 @@ export function registerTools(
             limit: { type: "number", description: "Number of results to return (default: 5, max: 20)" },
           },
           required: ["query"],
+        },
+      },
+      {
+        name: "scan_project_knowledge",
+        description: "Scan a project directory and save structural knowledge (tech stack, architecture, entry points, setup) to long-term memory. Run this to force a rescan after major changes.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project_path: { type: "string", description: "Project directory to scan. Defaults to current session project_path." },
+            force_rescan: { type: "boolean", description: "Archive existing project knowledge and rescan from scratch (default: false)" },
+          },
         },
       },
       {
@@ -514,6 +526,14 @@ export function registerTools(
             date: (r.created_at as Date).toISOString(),
           })),
         }, null, 2));
+      }
+
+      case "scan_project_knowledge": {
+        const scanPath = String(args!.project_path ?? ctx.projectPath ?? "");
+        if (!scanPath) return text("No project_path available — pass it explicitly");
+        const forceRescan = Boolean(args!.force_rescan ?? false);
+        const count = await scanProjectKnowledge(scanPath, forceRescan);
+        return text(`Scanned ${scanPath}: ${count} knowledge facts saved`);
       }
 
       default:

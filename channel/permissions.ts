@@ -66,8 +66,15 @@ export class PermissionHandler {
   }
 
   isAutoApproved(toolName: string): boolean {
-    if (this.autoApprovePatterns.has(`${toolName}(*)`)) return true;
-    if (this.autoApprovePatterns.has(toolName)) return true;
+    for (const pattern of this.autoApprovePatterns) {
+      if (pattern === toolName) return true;
+      if (pattern === `${toolName.split("(")[0]}(*)`) return true;
+      if (pattern.includes("*")) {
+        // Convert glob pattern to regex: escape special chars, then replace * with .*
+        const regexStr = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+        if (new RegExp(`^${regexStr}$`).test(toolName)) return true;
+      }
+    }
     return false;
   }
 
