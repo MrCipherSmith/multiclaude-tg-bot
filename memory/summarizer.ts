@@ -145,6 +145,34 @@ export async function summarizeOnDisconnect(
   }
 }
 
+/** Heuristic: is the message content trivial (chit-chat, acks, noise)? */
+function isContentTrivial(messages: { role: string; content: string }[]): boolean {
+  const userMsgs = messages.filter((m) => m.role === "user");
+  if (userMsgs.length < 2) return true;
+
+  // If average user-message length < 25 chars it's likely pure chit-chat
+  const avgLen = userMsgs.reduce((s, m) => s + m.content.trim().length, 0) / userMsgs.length;
+  if (avgLen < 25) return true;
+
+  // If fewer than 2 user messages are "substantial" (≥40 chars), skip
+  const substantial = userMsgs.filter((m) => m.content.trim().length >= 40);
+  if (substantial.length < 2) return true;
+
+  return false;
+}
+
+/** Heuristic: reject generated summary if it looks like garbage output */
+function isSummaryWorthSaving(summary: string): boolean {
+  if (!summary || summary.trim().length < 50) return false;
+  const trivialPatterns = [
+    /^(ok|yes|no|sure|thanks|hello|hi|bye)/i,
+    /nothing (significant|important|notable|relevant|useful)/i,
+    /casual conversation/i,
+    /no (tasks?|work|code|changes|questions)/i,
+  ];
+  return !trivialPatterns.some((p) => p.test(summary.trim()));
+}
+
 async function trySummarize(
   sessionId: number,
   chatId: string,
@@ -166,6 +194,13 @@ async function trySummarize(
     content: r.content as string,
   }));
 
+  // Pre-check: skip trivial/chit-chat sessions (avoid polluting long-term memory)
+  // Allow "manual" trigger to bypass — user explicitly requested it
+  if (trigger !== "manual" && isContentTrivial(messages)) {
+    logger.info({ sessionId, chatId, trigger }, "summarize skipped: trivial content");
+    return null;
+  }
+
   // Resolve project_path if not provided
   if (!projectPath) {
     const sess = await sql`SELECT project_path FROM sessions WHERE id = ${sessionId}`;
@@ -176,6 +211,12 @@ async function trySummarize(
     logger.info({ sessionId, chatId, messageCount: messages.length, trigger, projectPath: projectPath ?? null }, "summarizing");
 
     const { summary, facts } = await summarizeConversation(messages);
+
+    // Post-check: validate the generated summary before saving
+    if (!isSummaryWorthSaving(summary)) {
+      logger.info({ sessionId, chatId, trigger }, "summarize skipped: low-quality summary output");
+      return null;
+    }
 
     // Save summary to long-term memory (scoped by project, not session)
     await remember({
@@ -188,8 +229,9 @@ async function trySummarize(
       tags: [trigger],
     });
 
-    // Save extracted facts
-    for (const fact of facts) {
+    // Save extracted facts (filter out trivial/too-short ones)
+    const validFacts = facts.filter((f) => f.trim().length >= 30 && f.trim().length <= 300);
+    for (const fact of validFacts) {
       await remember({
         source: "telegram",
         sessionId,
@@ -200,7 +242,7 @@ async function trySummarize(
       });
     }
 
-    logger.info({ sessionId, chatId, factCount: facts.length }, "saved summary and facts");
+    logger.info({ sessionId, chatId, factCount: validFacts.length, filteredFacts: facts.length - validFacts.length }, "saved summary and facts");
 
     // Archive old messages, keep last SHORT_TERM_WINDOW for continuity
     await sql`
