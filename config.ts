@@ -99,6 +99,12 @@ const EnvSchema = z.object({
     .string()
     .default("false")
     .transform((s) => s === "true"),
+
+  // Supervisor — session health watchdog alerts
+  // Set SUPERVISOR_CHAT_ID + SUPERVISOR_TOPIC_ID to receive alerts in a dedicated topic.
+  // Leave empty to disable Telegram notifications (supervisor still monitors and logs).
+  SUPERVISOR_CHAT_ID: z.string().default(""),
+  SUPERVISOR_TOPIC_ID: z.coerce.number().int().default(0),
 });
 
 const result = EnvSchema.safeParse(process.env);
@@ -201,6 +207,10 @@ export const CONFIG = {
 
   // Access control
   ALLOW_ALL_USERS: env.ALLOW_ALL_USERS,
+
+  // Supervisor
+  SUPERVISOR_CHAT_ID: env.SUPERVISOR_CHAT_ID,
+  SUPERVISOR_TOPIC_ID: env.SUPERVISOR_TOPIC_ID,
 } as const;
 
 export type Config = typeof CONFIG;
