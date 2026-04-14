@@ -533,29 +533,21 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
 
     const text = lines.join("\n");
 
-    // Try to edit the previous status message; if fails, send new
-    if (statusMessageId && BOT_TOKEN && SUPERVISOR_CHAT_ID) {
-      const editBody: Record<string, unknown> = {
-        chat_id: SUPERVISOR_CHAT_ID,
-        message_id: statusMessageId,
-        text,
-        parse_mode: "HTML",
-      };
-      if (SUPERVISOR_TOPIC_ID) editBody.message_thread_id = SUPERVISOR_TOPIC_ID;
-      const editResult = await tgPost("editMessageText", editBody);
-      if (editResult?.ok) {
-        console.error("[supervisor] status message updated");
-        return;
-      }
-      // Edit failed (message too old or deleted) — fall through to send new
-      statusMessageId = null;
-    }
-
-    // Send new status message
     if (!BOT_TOKEN || !SUPERVISOR_CHAT_ID) {
       console.error("[supervisor] status broadcast (no Telegram):", text.replace(/<[^>]+>/g, ""));
       return;
     }
+
+    // Delete previous status message so new one triggers a notification
+    if (statusMessageId) {
+      await tgPost("deleteMessage", {
+        chat_id: SUPERVISOR_CHAT_ID,
+        message_id: statusMessageId,
+      }).catch(() => {});
+      statusMessageId = null;
+    }
+
+    // Send new status message (always — edits are silent, users miss updates)
     const sendBody: Record<string, unknown> = {
       chat_id: SUPERVISOR_CHAT_ID,
       text,
