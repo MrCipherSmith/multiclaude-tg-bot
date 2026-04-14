@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.27.7
+
+### fix(voice): track status messages in DB — recover stale "downloading..." on restart
+
+When the bot restarted mid-download, the "🎤 Voice message — downloading..." Telegram
+message was never updated, leaving it visually stuck forever. Fix:
+- New `voice_status_messages` table: each in-flight voice download registers its
+  Telegram status message ID.
+- On bot startup, `recoverStaleVoiceStatusMessages` edits any rows older than 5 min to
+  "⚠️ Бот перезапущен — голосовое не обработано. Отправь повторно."
+- DB row is deleted via `finally {}` after the queue task completes (success or error).
+
+### fix(voice): explicit file_path null check + error reason in status message
+
+Telegram Bot API omits `file_path` for files >20 MB. Using `file.file_path!` (non-null
+assertion) caused a silent TypeError crash. Fix throws a descriptive error
+(`"File not accessible via Bot API, possibly >20 MB"`). Download failures now show the
+actual reason in the Telegram status message instead of a generic "Failed to download".
+
+### fix(voice): 30 s download timeout + queued/downloading status distinction
+
+`downloadFile` had no timeout on the Telegram CDN fetch — a slow response blocked the
+per-topic queue indefinitely. Added `AbortSignal.timeout(30_000)`. Status message now
+shows "queued..." when the slot is occupied and updates to "downloading..." when the
+task actually starts.
+
+---
+
 ## v1.27.6
 
 ### fix(tmux-watchdog): auto-confirm dev-channel prompt in ALL windows, not just active sessions
