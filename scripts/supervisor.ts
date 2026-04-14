@@ -116,10 +116,9 @@ async function getLlmExplanation(
   actionTaken: string,
   result: string,
 ): Promise<string> {
-  // System: strict role — ONLY incident summary, no general chat
   const system = `Ты — компонент мониторинга Telegram-бота Helyx. Твоя единственная задача: кратко объяснить инцидент в 1-2 предложениях на русском языке. Не рассуждай, не задавай вопросы, не выходи за рамки описания инцидента. Отвечай только фактами о произошедшем.`;
 
-Инцидент: ${incidentType}
+  const userMsg = `Инцидент: ${incidentType}
 Проект: ${project}
 Прошло: ${Math.round(elapsedSec / 60)}m ${elapsedSec % 60}s
 Действие: ${actionTaken}
@@ -128,22 +127,24 @@ async function getLlmExplanation(
 Объясни кратко что произошло и что было сделано.`;
 
   try {
-    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+    const res = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gemma3:4b",
-        system,
-        prompt,
+        model: "gemma4:e4b",
+        think: false,
+        messages: [
+          { role: "system", content: system },
+          { role: "user",   content: userMsg },
+        ],
         stream: false,
-        options: { num_predict: 100, temperature: 0.3 },
+        options: { num_predict: 120, temperature: 0.3 },
       }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return "";
-    const data = await res.json() as { response?: string };
-    const raw = (data.response ?? "").trim();
-    return raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    const data = await res.json() as { message?: { content?: string } };
+    return (data.message?.content ?? "").trim();
   } catch {
     return "";
   }

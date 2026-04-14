@@ -195,21 +195,24 @@ async function getOllamaSummary(ollamaUrl: string, snap: StatusSnapshot): Promis
 Дай краткий вывод и рекомендации.`;
 
   try {
-    const res = await fetch(`${ollamaUrl}/api/generate`, {
+    const res = await fetch(`${ollamaUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gemma3:4b",
-        system,
-        prompt,
+        model: "gemma4:e4b",
+        think: false,
+        messages: [
+          { role: "system", content: system },
+          { role: "user",   content: prompt },
+        ],
         stream: false,
-        options: { num_predict: 120, temperature: 0.4 },
+        options: { num_predict: 150, temperature: 0.4 },
       }),
       signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return "";
-    const data = await res.json() as { response?: string };
-    return (data.response ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    const data = await res.json() as { message?: { content?: string } };
+    return (data.message?.content ?? "").trim();
   } catch {
     return "";
   }
