@@ -297,8 +297,9 @@ export function registerTools(
         }
 
         channelLogger.info({ phase: "tools", step: "reply-sent", chatId, t: Date.now() }, "perf");
-        // Delete status only after the message is actually sent — so ✅ appears together with the reply
-        await status.deleteStatusMessage(chatId);
+        // Delete status non-blocking — don't await, avoids holding up reply return when
+        // Telegram rate-limits editMessageText (can block for 60+ seconds otherwise).
+        status.deleteStatusMessage(chatId).catch((err) => channelLogger.warn({ err }, "deleteStatusMessage failed"));
         // Fire-and-forget TTS voice attachment (forced if user sent voice, otherwise ≥300 chars)
         maybeAttachVoiceRaw(token, chatId, replyText, forumTopicId ?? null, ctx.forceVoice?.() ?? false);
         if (sessionId) {

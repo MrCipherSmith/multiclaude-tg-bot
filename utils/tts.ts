@@ -365,8 +365,15 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
   const totalNorm    = cyrillicNorm + latinNorm;
   const isRussianNorm = totalNorm === 0 ? isRussian : cyrillicNorm / totalNorm >= 0.4;
   const clean = isRussianNorm !== isRussian
-    ? (channelLogger.warn({ isRussian, isRussianNorm }, "tts: normalize changed language, using stripped"), stripped)
+    ? (channelLogger.warn({ isRussian, isRussianNorm, normalizedPreview: normalized.slice(0, 150) }, "tts: normalize changed language, using stripped"), stripped)
     : normalized;
+
+  channelLogger.info({
+    isRussian,
+    isRussianNorm,
+    cyrillicRatio: totalLettersRaw > 0 ? +(cyrillicCountRaw / totalLettersRaw).toFixed(3) : null,
+    normalizedPreview: clean.slice(0, 150),
+  }, "tts: synthesizing");
 
   const wrap = (buf: Buffer | null, fmt: "mp3" | "wav") => buf ? { buf, fmt } : null;
 
@@ -397,40 +404,55 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
     return synthesizeGroq(clean).then(b => wrap(b, "wav"));
   }
 
-  // auto (Russian): Piper → Yandex → Groq
+  // auto (Russian): Yandex → Piper → Groq
+  // Yandex is first because it handles mixed Russian/English text correctly.
+  // Piper Russian (irina) mangles Latin identifiers that survive normalization.
   // auto (English): Piper(EN) → Kokoro → Groq
   if (isRussian) {
-    try {
-      const buf = await synthesizePiper(clean, true);
-      if (buf) return { buf, fmt: "wav" };
-    } catch (err) {
-      channelLogger.warn({ err }, "tts: Piper failed, trying Yandex");
-    }
-
     if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
       try {
         const buf = await synthesizeYandex(clean);
-        if (buf) return { buf, fmt: "mp3" };
+        if (buf) {
+          channelLogger.info({}, "tts: provider=yandex");
+          return { buf, fmt: "mp3" };
+        }
       } catch (err) {
-        channelLogger.warn({ err }, "tts: Yandex failed, trying Groq");
+        channelLogger.warn({ err }, "tts: Yandex failed, trying Piper");
       }
+    }
+
+    try {
+      const buf = await synthesizePiper(clean, true);
+      if (buf) {
+        channelLogger.info({}, "tts: provider=piper-ru");
+        return { buf, fmt: "wav" };
+      }
+    } catch (err) {
+      channelLogger.warn({ err }, "tts: Piper failed, trying Groq");
     }
   } else {
     try {
       const buf = await synthesizePiper(clean, false);
-      if (buf) return { buf, fmt: "wav" };
+      if (buf) {
+        channelLogger.info({}, "tts: provider=piper-en");
+        return { buf, fmt: "wav" };
+      }
     } catch {
       // fall through to Kokoro
     }
     try {
       const buf = await synthesizeKokoro(clean);
-      if (buf) return { buf, fmt: "wav" };
+      if (buf) {
+        channelLogger.info({}, "tts: provider=kokoro");
+        return { buf, fmt: "wav" };
+      }
     } catch {
       // fall through to Groq
     }
   }
 
   try {
+    channelLogger.info({ isRussian }, "tts: provider=groq (english-only fallback)");
     const buf = await synthesizeGroq(clean);
     return wrap(buf, "wav");
   } catch (err) {
