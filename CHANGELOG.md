@@ -1,5 +1,110 @@
 # Changelog
 
+## v1.31.0
+
+### fix: security hardening + concurrency correctness (full project review)
+
+Comprehensive review of 58 files (4009 insertions since v1.24.0) produced 6 blockers
+and 18 major findings — all fixed in this release.
+
+**Security:**
+- `handleMonitorCallback` now checks `TELEGRAM_CHAT_ID` before queuing Docker/daemon
+  restarts — matches the guard already present in `handleSupervisorCallback`
+- `scan_project_knowledge` MCP tool validates the target path is within
+  `HOST_PROJECTS_DIR` / `HOME` to prevent path traversal
+- `cli.ts` `helyx add` / `helyx remove`: allowlist regex validation + LIKE wildcard
+  escaping (`%`, `_`, `\`) — `helyx remove %` no longer deletes all projects
+- Dashboard restart buttons now require `window.confirm()` before firing
+- Dashboard mutation errors (restart daemon / restart container) now surface to the
+  user instead of being silently swallowed
+
+**Concurrency:**
+- All 5 supervisor `setInterval` loops now carry in-flight guards
+  (`sessionCheckRunning`, `queueCheckRunning`, `voiceCheckRunning`,
+  `broadcastRunning`, `idleCheckRunning`) — prevents overlapping executions that
+  caused duplicate `proj_start` commands and duplicate Telegram alerts
+- `tgPost` 429-retry now creates a fresh `AbortSignal.timeout(10_000)` instead of
+  reusing the already-elapsed one from the first request — all retries actually fire
+- `writeProcessHealth`: in-flight guard + `timeout 10 docker ps` to prevent DB pool
+  starvation when Docker daemon is hung
+- `admin-daemon` startup: reset `admin_commands` rows stuck at `status='processing'`
+  (crash-recovery for commands lost between TX commit and `setImmediate` dispatch)
+
+**Data integrity:**
+- `checkIdleSessions`: `forceSummarize` return value checked before deleting messages
+  — no more data loss when summary quality check skips trivial content
+- `checkIdleSessions`: `deleteBefore` timestamp captured before `forceSummarize` call
+  — messages arriving during the 30s Ollama call are not deleted
+- `IDLE_COMPACT_MIN`: minimum bound `Math.max(10, ...)` prevents accidental compaction
+  of all sessions when env var is empty or zero
+- `voiceStatusId` race fixed: `INSERT INTO voice_status_messages` is now `await`-ed
+  before `enqueueForTopic` — `clearVoiceStatus()` always has a valid ID; removed
+  redundant explicit calls on early-return paths (only `finally` runs cleanup now)
+
+**Correctness:**
+- `updateDiff` recursive self-call on Telegram edit failure replaced with direct
+  non-recursive `sendTelegramMessage` — eliminates stack overflow risk
+- `diffMessages` key now includes `message_thread_id` via `diffKey(chatId, extra)` —
+  prevents key collision across multiple forum topics sharing the same `chatId`
+- `handleMonitor` refresh: `handleMonitor(ctx)` called before `deleteMessage()` so
+  the old message stays intact if the new send fails
+- `gemma4:e4b` hardcode replaced with
+  `OLLAMA_CHAT_MODEL ?? SUMMARIZE_MODEL ?? "gemma4:e4b"` in both `supervisor.ts`
+  and `supervisor-actions.ts` — no more 10s hang on installs without that model
+- `sendStatusBroadcast` success log: `console.error` → `console.log`
+
+---
+
+## v1.30.0
+
+### feat: Supervisor idle auto-compact + SUMMARIZE_MODEL + summary quality validation
+
+- **feat(supervisor)**: idle session auto-compact after `IDLE_COMPACT_MIN` minutes
+  (default 60) with ≥10 messages — calls `forceSummarize`, clears cache + DB
+- **feat(memory)**: `SUMMARIZE_MODEL` env var — use local Ollama model for
+  summarization (`SUMMARIZE_MODEL=gemma4:e4b`), falls back to main LLM on failure
+- **feat(memory)**: summary quality validation before saving — rejects trivial
+  summaries (`< 50 chars`, matches "nothing significant" patterns); pre-check skips
+  summarization for sessions with avg message length < 25 chars
+- **feat(setup)**: Ollama detection in setup wizard — prompts to configure
+  `EMBEDDING_MODEL` and `SUMMARIZE_MODEL` when Ollama is available
+
+---
+
+## v1.29.0
+
+### feat: Supervisor LLM diagnosis with Ollama + /status in supervisor topic
+
+- **feat(supervisor)**: switched to `gemma4:e4b` via Ollama `/api/chat` with
+  `think: false` (~3.2s vs 7.6s for thinking models)
+- **feat(supervisor)**: any message in supervisor topic returns live status + LLM
+  assessment of system health, scoped to Helyx monitoring context
+- **feat(supervisor)**: recovery verification — polls `active_status_messages` for
+  60s after `proj_start`; sends ✅ or ⛔ result; inline 🔄 retry button on failure
+- **feat(supervisor)**: 5-minute status broadcast replaces hourly pulse — deletes
+  previous message so new one triggers notification
+
+---
+
+## v1.28.0
+
+### feat: Helyx Supervisor — automated session health monitoring
+
+New `scripts/supervisor.ts` module integrated into `admin-daemon`:
+
+- **Session watchdog**: checks `active_status_messages` every 60s — stale heartbeat
+  (> 2 min) triggers `proj_start` via `admin_commands`
+- **Queue watchdog**: stuck `message_queue` entries (> 5 min, `delivered=false`)
+  surface as inline-button alerts (🔄 Restart / ✅ Ignore)
+- **Voice cleanup**: `voice_status_messages` rows > 3 min edited to "bot restarted"
+  warning + deleted from DB
+- **LLM diagnosis**: every incident includes an Ollama explanation (best-effort,
+  10s timeout, skipped gracefully when Ollama unavailable)
+- **Telegram notifications**: all alerts → `SUPERVISOR_TOPIC_ID` with 429 retry
+- **Idempotency**: 5-minute dedup window prevents duplicate alerts per incident
+
+---
+
 ## v1.27.7
 
 ### fix(voice): track status messages in DB — recover stale "downloading..." on restart
