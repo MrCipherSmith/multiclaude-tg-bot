@@ -8,6 +8,8 @@
     "url": "https://github.com/MrCipherSmith/helyx.git"
   },
   "homepage": "https://github.com/MrCipherSmith/helyx#readme",
+  "author": "MrCipherSmith",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "bun main.ts",
