@@ -285,6 +285,32 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+/** Synthesize via kesha-engine local TTS (Kokoro EN / Piper RU, auto-routed). Returns WAV buffer. */
+async function synthesizeKesha(text: string, isRussian: boolean): Promise<Buffer | null> {
+  if (!CONFIG.KESHA_TTS_ENABLED || !CONFIG.KESHA_ENABLED) return null;
+
+  const voice = isRussian ? "ru-denis" : "en-af_heart";
+  const tmpFile = `/tmp/kesha-tts-${Date.now()}.wav`;
+  try {
+    const proc = Bun.spawn(
+      [CONFIG.KESHA_BIN, "say", "--voice", voice, "--out", tmpFile, text.slice(0, 5000)],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    const code = await proc.exited;
+    if (code !== 0) {
+      channelLogger.warn({ code }, "tts: kesha say exited with non-zero code");
+      return null;
+    }
+    const buf = await Bun.file(tmpFile).arrayBuffer();
+    return Buffer.from(buf);
+  } catch (err) {
+    channelLogger.error({ err }, "tts: kesha say error");
+    return null;
+  } finally {
+    import("fs").then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+  }
+}
+
 /** Synthesize via Piper local TTS (offline). Picks model by language. Returns WAV buffer. */
 async function synthesizePiper(text: string, isRussian = true): Promise<Buffer | null> {
   const modelPath = isRussian ? PIPER_MODEL_RU : PIPER_MODEL_EN;
@@ -404,10 +430,10 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
     return synthesizeGroq(clean).then(b => wrap(b, "wav"));
   }
 
-  // auto (Russian): Yandex → Piper → Groq
+  // auto (Russian): Yandex → Kesha → Piper → Groq
   // Yandex is first because it handles mixed Russian/English text correctly.
-  // Piper Russian (irina) mangles Latin identifiers that survive normalization.
-  // auto (English): Piper(EN) → Kokoro → Groq
+  // Kesha (Piper VITS ru-denis) is the offline fallback before raw Piper.
+  // auto (English): Piper(EN) → Kesha → Kokoro → Groq
   if (isRussian) {
     if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
       try {
@@ -417,8 +443,18 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
           return { buf, fmt: "mp3" };
         }
       } catch (err) {
-        channelLogger.warn({ err }, "tts: Yandex failed, trying Piper");
+        channelLogger.warn({ err }, "tts: Yandex failed, trying Kesha");
       }
+    }
+
+    try {
+      const buf = await synthesizeKesha(clean, true);
+      if (buf) {
+        channelLogger.info({}, "tts: provider=kesha-ru");
+        return { buf, fmt: "wav" };
+      }
+    } catch (err) {
+      channelLogger.warn({ err }, "tts: Kesha failed, trying Piper");
     }
 
     try {
@@ -435,6 +471,15 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
       const buf = await synthesizePiper(clean, false);
       if (buf) {
         channelLogger.info({}, "tts: provider=piper-en");
+        return { buf, fmt: "wav" };
+      }
+    } catch {
+      // fall through to Kesha
+    }
+    try {
+      const buf = await synthesizeKesha(clean, false);
+      if (buf) {
+        channelLogger.info({}, "tts: provider=kesha-en");
         return { buf, fmt: "wav" };
       }
     } catch {

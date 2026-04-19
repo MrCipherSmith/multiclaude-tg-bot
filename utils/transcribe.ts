@@ -1,5 +1,6 @@
 import { recordTranscription } from "./stats.ts";
 import { CONFIG } from "../config.ts";
+import { unlink, writeFile } from "node:fs/promises";
 
 const GROQ_API_KEY = CONFIG.GROQ_API_KEY;
 const WHISPER_URL = CONFIG.WHISPER_URL;
@@ -85,7 +86,39 @@ async function transcribeLocal(
   return data.text?.trim() || null;
 }
 
-/** Transcribe audio: Groq (primary) → local Whisper (fallback) */
+/** Transcribe via kesha-engine local ONNX ASR (offline, no API key needed). */
+async function transcribeKesha(
+  audioBuffer: ArrayBuffer,
+  fileName: string,
+): Promise<string | null> {
+  if (!CONFIG.KESHA_ENABLED) return null;
+
+  const tmpFile = `/tmp/kesha-asr-${Date.now()}-${fileName}`;
+  try {
+    await writeFile(tmpFile, Buffer.from(audioBuffer));
+
+    const proc = Bun.spawn([CONFIG.KESHA_BIN, tmpFile], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+
+    const code = await proc.exited;
+    if (code !== 0) {
+      console.error(`[transcribe] kesha exited with code ${code}`);
+      return null;
+    }
+
+    const text = await new Response(proc.stdout).text();
+    return text.trim() || null;
+  } catch (err) {
+    console.error(`[transcribe] kesha error:`, err);
+    return null;
+  } finally {
+    unlink(tmpFile).catch(() => {});
+  }
+}
+
+/** Transcribe audio: Groq (primary) → Kesha local ONNX → local Whisper (fallback) */
 export async function transcribe(
   audioBuffer: ArrayBuffer,
   fileName: string,
@@ -115,6 +148,36 @@ export async function transcribe(
       chatId: ctx?.chatId,
       provider: "groq",
       durationMs: Date.now() - groqStart,
+      audioDurationSec: ctx?.audioDurationSec,
+      status: "error",
+      errorMessage: err?.message ?? String(err),
+    });
+  }
+
+  // Fallback to kesha local ONNX ASR
+  console.error(`[transcribe] falling back to kesha ASR`);
+  const keshaStart = Date.now();
+  try {
+    const result = await transcribeKesha(audioBuffer, fileName);
+    if (result) {
+      console.error(`[transcribe] kesha ASR OK`);
+      recordTranscription({
+        sessionId: ctx?.sessionId,
+        chatId: ctx?.chatId,
+        provider: "kesha",
+        durationMs: Date.now() - keshaStart,
+        audioDurationSec: ctx?.audioDurationSec,
+        status: "success",
+      });
+      return result;
+    }
+  } catch (err: any) {
+    console.error(`[transcribe] kesha ASR failed:`, err);
+    recordTranscription({
+      sessionId: ctx?.sessionId,
+      chatId: ctx?.chatId,
+      provider: "kesha",
+      durationMs: Date.now() - keshaStart,
       audioDurationSec: ctx?.audioDurationSec,
       status: "error",
       errorMessage: err?.message ?? String(err),

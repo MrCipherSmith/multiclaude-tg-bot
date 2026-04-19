@@ -81,6 +81,11 @@ const EnvSchema = z.object({
   KOKORO_DTYPE: z.enum(["q4", "q8", "fp16", "fp32"]).default("q8"),
   KOKORO_VOICE: z.string().default("af_bella"),
 
+  // Kesha Voice Kit (local offline ASR + TTS)
+  KESHA_ENABLED: z.string().default("true").transform((s) => s !== "false"),
+  KESHA_TTS_ENABLED: z.string().default("false").transform((s) => s === "true"),
+  KESHA_BIN: z.string().default("kesha-engine"),
+
   // GitHub
   GITHUB_TOKEN: z.string().default(""),
   GITHUB_USERNAME: z.string().default(""),
@@ -192,6 +197,11 @@ export const CONFIG = {
   YANDEX_LANG: env.YANDEX_LANG,
   KOKORO_DTYPE: env.KOKORO_DTYPE,
   KOKORO_VOICE: env.KOKORO_VOICE,
+
+  // Kesha Voice Kit
+  KESHA_ENABLED: env.KESHA_ENABLED,
+  KESHA_TTS_ENABLED: env.KESHA_TTS_ENABLED,
+  KESHA_BIN: env.KESHA_BIN,
 
   // Security / paths
   JWT_SECRET: env.JWT_SECRET,
