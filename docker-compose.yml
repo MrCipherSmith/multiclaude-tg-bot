@@ -17,6 +17,7 @@ services:
       HOST_PROJECTS_DIR: ${HOST_PROJECTS_DIR:-${HOME}/bots}
       HOST_HOME: ${HOME}
       PIPER_DIR: /app/piper
+      KESHA_BIN: /usr/local/bin/kesha-engine
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
