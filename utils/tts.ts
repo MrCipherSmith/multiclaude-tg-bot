@@ -1,6 +1,7 @@
 import type { Bot } from "grammy";
 import { InputFile } from "grammy";
 import { join } from "path";
+import { unlink } from "node:fs";
 import { CONFIG } from "../config.ts";
 import { channelLogger } from "../logger.ts";
 
@@ -66,6 +67,14 @@ function pcmToWav(pcm: Float32Array, sampleRate = 24000): Buffer {
 }
 
 const VOICE_MIN_CHARS = 300;
+
+/** Returns true if text is predominantly Russian (Cyrillic ≥ 40% of letters). */
+export function detectRussian(text: string): boolean {
+  const cyr = (text.match(/[Ѐ-ӿ]/g) ?? []).length;
+  const lat = (text.match(/[a-zA-Z]/g) ?? []).length;
+  const total = cyr + lat;
+  return total === 0 ? true : cyr / total >= 0.4;
+}
 
 /**
  * Returns true if the text qualifies for a voice attachment:
@@ -307,7 +316,7 @@ export async function synthesizeKesha(text: string, isRussian: boolean): Promise
     channelLogger.error({ err }, "tts: kesha say error");
     return null;
   } finally {
-    import("fs").then(({ unlink }) => unlink(tmpFile, () => {})).catch(() => {});
+    unlink(tmpFile, () => {});
   }
 }
 
@@ -359,24 +368,26 @@ async function synthesizeKokoro(text: string): Promise<Buffer | null> {
  * Tries Yandex → Piper → Kokoro without touching kesha.
  */
 export async function synthesizeCurrentOnly(text: string, isRussian: boolean): Promise<{ buf: Buffer; fmt: "mp3" | "wav"; provider: string } | null> {
+  const clean = stripMarkdown(text).slice(0, 1500);
+  if (!clean) return null;
   if (isRussian) {
     if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {
       try {
-        const buf = await synthesizeYandex(text);
+        const buf = await synthesizeYandex(clean);
         if (buf) return { buf, fmt: "mp3", provider: "yandex" };
       } catch { /* fall through */ }
     }
     try {
-      const buf = await synthesizePiper(text, true);
+      const buf = await synthesizePiper(clean, true);
       if (buf) return { buf, fmt: "wav", provider: "piper-ru" };
     } catch { /* fall through */ }
   } else {
     try {
-      const buf = await synthesizePiper(text, false);
+      const buf = await synthesizePiper(clean, false);
       if (buf) return { buf, fmt: "wav", provider: "piper-en" };
     } catch { /* fall through */ }
     try {
-      const buf = await synthesizeKokoro(text);
+      const buf = await synthesizeKokoro(clean);
       if (buf) return { buf, fmt: "wav", provider: "kokoro" };
     } catch { /* fall through */ }
   }

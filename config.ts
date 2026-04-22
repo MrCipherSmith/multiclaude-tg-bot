@@ -82,7 +82,7 @@ const EnvSchema = z.object({
   KOKORO_VOICE: z.string().default("af_bella"),
 
   // Kesha Voice Kit (local offline ASR + TTS)
-  KESHA_ENABLED: z.string().default("true").transform((s) => s !== "false"),
+  KESHA_ENABLED: z.string().default("false").transform((s) => s === "true"),
   KESHA_TTS_ENABLED: z.string().default("false").transform((s) => s === "true"),
   KESHA_BIN: z.string().default("kesha-engine"),
   // Benchmark mode: run current + kesha pipelines in parallel and report stats
@@ -95,6 +95,7 @@ const EnvSchema = z.object({
   // Security / paths
   JWT_SECRET: z.string().optional(),
   SECURE_COOKIES: z.string().optional(),
+  LOGS_DIR: z.string().default("logs"),
   DOWNLOADS_DIR: z.string().default("/app/downloads"),
   HOST_DOWNLOADS_DIR: z.string().optional(),
   HOST_CLAUDE_CONFIG: z.string().default("/host-claude-config"),
@@ -209,6 +210,7 @@ export const CONFIG = {
   // Security / paths
   JWT_SECRET: env.JWT_SECRET,
   SECURE_COOKIES: env.SECURE_COOKIES,
+  LOGS_DIR: env.LOGS_DIR,
   DOWNLOADS_DIR: env.DOWNLOADS_DIR,
   HOST_DOWNLOADS_DIR: env.HOST_DOWNLOADS_DIR,
   HOST_CLAUDE_CONFIG: env.HOST_CLAUDE_CONFIG,

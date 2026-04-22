@@ -13,6 +13,16 @@ import {
   formatBenchmarkReport,
   type AsrBenchResult,
 } from "../utils/benchmark.ts";
+import { touchIdleTimer } from "../memory/summarizer.ts";
+import { sql } from "../memory/db.ts";
+import { logger } from "../logger.ts";
+import { appendLog } from "../utils/stats.ts";
+import { getBotRef, setPendingInput } from "./handlers.ts";
+import { maybeAttachVoice } from "../utils/tts.ts";
+import { getForumChatId } from "./forum-cache.ts";
+import { enqueueForTopic, topicQueueKey, getQueueDepth } from "./topic-queue.ts";
+
+const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — include base64 inline
 
 function sendAsrBenchReport(
   bot: import("grammy").Bot,
@@ -25,16 +35,6 @@ function sendAsrBenchReport(
   const opts = threadId ? { message_thread_id: threadId, parse_mode: "HTML" as const } : { parse_mode: "HTML" as const };
   bot.api.sendMessage(chatId, report, opts).catch(() => {});
 }
-import { touchIdleTimer } from "../memory/summarizer.ts";
-import { sql } from "../memory/db.ts";
-import { logger } from "../logger.ts";
-import { appendLog } from "../utils/stats.ts";
-import { getBotRef, setPendingInput } from "./handlers.ts";
-import { maybeAttachVoice } from "../utils/tts.ts";
-import { getForumChatId } from "./forum-cache.ts";
-import { enqueueForTopic, topicQueueKey, getQueueDepth } from "./topic-queue.ts";
-
-const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — include base64 inline
 
 /** Deliver a downloaded file to Claude (cli queue or standalone LLM). */
 async function deliverMedia(

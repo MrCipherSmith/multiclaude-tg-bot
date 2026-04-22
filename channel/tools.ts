@@ -9,7 +9,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprot
 import { markdownToTelegramHtml } from "../bot/format.ts";
 import type { StatusManager } from "./status.ts";
 import { sendTelegramMessage, setTelegramReaction, editTelegramMessage, sendTelegramPoll, deleteTelegramMessage } from "./telegram.ts";
-import { maybeAttachVoiceRaw } from "../utils/tts.ts";
+import { maybeAttachVoiceRaw, shouldSendVoice } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { CONFIG } from "../config.ts";
@@ -19,7 +19,6 @@ import {
   formatBenchmarkReport,
   detectRussian,
   sendTelegramVoice,
-  sendTelegramText,
 } from "../utils/benchmark.ts";
 
 /** Benchmark: run both TTS pipelines, send two voice messages + stats report. */
@@ -30,34 +29,40 @@ function runTtsBenchmarkAndReport(
   threadId: number | null,
   forceVoice: boolean,
 ): void {
-  import("../utils/tts.ts").then(({ shouldSendVoice }) => {
-    if (!forceVoice && !shouldSendVoice(replyText)) return;
+  channelLogger.info({ forceVoice, textLen: replyText.length, threadId }, "tts-bench: runTtsBenchmarkAndReport called");
+  const svResult = shouldSendVoice(replyText);
+  channelLogger.info({ forceVoice, shouldSendVoice: svResult }, "tts-bench: guard check");
+  if (!forceVoice && !svResult) return;
 
-    const isRussian = detectRussian(replyText);
+  const isRussian = detectRussian(replyText);
 
-    runTtsBenchmark(replyText, isRussian)
-      .then(async (results) => {
-        // Send both voice messages
-        for (const r of results) {
-          if (r.buf && r.fmt) {
-            await sendTelegramVoice(token, chatId, r.buf, r.fmt, threadId, `🎙 ${r.provider}`);
-          }
+  channelLogger.info({ isRussian }, "tts-bench: starting runTtsBenchmark");
+  runTtsBenchmark(replyText, isRussian)
+    .then(async (results) => {
+      channelLogger.info({ count: results.length, providers: results.map(r => r.provider + ':' + r.success) }, "tts-bench: results");
+      // Send both voice messages with a gap to reduce 429 rate-limit hits
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]!;
+        if (r.buf && r.fmt) {
+          if (i > 0) await new Promise(res => setTimeout(res, 4000));
+          channelLogger.info({ provider: r.provider, bytes: r.buf.length }, "tts-bench: sending voice");
+          await sendTelegramVoice(token, chatId, r.buf, r.fmt, threadId, `🎙 ${r.provider}`);
         }
+      }
 
-        // Send comparison stats
-        const report = formatBenchmarkReport([], results, undefined);
-        await sendTelegramText(token, chatId, report, threadId);
+      // Send comparison stats
+      const report = formatBenchmarkReport([], results, undefined);
+      await sendTelegramMessage(token, chatId, report, { parse_mode: "HTML", ...(threadId !== null && { message_thread_id: threadId }) });
 
-        // Log to file
-        appendBenchmarkLog({
-          ts: new Date().toISOString(),
-          chatId,
-          asr: [],
-          tts: results.map(({ buf: _buf, ...r }) => r),
-        });
-      })
-      .catch((err) => channelLogger.error({ err }, "benchmark: TTS benchmark failed"));
-  }).catch(() => {});
+      // Log to file
+      appendBenchmarkLog({
+        ts: new Date().toISOString(),
+        chatId,
+        asr: [],
+        tts: results.map(({ buf: _buf, ...r }) => r),
+      });
+    })
+    .catch((err) => channelLogger.error({ err }, "benchmark: TTS benchmark failed"));
 }
 
 export interface ToolContext {

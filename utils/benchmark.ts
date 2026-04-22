@@ -256,50 +256,19 @@ export function formatBenchmarkReport(
   return lines.join("\n");
 }
 
-const LOG_DIR = process.env.LOGS_DIR ?? "logs";
-const LOG_FILE = `${LOG_DIR}/kesha-benchmark.jsonl`;
+const LOG_FILE = `${CONFIG.LOGS_DIR}/kesha-benchmark.jsonl`;
 
 /** Append benchmark result to JSONL log file. */
 export function appendBenchmarkLog(entry: BenchmarkEntry): void {
   try {
-    mkdirSync(LOG_DIR, { recursive: true });
+    mkdirSync(CONFIG.LOGS_DIR, { recursive: true });
     appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n", "utf8");
   } catch (err) {
     channelLogger.warn({ err }, "benchmark: failed to write log");
   }
 }
 
-/** Detect Russian from text (same heuristic as tts.ts). */
-export function detectRussian(text: string): boolean {
-  const cyr = (text.match(/[\u0400-\u04FF]/g) ?? []).length;
-  const lat = (text.match(/[a-zA-Z]/g) ?? []).length;
-  const total = cyr + lat;
-  return total === 0 ? true : cyr / total >= 0.4;
-}
-
-/** Send a Telegram message via raw HTTP (usable from fire-and-forget contexts). */
-export async function sendTelegramText(
-  token: string,
-  chatId: string | number,
-  text: string,
-  threadId?: number | null,
-): Promise<void> {
-  const body: Record<string, unknown> = {
-    chat_id: String(chatId),
-    text,
-    parse_mode: "HTML",
-  };
-  if (threadId) body.message_thread_id = threadId;
-  try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    channelLogger.warn({ err }, "benchmark: sendTelegramText failed");
-  }
-}
+export { detectRussian } from "./tts.ts";
 
 /** Send a voice buffer to Telegram via raw HTTP. */
 export async function sendTelegramVoice(
@@ -312,16 +281,36 @@ export async function sendTelegramVoice(
 ): Promise<void> {
   const mimeType = fmt === "mp3" ? "audio/mpeg" : "audio/wav";
   const filename = fmt === "mp3" ? "voice.mp3" : "voice.wav";
-  const form = new FormData();
-  form.append("chat_id", String(chatId));
-  form.append("voice", new Blob([buf.buffer as ArrayBuffer], { type: mimeType }), filename);
-  if (threadId) form.append("message_thread_id", String(threadId));
-  if (caption) form.append("caption", caption);
+  const makeForm = () => {
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("voice", new Blob([buf.buffer as ArrayBuffer], { type: mimeType }), filename);
+    if (threadId) form.append("message_thread_id", String(threadId));
+    if (caption) form.append("caption", caption);
+    return form;
+  };
+  const send = () => fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+    method: "POST",
+    body: makeForm(),
+  });
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
-      method: "POST",
-      body: form,
-    });
+    let res = await send();
+    if (res.status === 429) {
+      let retryAfter = 5;
+      try {
+        const body = await res.json() as { parameters?: { retry_after?: number } };
+        retryAfter = body.parameters?.retry_after ?? 5;
+      } catch { /* use default */ }
+      channelLogger.warn({ chatId, retryAfter }, "benchmark: sendVoice 429, retrying");
+      await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
+      res = await send();
+    }
+    if (!res.ok) {
+      const err = await res.text().catch(() => "");
+      channelLogger.warn({ status: res.status, err, fmt }, "benchmark: sendVoice failed");
+    } else {
+      channelLogger.info({ chatId, threadId, fmt, caption }, "benchmark: voice sent ok");
+    }
   } catch (err) {
     channelLogger.warn({ err }, "benchmark: sendTelegramVoice failed");
   }
