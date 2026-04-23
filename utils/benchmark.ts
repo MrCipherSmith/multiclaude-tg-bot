@@ -284,7 +284,7 @@ export async function sendTelegramVoice(
   const makeForm = () => {
     const form = new FormData();
     form.append("chat_id", String(chatId));
-    form.append("voice", new Blob([buf.buffer as ArrayBuffer], { type: mimeType }), filename);
+    form.append("voice", new Blob([buf], { type: mimeType }), filename);
     if (threadId) form.append("message_thread_id", String(threadId));
     if (caption) form.append("caption", caption);
     return form;
