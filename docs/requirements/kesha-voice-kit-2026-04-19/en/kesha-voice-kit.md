@@ -51,9 +51,11 @@ Kesha v1.1.3 provides a single binary (`kesha-engine-linux-x64`, 24 MB) and an n
 The production Docker image MUST download the `kesha-engine-linux-x64` binary, make it executable, run `kesha install` (ASR models, ~1-2 GB), and optionally `kesha install --tts` (~390 MB Kokoro + Piper RU) if `KESHA_INSTALL_TTS=true` build arg is set.
 
 **FR-4 — Config flags**  
-Add two new optional env vars:  
-- `KESHA_ENABLED` (default `true`) — master switch for all kesha integration  
+Add four new optional env vars:  
+- `KESHA_ENABLED` (default `false`) — master switch for all kesha integration (opt-in)
 - `KESHA_TTS_ENABLED` (default `false`) — enable kesha TTS (off by default, Piper/Kokoro still used directly)
+- `KESHA_BIN` (default `kesha-engine`) — path to kesha-engine binary
+- `KESHA_BENCHMARK` (default `false`) — benchmark mode: run current + kesha pipelines in parallel and report per-message latency/similarity stats to Telegram
 
 **FR-5 — Graceful degradation**  
 If kesha binary is not found or exits non-zero, the system MUST log a warning and continue to the next provider in the fallback chain without crashing.
@@ -127,12 +129,21 @@ Feature: Kesha TTS for offline synthesis
     Then a voice message is synthesized via kesha say
     And audio format is WAV sent as Telegram voice
 
-  Scenario: TTS_PROVIDER=auto falls through to kesha
+  Scenario: TTS_PROVIDER=auto falls through to kesha (Russian)
     Given TTS_PROVIDER=auto
     And Yandex API key is missing
-    And Piper binary is absent
+    And Piper binary fails or is absent
+    And KESHA_TTS_ENABLED=true
     When TTS is triggered for Russian text
-    Then kesha say is called as the next fallback
+    Then kesha say is called as the fallback after Piper
+
+  Scenario: TTS_PROVIDER=auto falls through to kesha (English)
+    Given TTS_PROVIDER=auto
+    And Piper EN fails
+    And Kokoro fails
+    And KESHA_TTS_ENABLED=true
+    When TTS is triggered for English text
+    Then kesha say is called as the fallback after Kokoro
 
 Feature: Docker installation
 
@@ -150,14 +161,27 @@ Feature: Docker installation
     And espeak-ng IS installed
 ```
 
-## 11. Verification
+## 11. Benchmark Mode
+
+Set `KESHA_BENCHMARK=true` to run both ASR and TTS pipelines in parallel on every voice message and Claude reply.
+
+**ASR benchmark**: runs `groq→whisper` and `kesha` simultaneously; uses groq→whisper result for the actual response. Reports latency (ms), RTF, char count, word similarity (%), and sample diff to Telegram.
+
+**TTS benchmark**: generates audio with both the current pipeline and kesha, sends both voice messages to Telegram followed by a comparison table (latency, file size, kbps).
+
+Results are also appended to `logs/kesha-benchmark.jsonl` for offline analysis.
+
+> Note: in benchmark mode Groq API calls are not duplicated — `runAsrBenchmark()` runs the full current pipeline (Groq → Whisper) internally.
+
+## 12. Verification
 
 **How to test:**
-1. Build Docker image with `KESHA_INSTALL_TTS=false` → send voice message → check logs for `kesha ASR ok`
-2. Unset `GROQ_API_KEY` in `.env` → restart → send voice → verify transcription still works
+1. Build Docker image with `KESHA_INSTALL_TTS=false` → set `KESHA_ENABLED=true` → send voice message → check logs for `provider=kesha`
+2. Unset `GROQ_API_KEY` in `.env` → restart → send voice → verify transcription still works via kesha
 3. Set `KESHA_TTS_ENABLED=true` + unset `YANDEX_API_KEY` → trigger long reply → verify voice message sent
 4. Check `docker images` for size delta < 30 MB compressed
 5. Deliberately delete kesha binary → send voice → verify graceful fallback in logs
+6. Set `KESHA_BENCHMARK=true` → send voice → verify benchmark report appears in Telegram
 
 **Where to test:**
 - Local: `bun run main.ts` with kesha binary in PATH

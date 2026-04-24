@@ -6,11 +6,11 @@
   "feature": "kesha-voice-kit-integration",
   "version": "1.0.0",
   "date": "2026-04-19",
-  "status": "draft",
+  "status": "implemented",
   "priority": "high",
   "type": "integration",
   "branch": "feat/kesha-voice-kit",
-  "affects": ["utils/transcribe.ts", "utils/tts.ts", "Dockerfile", "docker-compose.yml", "config.ts"]
+  "affects": ["utils/transcribe.ts", "utils/tts.ts", "utils/benchmark.ts", "Dockerfile", "docker-compose.yml", "config.ts", "bot/media.ts", "channel/tools.ts", "bot/commands/projects.ts"]
 }
 ```
 
@@ -72,8 +72,8 @@ KESHA_VOICE_KIT:
 ```
 FILE: utils/transcribe.ts
 ACTION: add function transcribeKesha(audioBuffer, fileName)
-  - write buffer to /tmp/kesha-asr-<ts>.ogg
-  - spawn: [KESHA_BIN, tmpFile]
+  - write buffer to /tmp/kesha-asr-<ts>-<safeName>
+  - spawn: [KESHA_BIN, "transcribe", tmpFile]
   - capture stdout as transcription text
   - cleanup tmp file
   - return string | null
@@ -89,15 +89,15 @@ STATS: recordTranscription({ provider: "kesha", ... })
 ```
 FILE: utils/tts.ts
 ACTION: add function synthesizeKesha(text, isRussian): Promise<Buffer | null>
-  - construct: [KESHA_BIN, "say", text.slice(0, 5000), "--out", tmpFile]
-  - optionally: ["--voice", isRussian ? "ru-denis" : "en-af_heart"]
+  - construct: [KESHA_BIN, "say", "--voice", voice, "--out", tmpFile, text.slice(0, 5000)]
+    where voice = isRussian ? "ru-denis" : "en-af_heart"
   - read WAV from tmpFile → Buffer
-  - cleanup
-  - return { buf: Buffer, fmt: "wav" } | null
+  - cleanup tmp in finally
+  - return Buffer | null
 
-FALLBACK_POSITION_RU: after Yandex, before Groq
-FALLBACK_POSITION_EN: after Piper, before Kokoro
-GUARD: KESHA_TTS_ENABLED must be true
+FALLBACK_POSITION_RU: after Yandex → Piper, before Groq (last offline)
+FALLBACK_POSITION_EN: after Piper → Kokoro, before Groq (last offline)
+GUARD: KESHA_TTS_ENABLED must be true AND KESHA_ENABLED must be true
 LOG_TAG: provider="kesha-tts"
 ```
 
@@ -131,9 +131,37 @@ VOLUME: add /app/kesha-models to docker-compose.yml volumes for model persistenc
 ```
 FILE: config.ts
 ADD:
-  KESHA_ENABLED: boolean (default: true, read from process.env.KESHA_ENABLED !== "false")
+  KESHA_ENABLED: boolean (default: false, read from process.env.KESHA_ENABLED === "true")
   KESHA_TTS_ENABLED: boolean (default: false, read from process.env.KESHA_TTS_ENABLED === "true")
-  KESHA_BIN: string (default: process.env.KESHA_BIN ?? "kesha-engine")
+  KESHA_BIN: string (default: "kesha-engine")
+  KESHA_BENCHMARK: boolean (default: false) — benchmark mode (see FR-7)
+  LOGS_DIR: string (default: "logs") — directory for benchmark JSONL log
+```
+
+### FR-7: Benchmark mode
+```
+FILE: utils/benchmark.ts (new)
+TRIGGER: KESHA_BENCHMARK=true
+
+ASR_BENCHMARK (bot/media.ts handleVoice):
+  - call runAsrBenchmark(audioBuffer, fileName, mimeType) once
+    → runs groq→whisper and kesha in parallel via Promise.all
+    → uses groq→whisper result as actual transcription text
+    → no duplicate API calls
+  - append result to logs/kesha-benchmark.jsonl
+  - fire-and-forget: sendAsrBenchReport to same Telegram thread
+
+TTS_BENCHMARK (channel/tools.ts reply tool):
+  - call runTtsBenchmarkAndReport(token, chatId, text, threadId, forceVoice)
+    → runs current pipeline and kesha in parallel
+    → sends both voice messages to Telegram with 4s gap
+    → sends comparison stats message
+    → appends to logs/kesha-benchmark.jsonl
+
+REPORT_FORMAT (Telegram HTML):
+  ASR: provider, latencyMs, RTF, char/s, charCount, heapDeltaMB
+       word similarity %, sample word diffs
+  TTS: provider, latencyMs, fileSizeKB, fmt, kbps, heapDeltaMB
 ```
 
 ### FR-5: Graceful degradation
@@ -220,14 +248,18 @@ Feature: Docker build
 
 ## IMPLEMENTATION_ORDER
 ```
-1. config.ts — add KESHA_ENABLED, KESHA_TTS_ENABLED, KESHA_BIN
-2. utils/transcribe.ts — add transcribeKesha(), insert into fallback chain
-3. utils/tts.ts — add synthesizeKesha(), insert into auto chain
-4. Dockerfile — add binary download + optional model install
-5. docker-compose.yml — add kesha-models volume
-6. .env.example — document new vars
-7. Manual test: voice message → logs → verify provider=kesha
-8. Docker test: build + run → voice round-trip
+1. config.ts — add KESHA_ENABLED, KESHA_TTS_ENABLED, KESHA_BIN, KESHA_BENCHMARK, LOGS_DIR
+2. utils/transcribe.ts — add transcribeKesha(), insert into fallback chain (Groq → Kesha → Whisper)
+3. utils/tts.ts — add synthesizeKesha(), detectRussian(), synthesizeCurrentOnly()
+                   insert kesha as last offline fallback in both RU and EN chains
+4. utils/benchmark.ts — new file: runAsrBenchmark, runTtsBenchmark, formatBenchmarkReport,
+                         appendBenchmarkLog, sendTelegramVoice
+5. bot/media.ts — benchmark in handleVoice; fix ctx.reply() → replyInThread()
+6. channel/tools.ts — benchmark in reply tool
+7. bot/commands/projects.ts — Start All button; fix ctx.reply() → replyInThread()
+8. Dockerfile — binary download + espeak-ng + kesha install (ASR + optional TTS)
+9. docker-compose.yml — KESHA_BIN + HOME env vars
+10. .env.example — document new vars
 ```
 
 ## RISKS

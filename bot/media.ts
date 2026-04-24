@@ -20,6 +20,7 @@ import { appendLog } from "../utils/stats.ts";
 import { getBotRef, setPendingInput } from "./handlers.ts";
 import { maybeAttachVoice } from "../utils/tts.ts";
 import { getForumChatId } from "./forum-cache.ts";
+import { replyInThread } from "./format.ts";
 import { enqueueForTopic, topicQueueKey, getQueueDepth } from "./topic-queue.ts";
 
 const IMAGE_INLINE_MAX_BYTES = 5 * 1024 * 1024; // 5 MB — include base64 inline
@@ -129,7 +130,7 @@ async function deliverMedia(
     }
   }
 
-  await ctx.reply(`Received ${description}. File saved.`);
+  await replyInThread(ctx, `Received ${description}. File saved.`);
 }
 
 async function handleMedia(
@@ -160,7 +161,7 @@ async function handleMedia(
     filePath = await downloadFile(bot, fileId, filename);
   } catch (err) {
     logger.error({ err }, "file download failed");
-    await ctx.reply("Failed to download file.");
+    await replyInThread(ctx, "Failed to download file.");
     return;
   }
 
@@ -170,7 +171,7 @@ async function handleMedia(
   if (!caption) {
     // No caption — save file and ask what to do with it
     const fileLabel = filename ? `\`${filename}\`` : description;
-    await ctx.reply(`📎 ${fileLabel} сохранён. Что с ним сделать?`);
+    await replyInThread(ctx, `📎 ${fileLabel} сохранён. Что с ним сделать?`);
     const origMessageId = ctx.message?.message_id;
     setPendingInput(chatId, async (replyCtx) => {
       const userCaption = replyCtx.message?.text ?? "";
@@ -229,7 +230,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
 
   // Early exit for disconnected sessions — don't waste Whisper API call
   if (route.mode === "disconnected") {
-    await ctx.reply(
+    await replyInThread(ctx,
       `⚠️ Нет активной CLI-сессии для этого проекта.\n` +
       `Голосовое сообщение не обработано.\n\n` +
       `/sessions — список сессий | /standalone — standalone режим`,
@@ -244,7 +245,7 @@ export async function handleVoice(ctx: Context): Promise<void> {
   const initialStatus = getQueueDepth(queueKey) > 0
     ? `🎤 Voice message (${voice.duration}s) — queued...`
     : `🎤 Voice message (${voice.duration}s) — downloading...`;
-  const statusMsg = await ctx.reply(initialStatus);
+  const statusMsg = await replyInThread(ctx, initialStatus);
 
   // Track this status message in DB so startup recovery can clean it up if the bot restarts.
   // Must be awaited before the queue task starts to guarantee voiceStatusId is set
@@ -318,15 +319,10 @@ export async function handleVoice(ctx: Context): Promise<void> {
       let asrBenchResults: Awaited<ReturnType<typeof runAsrBenchmark>> | undefined;
       try {
         if (CONFIG.KESHA_BENCHMARK) {
-          // Run current and kesha ASR in parallel; use current result for actual response
-          [text, asrBenchResults] = await Promise.all([
-            transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
-              sessionId: route.sessionId,
-              chatId,
-              audioDurationSec: voice.duration,
-            }),
-            runAsrBenchmark(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg"),
-          ]);
+          // Benchmark: run current (groq→whisper) and kesha pipelines once each in parallel.
+          // Use the current pipeline's text for the actual response — no duplicate API calls.
+          asrBenchResults = await runAsrBenchmark(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg");
+          text = asrBenchResults.find(r => r.provider === "groq→whisper")?.text ?? null;
         } else {
           text = await transcribe(fileData, "voice.ogg", voice.mime_type ?? "audio/ogg", {
             sessionId: route.sessionId,

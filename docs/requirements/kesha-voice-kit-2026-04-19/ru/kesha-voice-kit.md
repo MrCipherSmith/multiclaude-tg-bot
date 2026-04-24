@@ -51,9 +51,11 @@ Kesha v1.1.3 предоставляет единый бинарник (`kesha-en
 Продакшн-образ ДОЛЖЕН скачивать бинарник `kesha-engine-linux-x64`, делать его исполняемым, запускать `kesha install` (ASR-модели, ~1-2 ГБ) и опционально `kesha install --tts` (~390 МБ Kokoro + Piper RU) если build arg `KESHA_INSTALL_TTS=true`.
 
 **FR-4 — Конфигурационные флаги**  
-Добавить два новых опциональных env-переменных:  
-- `KESHA_ENABLED` (по умолчанию `true`) — мастер-выключатель для всей интеграции kesha  
-- `KESHA_TTS_ENABLED` (по умолчанию `false`) — включить kesha TTS (выключен по умолчанию, Piper/Kokoro используются напрямую)
+Добавить четыре новых опциональных env-переменных:  
+- `KESHA_ENABLED` (по умолчанию `false`) — мастер-выключатель (opt-in, по умолчанию выключен)
+- `KESHA_TTS_ENABLED` (по умолчанию `false`) — включить kesha TTS (Piper/Kokoro используются напрямую пока выключен)
+- `KESHA_BIN` (по умолчанию `kesha-engine`) — путь к бинарнику kesha-engine
+- `KESHA_BENCHMARK` (по умолчанию `false`) — benchmark-режим: прогон обоих пайплайнов параллельно с отчётом в Telegram (задержка, RTF, совпадение слов)
 
 **FR-5 — Деградация без падения**  
 Если бинарник kesha не найден или вернул ненулевой код — система ДОЛЖНА залогировать предупреждение и перейти к следующему провайдеру в цепочке без краша.
@@ -127,22 +129,44 @@ Feature: Kesha TTS для офлайн-синтеза
     Then голосовое синтезируется через kesha say
     And аудио-формат WAV отправляется как Telegram voice
 
-  Scenario: TTS_PROVIDER=auto доходит до kesha
+  Scenario: TTS_PROVIDER=auto доходит до kesha (русский)
     Given TTS_PROVIDER=auto
     And Yandex API key отсутствует
-    And Piper бинарник отсутствует
+    And Piper упал или отсутствует
+    And KESHA_TTS_ENABLED=true
     When TTS вызывается для русского текста
-    Then вызывается kesha say как следующий фолбэк
+    Then вызывается kesha say как следующий фолбэк после Piper
+
+  Scenario: TTS_PROVIDER=auto доходит до kesha (английский)
+    Given TTS_PROVIDER=auto
+    And Piper EN упал
+    And Kokoro упал
+    And KESHA_TTS_ENABLED=true
+    When TTS вызывается для английского текста
+    Then вызывается kesha say как фолбэк после Kokoro
 ```
 
-## 11. Верификация
+## 11. Benchmark-режим
+
+Задать `KESHA_BENCHMARK=true` для параллельного прогона обоих пайплайнов ASR и TTS на каждом голосовом сообщении и каждом ответе Claude.
+
+**ASR benchmark**: прогоняет `groq→whisper` и `kesha` одновременно; для реального ответа использует результат groq→whisper. Отчёт в Telegram: задержка (мс), RTF, кол-во символов, совпадение слов (%), пример расхождений.
+
+**TTS benchmark**: синтезирует аудио текущим пайплайном и через kesha, отправляет оба голосовых сообщения в Telegram с таблицей сравнения (задержка, размер файла, kbps).
+
+Результаты также дописываются в `logs/kesha-benchmark.jsonl`.
+
+> Вызовы Groq API не дублируются: `runAsrBenchmark()` запускает текущий пайплайн (Groq → Whisper) внутри себя.
+
+## 12. Верификация
 
 **Как тестировать:**
-1. Собрать Docker образ с `KESHA_INSTALL_TTS=false` → отправить голосовое → проверить логи `kesha ASR ok`
-2. Убрать `GROQ_API_KEY` из `.env` → перезапустить → отправить голосовое → транскрипция работает
+1. Собрать Docker образ с `KESHA_INSTALL_TTS=false` → задать `KESHA_ENABLED=true` → отправить голосовое → проверить логи `provider=kesha`
+2. Убрать `GROQ_API_KEY` из `.env` → перезапустить → отправить голосовое → транскрипция работает через kesha
 3. Задать `KESHA_TTS_ENABLED=true` + убрать `YANDEX_API_KEY` → длинный ответ → голосовое отправлено
 4. Проверить `docker images` — прирост < 30 МБ сжатого образа
 5. Удалить бинарник kesha → отправить голосовое → убедиться в graceful fallback в логах
+6. Задать `KESHA_BENCHMARK=true` → отправить голосовое → убедиться что benchmark-отчёт появился в Telegram
 
 **Где тестировать:**
 - Локально: `bun run main.ts` с бинарником kesha в PATH

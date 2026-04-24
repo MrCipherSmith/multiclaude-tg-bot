@@ -2,6 +2,7 @@ import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { projectService } from "../../services/project-service.ts";
 import { sql } from "../../memory/db.ts";
+import { replyInThread } from "../format.ts";
 
 async function getPendingActions(): Promise<Map<number, "start" | "stop">> {
   const rows = await sql`
@@ -24,7 +25,7 @@ export async function handleProjects(ctx: Context): Promise<void> {
   ]);
 
   if (projects.length === 0) {
-    await ctx.reply("No projects configured.\nUse /project-add to add one.");
+    await replyInThread(ctx, "No projects configured.\nUse /project-add to add one.");
     return;
   }
 
@@ -59,7 +60,7 @@ export async function handleProjects(ctx: Context): Promise<void> {
     kb.text("🔄 Refresh", "proj:refresh").row();
   }
 
-  await ctx.reply(lines.join("\n"), { reply_markup: kb });
+  await replyInThread(ctx, lines.join("\n"), { reply_markup: kb });
 }
 
 export async function handleProjectCallback(ctx: Context): Promise<void> {
@@ -154,6 +155,6 @@ export async function handleProjectCallback(ctx: Context): Promise<void> {
     if (err?.description?.includes("not modified") || err?.message?.includes("not modified")) return;
     // For other errors (e.g. message too old to edit), delete and re-send
     await ctx.deleteMessage().catch(() => {});
-    await ctx.reply(lines.join("\n"), { reply_markup: kb });
+    await replyInThread(ctx, lines.join("\n"), { reply_markup: kb });
   });
 }

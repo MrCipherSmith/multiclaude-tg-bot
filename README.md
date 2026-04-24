@@ -126,7 +126,7 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 ### AI & Media
 - **Standalone Mode** — bot responds directly via LLM API (Anthropic / Google AI / OpenRouter / Ollama) with automatic retry on 429/5xx
 - **Codex Code Review** — OpenAI Codex CLI integration for AI-powered code review; authenticate headlessly via `/codex_setup` (device flow, no terminal needed); trigger via `/codex_review` or natural language ("review my code"); falls back to Claude's native review on quota/auth errors; model configurable via `CODEX_MODEL` env var
-- **Voice Messages** — transcription via Groq whisper-large-v3 (free, ~200ms) with local Whisper fallback; voice replies via Yandex SpeechKit (primary) or Groq Orpheus (English fallback)
+- **Voice Messages** — transcription via Groq whisper-large-v3 with kesha local ONNX ASR (2.5× faster than Whisper on CPU, offline) and local Whisper as final fallback; voice replies via Yandex SpeechKit → Piper → kesha (Kokoro EN / Piper RU, offline) → Groq
 - **Interactive Polls** — Claude can ask clarifying questions as native Telegram polls (`send_poll` MCP tool); you tap answers, press **Submit ✅**, and results flow back automatically as a user message; supports forum topic routing, 24h expiry, and vote retraction
 - **Image Analysis** — photos analyzed by Claude in CLI sessions; standalone mode with Anthropic API
 - **File Forwarding** — photos, documents, and videos forwarded to Claude via MCP with base64 (≤5 MB images) or file path; if sent without caption, bot asks what to do before forwarding
@@ -252,13 +252,26 @@ After every `reply` call, the bot automatically attaches a voice message if:
 1. The user sent a voice message (always — regardless of reply length)
 2. The reply text is ≥300 characters and not mostly code or diffs
 
-**Provider priority:** Yandex SpeechKit → Groq Orpheus (fallback)
+**Provider chain (Russian):** Yandex SpeechKit → Piper (local) → Kesha ru-denis (offline) → Groq  
+**Provider chain (English):** Piper (local) → Kokoro-82M (local) → Kesha en-af_heart (offline) → Groq
 
 | Provider | Set in `.env` | Notes |
 |---|---|---|
 | **Yandex SpeechKit** | `YANDEX_API_KEY`, `YANDEX_FOLDER_ID` | Best Russian quality; service account needs `ai.speechkit.tts` IAM role |
-| **Groq Orpheus** | `GROQ_API_KEY` | English-only; free tier: 3600 tokens/day |
+| **Piper** | `PIPER_DIR` | Local offline TTS; binary + voice files in `PIPER_DIR` |
+| **Kesha** | `KESHA_TTS_ENABLED=true` | Offline Kokoro-82M (EN) + Piper VITS ru-denis (RU); no API key; models downloaded on first run |
+| **Groq** | `GROQ_API_KEY` | Cloud fallback; English-only (Orpheus); free tier: 3600 tokens/day |
 | **OpenAI TTS** | `OPENAI_API_KEY` | Good multilingual including Russian; not wired by default |
+
+### Voice Transcription (ASR)
+
+**Provider chain:** Groq whisper-large-v3 → Kesha local ONNX → local Whisper HTTP server
+
+| Provider | Set in `.env` | Notes |
+|---|---|---|
+| **Groq Whisper** | `GROQ_API_KEY` | Primary; ~200ms, free tier |
+| **Kesha ASR** | `KESHA_ENABLED=true` | Offline ONNX, ~2.5× faster than Whisper on CPU, 25 languages; models ~1-2 GB downloaded on first use |
+| **Local Whisper** | `WHISPER_URL` | HTTP ASR server (e.g. separate Docker container) |
 
 ### Message Flows
 
@@ -643,6 +656,10 @@ ollama pull nomic-embed-text
 | `OPENROUTER_API_KEY` | No | OpenRouter API (many models available) |
 | `OLLAMA_CHAT_MODEL` | No | Local Ollama model (default: `qwen3:8b`) |
 | `GROQ_API_KEY` | No | Voice transcription ([free](https://console.groq.com)) |
+| `KESHA_ENABLED` | No | Enable kesha local ONNX ASR as fallback (default: `false`) |
+| `KESHA_TTS_ENABLED` | No | Enable kesha offline TTS (Kokoro EN + Piper RU) as fallback (default: `false`) |
+| `KESHA_BIN` | No | Path to kesha-engine binary (default: `kesha-engine` in PATH) |
+| `KESHA_BENCHMARK` | No | Run current + kesha pipelines in parallel per message and report stats to Telegram (default: `false`) |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `POSTGRES_PASSWORD` | Yes | PostgreSQL password (required in docker-compose) |
 | `OLLAMA_URL` | No | Ollama API URL (default: `http://localhost:11434`) |
@@ -734,7 +751,8 @@ Backups saved to `~/backups/helyx/` (gzipped, last 7 retained).
 | MCP | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) |
 | Database | PostgreSQL 16 + [pgvector](https://github.com/pgvector/pgvector) |
 | Embeddings | [Ollama](https://ollama.ai) (nomic-embed-text) |
-| Voice | [Groq](https://console.groq.com) (whisper-large-v3) |
+| Voice ASR | [Groq](https://console.groq.com) (whisper-large-v3) + [kesha-engine](https://github.com/drakulavich/kesha-voice-kit) (local ONNX, offline) |
+| Voice TTS | Yandex SpeechKit + Piper + [kesha-engine](https://github.com/drakulavich/kesha-voice-kit) (Kokoro-82M EN / Piper RU, offline) + Groq |
 | DB Client | [postgres](https://github.com/porsager/postgres) |
 | Dashboard | [React](https://react.dev) + [Tailwind CSS](https://tailwindcss.com) + [Vite](https://vite.dev) |
 
@@ -756,6 +774,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full version history.
 - [x] Semantic search via MCP tool and bot command
 - [x] Smart memory reconciliation — LLM-based dedup and update (mem0 approach)
 - [x] Dashboard UI for project and session management (Projects page + SSE notifications)
+- [x] Offline voice stack — kesha-engine local ONNX ASR + TTS (zero API keys, auto-installs models)
 - [ ] Multi-user support with separate session namespaces
 - [ ] Inline mode — respond in any Telegram chat via @bot
 
