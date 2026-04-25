@@ -8,8 +8,11 @@ export interface CliConfig {
   model?: string;       // selected Claude model override
 }
 
+/** Forward-compat alias — use AgentRuntimeAdapter in new code */
+export type AgentRuntimeAdapter = CliAdapter;
+
 export interface CliAdapter {
-  readonly type: "claude";
+  readonly type: string;
 
   /**
    * Send a user message to the CLI session.
@@ -33,6 +36,6 @@ export function registerAdapter(adapter: CliAdapter): void {
 
 export function getAdapter(cliType: string): CliAdapter {
   const adapter = registry.get(cliType);
-  if (!adapter) throw new Error(`No adapter registered for cli_type: ${cliType}. Only "claude" is supported.`);
+  if (!adapter) throw new Error(`No adapter registered for runtime_type: ${cliType}`);
   return adapter;
 }
