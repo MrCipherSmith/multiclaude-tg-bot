@@ -107,6 +107,15 @@ export class TmuxDriver implements RuntimeDriver {
     const runCli = this.config.runCliPath;
 
     // 2. Ensure tmux session exists. `has-session` exits non-zero when missing.
+    //
+    // BEHAVIOR DIVERGENCE FROM OLD admin-daemon proj_start: when the bots session
+    // is missing, the old code fell back to `runCommand("up", ["-s"])` which
+    // brought up the FULL helyx stack via the helyx CLI. The driver instead
+    // creates a bare detached session and starts only the requested project
+    // window. In normal operation this fallback is never triggered (the bots
+    // session is created at boot by `helyx up`). If it does trigger, you'll see
+    // a "[tmux] created bare session" log line — that's a hint to run
+    // `helyx up -s` manually to bring up the rest of the projects.
     const hasSession = await this.config.runShell(`tmux has-session -t ${session} 2>/dev/null`);
     if (hasSession.exitCode !== 0) {
       const newSession = await this.config.runShell(`tmux new-session -d -s ${session}`);
@@ -117,6 +126,9 @@ export class TmuxDriver implements RuntimeDriver {
           `failed to create tmux session ${session}: ${newSession.stderr}`,
         );
       }
+      this.config.log?.(
+        `[tmux] created bare session "${session}" (was missing). Only the requested project window will be started — run "helyx up -s" to bring up other projects.`,
+      );
     }
 
     // 3. Kill ALL existing windows with this name to avoid zombie accumulation.

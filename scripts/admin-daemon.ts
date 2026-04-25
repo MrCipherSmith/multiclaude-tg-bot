@@ -150,7 +150,9 @@ async function runShellForDriver(cmd: string): Promise<{ stdout: string; stderr:
     new Response(proc.stderr).text(),
   ]);
   await proc.exited;
-  return { stdout, stderr, exitCode: proc.exitCode ?? 0 };
+  // exitCode === null means the process was killed by a signal — treat as failure
+  // (POSIX convention) so the driver doesn't mistake a signal-killed subprocess for success.
+  return { stdout, stderr, exitCode: proc.exitCode ?? 1 };
 }
 
 // Instantiate and register the tmux runtime driver. Other modules

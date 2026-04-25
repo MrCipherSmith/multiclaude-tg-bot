@@ -49,7 +49,17 @@ export class RuntimeManager {
 }
 
 /**
- * Singleton instance — driver registration happens at module load by
- * admin-daemon and channel/. The singleton is exported but starts empty.
+ * Singleton instance — STARTS EMPTY by design.
+ *
+ * Callers MUST call `runtimeManager.registerDriver(driver)` before any
+ * `runtimeManager.getDriver(name)` call. There is no auto-registration here
+ * because driver construction requires environment-specific config that only
+ * the entry point (admin-daemon, channel/) knows.
+ *
+ * Today only `admin-daemon.ts` registers a driver (TmuxDriver, on host).
+ * If Phase 4+ adds more entry points, each must register the drivers it needs.
+ * Calling `getDriver("tmux")` before registration throws
+ * `RuntimeDriverError(code: "not_found")` — wrap in a try/catch or use
+ * `hasDriver(name)` to probe.
  */
 export const runtimeManager = new RuntimeManager();
