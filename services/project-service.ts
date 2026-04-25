@@ -1,5 +1,7 @@
 import { sql } from "../memory/db.ts";
 import { deleteSessionCascade } from "../sessions/delete.ts";
+import { agentManager } from "../agents/agent-manager.ts";
+import { logger } from "../logger.ts";
 
 export interface Project {
   id: number;
@@ -88,7 +90,7 @@ export class ProjectService {
   }
 
   private async action(id: number, command: string): Promise<{ ok: boolean; error?: string }> {
-    const [project] = await sql`SELECT id, name, path, tmux_session_name FROM projects WHERE id = ${id}`;
+    const [project] = await sql`SELECT id, name, path, tmux_session_name, default_agent_instance_id FROM projects WHERE id = ${id}`;
     if (!project) return { ok: false, error: "Project not found" };
 
     // Idempotency: skip if a command for this project is already pending/processing
@@ -100,6 +102,28 @@ export class ProjectService {
       LIMIT 1
     `;
     if (existing) return { ok: true };
+
+    // Additive: also set desired_state on the linked agent_instance.
+    // The admin_commands path below remains the actuator — this is observe/write-through
+    // for the new agent layer until reconciler takes over (Phase 5+).
+    // Failures here are non-fatal: existing flow must keep working.
+    if (project.default_agent_instance_id) {
+      const desiredState = command === "proj_start" ? "running" : "stopped";
+      try {
+        await agentManager.setDesiredState(
+          Number(project.default_agent_instance_id),
+          desiredState,
+          `project-service.${command === "proj_start" ? "start" : "stop"}`,
+        );
+      } catch (err) {
+        logger.warn(
+          { projectId: id, command, err: String(err) },
+          "agentManager.setDesiredState failed (non-fatal, admin_commands path continues)",
+        );
+      }
+    } else {
+      logger.debug({ projectId: id, command }, "project has no default_agent_instance_id, skipping agent layer mirror");
+    }
 
     await sql`INSERT INTO admin_commands (command, payload) VALUES (${command}, ${JSON.stringify({
       project_id: id,
