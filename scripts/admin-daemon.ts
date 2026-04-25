@@ -13,6 +13,7 @@
 import { resolve } from "path";
 import { startTmuxWatchdog } from "./tmux-watchdog.ts";
 import { startSupervisor } from "./supervisor.ts";
+import { startNonClaudePoller } from "./non-claude-poller.ts";
 import { TmuxDriver } from "../runtime/drivers/tmux-driver.ts";
 import { runtimeManager } from "../runtime/runtime-manager.ts";
 
@@ -177,6 +178,12 @@ if (botToken) {
 } else {
   console.warn("[admin-daemon] TELEGRAM_BOT_TOKEN not set — tmux watchdog disabled");
 }
+
+// Start the non-Claude message_queue poller. For Claude Code, channel.ts (MCP
+// stdio inside the tmux window) consumes queued messages directly. For
+// codex-cli / opencode / deepseek-cli there is no MCP, so this poller types
+// queued messages into the window via TmuxDriver.sendInput.
+startNonClaudePoller(sql, tmuxDriver);
 
 async function processCommand(row: { id: bigint; command: string; payload: any }): Promise<void> {
   // postgres.js may return JSONB as string — normalize
