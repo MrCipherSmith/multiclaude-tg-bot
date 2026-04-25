@@ -13,9 +13,12 @@
 import { resolve } from "path";
 import { startTmuxWatchdog } from "./tmux-watchdog.ts";
 import { startSupervisor } from "./supervisor.ts";
+import { TmuxDriver } from "../runtime/drivers/tmux-driver.ts";
+import { runtimeManager } from "../runtime/runtime-manager.ts";
 
 const BOT_DIR = resolve(import.meta.dir, "..");
 const CLI = resolve(BOT_DIR, "cli.ts");
+const RUN_CLI_PATH = resolve(BOT_DIR, "scripts/run-cli.sh");
 
 // Load .env if DATABASE_URL not set
 if (!process.env.DATABASE_URL) {
@@ -140,6 +143,37 @@ async function runShell(cmd: string): Promise<{ ok: boolean; output: string }> {
   return { ok: proc.exitCode === 0, output: (stdout + stderr).trim() };
 }
 
+// Shell adapter for TmuxDriver — driver expects `{stdout, stderr, exitCode}`,
+// admin-daemon's `runShell` returns `{ok, output}` (combined stdout+stderr).
+// This thin wrapper preserves the data the driver actually consumes (it only
+// branches on `exitCode` and reads `stderr`/`stdout` for error messages).
+async function runShellForDriver(cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const proc = Bun.spawn(["bash", "-c", cmd], {
+    cwd: BOT_DIR,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
+  await proc.exited;
+  return { stdout, stderr, exitCode: proc.exitCode ?? 0 };
+}
+
+// Instantiate and register the tmux runtime driver. Other modules
+// (channel/, supervisor) can resolve it via runtimeManager.getDriver("tmux").
+const tmuxDriver = new TmuxDriver({
+  defaultSession: "bots",
+  runCliPath: RUN_CLI_PATH,
+  runShell: runShellForDriver,
+  log: (msg, meta) => console.log(`[tmux-driver] ${msg}`, meta ?? ""),
+});
+
+if (!runtimeManager.hasDriver("tmux")) {
+  runtimeManager.registerDriver(tmuxDriver);
+}
+
 async function processCommand(row: { id: bigint; command: string; payload: any }): Promise<void> {
   // postgres.js may return JSONB as string — normalize
   const payload: Record<string, any> = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
@@ -161,26 +195,13 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
       case "proj_start": {
         const { path } = payload;
         if (!path) { result = { ok: false, output: "missing path" }; break; }
-        // Validate path to prevent shell injection (alphanumeric, /, -, _, .)
-        if (!/^[a-zA-Z0-9/_.-]+$/.test(path)) {
-          result = { ok: false, output: `invalid path: ${path}` }; break;
-        }
-        const name = path.split("/").pop() ?? path;
-        // Add window to existing tmux session or start a new session
-        const hasSession = await runShell("tmux has-session -t bots 2>/dev/null");
-        if (hasSession.ok) {
-          const wname = `${name}`;
-          // Kill ALL existing windows for this project to avoid zombie accumulation.
-          // tmux kill-window by name only kills the first match, so loop until all gone.
-          await runShell(`while tmux kill-window -t "bots:${wname}" 2>/dev/null; do :; done`);
-          // Use window index (not name) for send-keys to avoid race where the shell
-          // auto-renames the window before send-keys runs.
-          result = await runShell(
-            `idx=$(tmux new-window -t bots -n "${wname}" -c "${path}" -P -F "#{window_index}") && ` +
-            `tmux send-keys -t "bots:$idx" "${BOT_DIR}/scripts/run-cli.sh ${path}" Enter`
-          );
-        } else {
-          result = await runCommand("up", ["-s"]);
+        const name = (path as string).split("/").pop() ?? path;
+        try {
+          const handle = { driver: "tmux", tmuxSession: "bots", tmuxWindow: name };
+          await tmuxDriver.start(handle, { projectPath: path, projectName: name });
+          result = { ok: true, output: `started ${name}` };
+        } catch (e: any) {
+          result = { ok: false, output: e?.message ?? String(e) };
         }
         break;
       }
@@ -216,39 +237,20 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
       case "tmux_send_keys": {
         const { project, action } = payload as { project: string; action: string };
         if (!project) { result = { ok: false, output: "missing project" }; break; }
-        // Validate project name to prevent shell injection
-        if (!/^[a-zA-Z0-9_-]+$/.test(project)) {
-          result = { ok: false, output: `invalid project name: ${project}` }; break;
-        }
-
         const target = `bots:${project}`;
-
-        if (action === "esc" || action === "interrupt") {
-          // Send Escape to trigger Claude's interrupt flow.
-          await runShell(`tmux send-keys -t "${target}" Escape`);
-          // Poll for the confirmation dialog (Enter to confirm / Esc to cancel)
-          // instead of a fixed sleep — faster on fast machines, reliable on slow ones.
-          const CONFIRM_RE = /enter to confirm|esc to cancel/i;
-          const deadline = Date.now() + 1500;
-          let confirmed = false;
-          while (Date.now() < deadline) {
-            await Bun.sleep(200);
-            const out = await runShell(`tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`);
-            if (CONFIRM_RE.test(out.output)) {
-              await runShell(`tmux send-keys -t "${target}" "" Enter`);
-              confirmed = true;
-              break;
-            }
+        try {
+          const handle = { driver: "tmux", tmuxSession: "bots", tmuxWindow: project };
+          if (action === "esc" || action === "interrupt") {
+            await tmuxDriver.sendInput(handle, { kind: "esc" });
+            result = { ok: true, output: `Sent Escape to ${target}` };
+          } else if (action === "close_editor") {
+            await tmuxDriver.sendInput(handle, { kind: "close_editor" });
+            result = { ok: true, output: `Sent :q! to ${target}` };
+          } else {
+            result = { ok: false, output: `unknown action: ${action}` };
           }
-          result = { ok: true, output: confirmed ? `Interrupted ${target} (confirmed)` : `Sent Escape to ${target}` };
-        } else if (action === "close_editor") {
-          // Force-close vim (:q!) — works for git commit editors opened without -m
-          await runShell(`tmux send-keys -t "${target}" Escape`);
-          await Bun.sleep(200);
-          await runShell(`tmux send-keys -t "${target}" ':q!' Enter`);
-          result = { ok: true, output: `Sent :q! to ${target}` };
-        } else {
-          result = { ok: false, output: `unknown action: ${action}` };
+        } catch (e: any) {
+          result = { ok: false, output: e?.message ?? String(e) };
         }
         break;
       }
@@ -260,13 +262,13 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
           if (prows.length > 0) name = prows[0].name;
         }
         if (!name) { result = { ok: false, output: "missing name" }; break; }
-        // Validate name to prevent shell injection
-        if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
-          result = { ok: false, output: `invalid project name: ${name}` }; break;
+        try {
+          const handle = { driver: "tmux", tmuxSession: "bots", tmuxWindow: name };
+          await tmuxDriver.stop(handle);
+          result = { ok: true, output: `stopped ${name}` };
+        } catch (e: any) {
+          result = { ok: false, output: e?.message ?? String(e) };
         }
-        // Kill ALL windows for this project — tmux only kills the first match per call.
-        const killResult = await runShell(`count=0; while tmux kill-window -t "bots:${name}" 2>/dev/null; do count=$((count+1)); done; echo "killed $count window(s)"`);
-        result = { ok: true, output: killResult.output };
         if (project_id) {
           await sql`UPDATE sessions SET status = 'inactive' WHERE project_id = ${project_id} AND source = 'remote'`;
         } else {
