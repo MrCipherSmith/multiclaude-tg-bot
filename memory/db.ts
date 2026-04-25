@@ -518,6 +518,84 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 22,
+    name: "add model_providers, model_profiles, and sessions.model_profile_id",
+    up: async (tx) => {
+      // Phase 3 scaffolding — DB-driven LLM provider routing layer.
+      // Additive only: existing env-var-driven provider detection in claude/client.ts
+      // remains the fallback when sessions.model_profile_id IS NULL.
+
+      // --- model_providers: registry of LLM provider configurations ---
+      await tx`
+        CREATE TABLE IF NOT EXISTS model_providers (
+          id            SERIAL PRIMARY KEY,
+          name          TEXT NOT NULL UNIQUE,
+          provider_type TEXT NOT NULL,
+          base_url      TEXT,
+          api_key_env   TEXT,
+          default_model TEXT,
+          enabled       BOOLEAN NOT NULL DEFAULT true,
+          metadata      JSONB NOT NULL DEFAULT '{}',
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS idx_model_providers_type ON model_providers(provider_type)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_model_providers_enabled ON model_providers(enabled)`;
+
+      // --- model_profiles: named role/configuration combinations ---
+      await tx`
+        CREATE TABLE IF NOT EXISTS model_profiles (
+          id            SERIAL PRIMARY KEY,
+          name          TEXT NOT NULL UNIQUE,
+          provider_id   INTEGER NOT NULL REFERENCES model_providers(id) ON DELETE RESTRICT,
+          model         TEXT NOT NULL,
+          max_tokens    INTEGER,
+          temperature   REAL,
+          system_prompt TEXT,
+          metadata      JSONB NOT NULL DEFAULT '{}',
+          enabled       BOOLEAN NOT NULL DEFAULT true,
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS idx_model_profiles_provider ON model_profiles(provider_id)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_model_profiles_enabled ON model_profiles(enabled)`;
+
+      // --- Bootstrap rows mirroring current env-var-driven providers ---
+      // These are placeholders; users edit them later via /providers command.
+      // ON CONFLICT (name) DO NOTHING keeps the migration idempotent.
+      await tx`
+        INSERT INTO model_providers (name, provider_type, base_url, api_key_env, default_model)
+        VALUES
+          ('Anthropic',  'anthropic',     NULL,                                                       'ANTHROPIC_API_KEY',  'claude-sonnet-4-6'),
+          ('OpenRouter', 'openai',        'https://openrouter.ai/api/v1',                             'OPENROUTER_API_KEY', 'qwen/qwen3-235b-a22b:free'),
+          ('Google AI',  'google-ai',     'https://generativelanguage.googleapis.com/v1beta/openai',  'GOOGLE_AI_API_KEY',  'gemma-4-31b-it'),
+          ('Ollama',     'ollama',        'http://localhost:11434',                                   NULL,                  'qwen3:8b'),
+          ('DeepSeek',   'custom-openai', 'https://api.deepseek.com',                                 'DEEPSEEK_API_KEY',    'deepseek-chat')
+        ON CONFLICT (name) DO NOTHING
+      `;
+
+      // Default profile linked to Anthropic. The runtime LLM client will fall back
+      // to env-var detection when no profile is set on the session.
+      await tx`
+        INSERT INTO model_profiles (name, provider_id, model)
+        SELECT 'default', id, COALESCE(default_model, 'claude-sonnet-4-6')
+        FROM model_providers
+        WHERE name = 'Anthropic'
+        ON CONFLICT (name) DO NOTHING
+      `;
+
+      // --- Link sessions to a model profile (nullable for backward compat) ---
+      await tx`
+        ALTER TABLE sessions
+        ADD COLUMN IF NOT EXISTS model_profile_id INTEGER
+        REFERENCES model_profiles(id) ON DELETE SET NULL
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS idx_sessions_model_profile ON sessions(model_profile_id)`;
+    },
+  },
 ];
 
 // --- Public API ---
