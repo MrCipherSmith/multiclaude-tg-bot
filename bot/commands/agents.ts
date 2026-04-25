@@ -51,10 +51,12 @@ export async function handleAgents(ctx: Context): Promise<void> {
   const keyboard = new InlineKeyboard();
 
   function stateEmoji(actual: string, desired: string): string {
-    // Convergence indicators
-    if (desired === actual) return desired === "running" ? "🟢" : "⚫";
-    if (desired === "running" && actual !== "running") return "🟡"; // converging up
-    if (desired === "stopped" && actual !== "stopped") return "🟠"; // converging down
+    // "new" means the reconciler has never probed yet — treat as equivalent to stopped
+    // for display purposes (no actuating activity has happened)
+    const effectiveActual = actual === "new" ? "stopped" : actual;
+    if (desired === effectiveActual) return desired === "running" ? "🟢" : "⚫";
+    if (desired === "running" && effectiveActual !== "running") return "🟡"; // converging up
+    if (desired === "stopped" && effectiveActual !== "stopped") return "🟠"; // converging down
     return "❓";
   }
 
