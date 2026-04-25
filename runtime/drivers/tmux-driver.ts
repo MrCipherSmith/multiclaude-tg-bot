@@ -205,12 +205,125 @@ export class TmuxDriver implements RuntimeDriver {
     );
   }
 
-  async sendInput(_handle: RuntimeHandle, _action: RuntimeInputAction): Promise<void> {
-    throw new RuntimeDriverError(
-      "tmux",
-      "validation",
-      "sendInput() not implemented in this wave — see Wave 3",
-    );
+  /**
+   * Send an input action to the tmux window.
+   *
+   * Each variant of {@link RuntimeInputAction} maps to an admin-daemon flow:
+   *  - `text`        — `tmux send-keys -t target "<text>" Enter` (with quote escape)
+   *  - `key`         — `tmux send-keys -t target <KeyName>` (single named key)
+   *  - `esc`         — Escape + poll for Claude's confirm dialog + Enter on match
+   *                    (matches admin-daemon `tmux_send_keys` action="esc"|"interrupt")
+   *  - `close_editor`— Escape + 200 ms + `:q!` Enter (matches admin-daemon `close_editor`)
+   */
+  async sendInput(handle: RuntimeHandle, action: RuntimeInputAction): Promise<void> {
+    const session = handle.tmuxSession ?? this.config.defaultSession ?? "bots";
+    const window = handle.tmuxWindow;
+    if (!window || !NAME_REGEX.test(window)) {
+      throw new RuntimeDriverError(
+        "tmux",
+        "invalid_handle",
+        `tmux window name missing or invalid: ${window}`,
+      );
+    }
+    const target = `${session}:${window}`;
+
+    switch (action.kind) {
+      case "text": {
+        // Escape double quotes in the user-supplied text for shell safety.
+        // The window name is regex-validated above, so the target is safe.
+        const escaped = action.text.replace(/"/g, '\\"');
+        const r = await this.config.runShell(
+          `tmux send-keys -t "${target}" "${escaped}" Enter`,
+        );
+        if (r.exitCode !== 0) {
+          throw new RuntimeDriverError(
+            "tmux",
+            "shell_error",
+            `send text failed: ${r.stderr || r.stdout}`,
+          );
+        }
+        return;
+      }
+      case "key": {
+        // Allow tmux-named keys ("Enter", "Escape", "C-c", etc.). Keep the
+        // validation strict but slightly broader than alphanumeric to permit
+        // chord forms like "C-c" and "M-x" that tmux understands.
+        if (!/^[A-Za-z0-9_-]+$/.test(action.key)) {
+          throw new RuntimeDriverError(
+            "tmux",
+            "validation",
+            `invalid key name: ${action.key}`,
+          );
+        }
+        const r = await this.config.runShell(
+          `tmux send-keys -t "${target}" ${action.key}`,
+        );
+        if (r.exitCode !== 0) {
+          throw new RuntimeDriverError(
+            "tmux",
+            "shell_error",
+            `send key failed: ${r.stderr || r.stdout}`,
+          );
+        }
+        return;
+      }
+      case "esc": {
+        // Matches admin-daemon `tmux_send_keys` action="esc"|"interrupt" 1:1:
+        //   1. Send Escape to trigger Claude's interrupt flow.
+        //   2. Poll the pane every 200ms for up to 1500ms looking for the
+        //      "enter to confirm / esc to cancel" dialog.
+        //   3. If found, send `Enter` to confirm the interrupt.
+        //   4. If never found within the deadline, silently return — admin-daemon
+        //      reports "Sent Escape" without any error in that case, so this is
+        //      the "soft" path (no exception).
+        await this.config.runShell(`tmux send-keys -t "${target}" Escape`);
+
+        const CONFIRM_RE = /enter to confirm|esc to cancel/i;
+        const deadline = Date.now() + 1500;
+        while (Date.now() < deadline) {
+          await new Promise((res) => setTimeout(res, 200));
+          const out = await this.config.runShell(
+            `tmux capture-pane -t "${target}" -p -S -5 2>/dev/null || true`,
+          );
+          if (CONFIRM_RE.test(out.stdout)) {
+            // admin-daemon sends an empty literal then Enter to confirm.
+            const r = await this.config.runShell(
+              `tmux send-keys -t "${target}" "" Enter`,
+            );
+            if (r.exitCode !== 0) {
+              throw new RuntimeDriverError(
+                "tmux",
+                "shell_error",
+                `esc confirm failed: ${r.stderr || r.stdout}`,
+              );
+            }
+            return;
+          }
+        }
+        // No confirm dialog appeared — that's fine, Escape may have done the
+        // job by itself. Match admin-daemon's "Sent Escape" no-error path.
+        return;
+      }
+      case "close_editor": {
+        // Matches admin-daemon `tmux_send_keys` action="close_editor" 1:1:
+        //   1. Send Escape to leave insert mode.
+        //   2. Wait 200 ms (not 100ms — admin-daemon uses 200ms).
+        //   3. Send `:q!` Enter to force-quit vim.
+        await this.config.runShell(`tmux send-keys -t "${target}" Escape`);
+        await new Promise((res) => setTimeout(res, 200));
+        const r = await this.config.runShell(
+          `tmux send-keys -t "${target}" ':q!' Enter`,
+        );
+        if (r.exitCode !== 0) {
+          throw new RuntimeDriverError(
+            "tmux",
+            "shell_error",
+            `close_editor failed: ${r.stderr || r.stdout}`,
+          );
+        }
+        return;
+      }
+    }
   }
 
   async health(_handle: RuntimeHandle): Promise<RuntimeHealth> {
