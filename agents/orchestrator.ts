@@ -193,29 +193,58 @@ Rules:
   /**
    * List tasks with an optional filter.
    *
-   * NOTE: filter is single-dimension first-wins. Priority order:
-   *   status > agentInstanceId > parentTaskId.
-   * Pass exactly one field per call. Combining multiple filters in one call
-   * silently keeps only the highest-priority field — pass `undefined` for
-   * fields you do not want to filter on.
+   * Filters are AND-combined: passing `{status: 'pending', agentInstanceId: 5}`
+   * returns tasks matching BOTH. Each filter field is independently optional —
+   * pass `undefined` (or omit) to skip that dimension.
+   *
+   * `parentTaskId` has tri-state semantics:
+   *   - `undefined` → no parent filter
+   *   - `null` → only root tasks (parent_task_id IS NULL)
+   *   - `number` → only direct children of that parent
+   *
+   * When all filters are unset, returns the most recent 100 tasks ordered
+   * by id DESC. When any filter is set, returns the full filtered set
+   * ordered by priority DESC, id ASC.
    */
   async listTasks(filter?: {
     status?: TaskStatus;
     agentInstanceId?: number;
-    parentTaskId?: number | null;  // null = root tasks only
+    parentTaskId?: number | null;  // null = root tasks only, undefined = no filter
   }): Promise<AgentTask[]> {
-    let rows: any[];
-    if (filter?.status) {
-      rows = await sql`SELECT * FROM agent_tasks WHERE status = ${filter.status} ORDER BY priority DESC, id` as any[];
-    } else if (filter?.agentInstanceId !== undefined) {
-      rows = await sql`SELECT * FROM agent_tasks WHERE agent_instance_id = ${filter.agentInstanceId} ORDER BY priority DESC, id` as any[];
-    } else if (filter?.parentTaskId === null) {
-      rows = await sql`SELECT * FROM agent_tasks WHERE parent_task_id IS NULL ORDER BY priority DESC, id` as any[];
-    } else if (filter?.parentTaskId !== undefined) {
-      rows = await sql`SELECT * FROM agent_tasks WHERE parent_task_id = ${filter.parentTaskId} ORDER BY priority DESC, id` as any[];
-    } else {
-      rows = await sql`SELECT * FROM agent_tasks ORDER BY id DESC LIMIT 100` as any[];
+    const noFilter = !filter || (
+      filter.status === undefined &&
+      filter.agentInstanceId === undefined &&
+      filter.parentTaskId === undefined
+    );
+
+    if (noFilter) {
+      const rows = await sql`SELECT * FROM agent_tasks ORDER BY id DESC LIMIT 100` as any[];
+      return rows.map(rowToTask);
     }
+
+    // AND-combine filter fragments. We use postgres.js's "match-if-set" idiom:
+    // each clause is `(${param}::T IS NULL OR col = ${param})` — a NULL parameter
+    // collapses the predicate to TRUE so the dimension is effectively skipped.
+    const status = filter!.status ?? null;
+    const agentInstanceId = filter!.agentInstanceId ?? null;
+    // parentTaskId tri-state: undefined → no filter, null → IS NULL, number → equality.
+    const parentFilterMode: "any" | "null" | "value" =
+      filter!.parentTaskId === undefined ? "any" :
+      filter!.parentTaskId === null ? "null" : "value";
+    const parentTaskIdValue = parentFilterMode === "value" ? (filter!.parentTaskId as number) : null;
+
+    const rows = await sql`
+      SELECT * FROM agent_tasks
+      WHERE
+        (${status}::text IS NULL OR status = ${status})
+        AND (${agentInstanceId}::int IS NULL OR agent_instance_id = ${agentInstanceId})
+        AND (
+          ${parentFilterMode}::text = 'any'
+          OR (${parentFilterMode}::text = 'null' AND parent_task_id IS NULL)
+          OR (${parentFilterMode}::text = 'value' AND parent_task_id = ${parentTaskIdValue})
+        )
+      ORDER BY priority DESC, id
+    ` as any[];
     return rows.map(rowToTask);
   }
 
