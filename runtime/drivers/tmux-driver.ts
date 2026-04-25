@@ -157,11 +157,51 @@ export class TmuxDriver implements RuntimeDriver {
   // Stubs for Wave 3 — the rest of the driver lives there.
   // ---------------------------------------------------------------------------
 
-  async stop(_handle: RuntimeHandle): Promise<void> {
-    throw new RuntimeDriverError(
-      "tmux",
-      "validation",
-      "stop() not implemented in this wave — see Wave 3",
+  /**
+   * Stop a tmux window.
+   *
+   * Behavior matches `admin-daemon.ts` `proj_stop` 1:1:
+   *  - Loop `tmux kill-window -t "session:window"` until it exits non-zero
+   *    (no more windows by that name). tmux only kills the first match per
+   *    invocation, so a loop is required to clean up zombies from races where
+   *    multiple windows share the same name.
+   *
+   * Idempotency: calling `stop()` on a non-existent window is a no-op (the
+   *   first `kill-window` invocation will exit non-zero and we return cleanly).
+   */
+  async stop(handle: RuntimeHandle): Promise<void> {
+    const session = handle.tmuxSession ?? this.config.defaultSession ?? "bots";
+    const window = handle.tmuxWindow;
+    if (!window || !NAME_REGEX.test(window)) {
+      throw new RuntimeDriverError(
+        "tmux",
+        "invalid_handle",
+        `tmux window name missing or invalid in handle: ${window}`,
+      );
+    }
+
+    // Loop kill-window until gone (matches admin-daemon proj_stop pattern).
+    // A bound is in place so a pathologically respawning window cannot wedge
+    // the driver indefinitely — admin-daemon uses an unbounded shell-side loop,
+    // but the host-side loop here is safer in JS.
+    const MAX_ATTEMPTS = 10;
+    let killed = 0;
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      const result = await this.config.runShell(
+        `tmux kill-window -t "${session}:${window}" 2>/dev/null`,
+      );
+      if (result.exitCode !== 0) {
+        // No more windows with that name — done (idempotent semantic).
+        this.config.log?.(
+          `[tmux] stop: killed ${killed} window(s) named ${session}:${window}`,
+        );
+        return;
+      }
+      killed += 1;
+    }
+    // Hit the limit — log but don't throw (idempotent semantic).
+    this.config.log?.(
+      `[tmux] stop: hit max attempts (${MAX_ATTEMPTS}) killing window ${session}:${window}`,
     );
   }
 
