@@ -2,13 +2,14 @@
  * /task <id> [subcommand] — single-task management.
  *
  * Subcommands:
- *   /task <id>                       view (default)
- *   /task <id> assign <agent_name>   reassign to a different agent_instance
- *   /task <id> sub <subtask title>   add a child task under this task
- *   /task <id> <status>              set status (pending|in_progress|blocked|review|done|cancelled|failed)
+ *   /task <id>                            view (default)
+ *   /task <id> assign <agent_name>        reassign to a different agent_instance
+ *   /task <id> sub <subtask title>        add a child task under this task
+ *   /task <id> decompose [profile_name]   LLM auto-split into subtasks
+ *   /task <id> <status>                   set status (pending|in_progress|blocked|review|done|cancelled|failed)
  *
- * Wraps Orchestrator (Phase 7 Wave 1). The plural /tasks command is the
- * read-only list (P4-09); this /task is per-id CRUD.
+ * Wraps Orchestrator (Phase 7 Wave 1, Phase 9 Wave 1). The plural /tasks command
+ * is the read-only list (P4-09); this /task is per-id CRUD.
  */
 import type { Context } from "grammy";
 import { sql } from "../../memory/db.ts";
@@ -34,6 +35,7 @@ export async function handleTask(ctx: Context): Promise<void> {
       "  <code>/task &lt;id&gt;</code> — view task with hierarchy\n" +
       "  <code>/task &lt;id&gt; assign &lt;agent&gt;</code> — reassign\n" +
       "  <code>/task &lt;id&gt; sub &lt;title&gt;</code> — add subtask\n" +
+      "  <code>/task &lt;id&gt; decompose [profile_name]</code> — LLM auto-split into subtasks\n" +
       "  <code>/task &lt;id&gt; &lt;status&gt;</code> — set status (pending|in_progress|done|...)",
       { parse_mode: "HTML" },
     );
@@ -84,6 +86,12 @@ export async function handleTask(ctx: Context): Promise<void> {
     return;
   }
 
+  // LLM decomposition
+  if (subcommand === "decompose") {
+    await decomposeTaskCommand(ctx, taskId, subArgs);
+    return;
+  }
+
   // Status change
   if (VALID_STATUSES.includes(subcommand as TaskStatus)) {
     await setStatusCommand(ctx, taskId, subcommand as TaskStatus, subArgs || undefined);
@@ -92,7 +100,7 @@ export async function handleTask(ctx: Context): Promise<void> {
 
   await ctx.reply(
     `Unknown subcommand: <code>${escapeHtml(subcommand)}</code>\n` +
-    `Valid: assign, sub, ${VALID_STATUSES.join(", ")}`,
+    `Valid: assign, sub, decompose, ${VALID_STATUSES.join(", ")}`,
     { parse_mode: "HTML" },
   );
 }
@@ -231,6 +239,59 @@ async function addSubtaskCommand(
     `   ${escapeHtml(sub.title)}`,
     { parse_mode: "HTML" },
   );
+}
+
+async function decomposeTaskCommand(
+  ctx: Context,
+  taskId: number,
+  optionalProfile: string,
+): Promise<void> {
+  const parent = await orchestrator.getTask(taskId);
+  if (!parent) {
+    await ctx.reply(`Task <code>#${taskId}</code> not found.`, { parse_mode: "HTML" });
+    return;
+  }
+
+  // Send "thinking" indicator
+  const pending = await ctx.reply(
+    `🔮 Decomposing task <code>#${taskId}</code> via LLM...\n` +
+    `<i>This may take a few seconds.</i>`,
+    { parse_mode: "HTML" },
+  );
+
+  try {
+    const opts: { modelProfileName?: string } = {};
+    if (optionalProfile) opts.modelProfileName = optionalProfile.trim();
+
+    const result = await orchestrator.decomposeTask(taskId, opts);
+
+    const lines: string[] = [];
+    lines.push(`✅ Task <code>#${taskId}</code> decomposed into <b>${result.subtasks.length}</b> subtasks`);
+    lines.push(`<i>(${result.attempts} LLM attempt${result.attempts === 1 ? "" : "s"})</i>`);
+    lines.push("");
+    for (const sub of result.subtasks) {
+      const assignedHint = sub.agentInstanceId ? `→ agent #${sub.agentInstanceId}` : "<i>unassigned</i>";
+      lines.push(`  📌 #${sub.id} <b>${escapeHtml(sub.title)}</b> ${assignedHint}`);
+    }
+    lines.push("");
+    lines.push(`Use /task ${taskId} to view the tree.`);
+
+    await ctx.api.editMessageText(
+      pending.chat.id,
+      pending.message_id,
+      lines.join("\n"),
+      { parse_mode: "HTML" },
+    ).catch(() => {});
+  } catch (err) {
+    const errMsg = String(err);
+    const truncated = errMsg.length > 800 ? errMsg.slice(0, 800) + "..." : errMsg;
+    await ctx.api.editMessageText(
+      pending.chat.id,
+      pending.message_id,
+      `❌ Decompose failed for task <code>#${taskId}</code>:\n\n<code>${escapeHtml(truncated)}</code>`,
+      { parse_mode: "HTML" },
+    ).catch(() => {});
+  }
 }
 
 async function setStatusCommand(
