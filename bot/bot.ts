@@ -46,6 +46,7 @@ export function createBot(): Bot {
     { command: "tools", description: "MCP tools" },
     // Model providers
     { command: "providers", description: "List configured model providers" },
+    { command: "models", description: "List model profiles, set one for session" },
     // Remote control
     { command: "interrupt", description: "Interrupt running Claude session (send Escape)" },
     { command: "monitor", description: "Process dashboard (daemon, Docker, sessions)" },
