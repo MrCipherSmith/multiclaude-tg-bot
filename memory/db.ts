@@ -813,6 +813,23 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 25,
+    name: "phase6 followup: portable launcher path in deepseek-cli-default config",
+    up: async (tx) => {
+      // Migration v24 stored an absolute path /home/altsay/bots/helyx/... for the
+      // deepseek-cli-default launcher. The path is bypassed by run-cli.sh today
+      // (which resolves $HELYX_DIR dynamically) but would break if Phase 7 reads
+      // agent_definition.config.launcher to launch directly. Replace with a
+      // relative path; consumers can resolve it against the helyx repo root.
+      await tx`
+        UPDATE agent_definitions
+        SET config = jsonb_set(config, '{launcher}', '"bun scripts/deepseek-repl.ts"')
+        WHERE name = 'deepseek-cli-default'
+          AND config->>'launcher' = 'bun /home/altsay/bots/helyx/scripts/deepseek-repl.ts'
+      `;
+    },
+  },
 ];
 
 // --- Public API ---

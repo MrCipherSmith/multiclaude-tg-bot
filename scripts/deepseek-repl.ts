@@ -130,8 +130,9 @@ async function main(): Promise<void> {
   process.stdin.setEncoding("utf-8");
   let buffer = "";
 
-  process.stdin.on("data", (chunk: string | Buffer) => {
-    buffer += typeof chunk === "string" ? chunk : chunk.toString("utf-8");
+  // setEncoding('utf-8') above guarantees data events deliver strings
+  process.stdin.on("data", (chunk: string) => {
+    buffer += chunk;
     let nl: number;
     while ((nl = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, nl);
@@ -141,10 +142,14 @@ async function main(): Promise<void> {
   });
 
   process.stdin.on("end", () => {
-    inflight.finally(() => {
-      console.error("[deepseek-repl] stdin closed, exiting");
-      process.exit(0);
-    });
+    inflight
+      .catch((err) => {
+        console.error(`[deepseek-repl] last turn rejected during shutdown: ${String(err)}`);
+      })
+      .finally(() => {
+        console.error("[deepseek-repl] stdin closed, exiting");
+        process.exit(0);
+      });
   });
 
   // Graceful shutdown

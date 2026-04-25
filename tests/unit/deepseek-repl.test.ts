@@ -9,8 +9,10 @@
 
 import { describe, test, expect } from "bun:test";
 import { readFile } from "fs/promises";
+import { resolve } from "path";
 
-const SCRIPT_PATH = "/home/altsay/bots/helyx/scripts/deepseek-repl.ts";
+// Resolve script path relative to this test file — works in any checkout location.
+const SCRIPT_PATH = resolve(import.meta.dir, "../../scripts/deepseek-repl.ts");
 
 describe("deepseek-repl: module shape", () => {
   test("file exists and exposes the expected wiring", async () => {
