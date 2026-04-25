@@ -197,13 +197,47 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
         break;
 
       case "proj_start": {
-        const { path } = payload;
+        const { path, project_id } = payload;
         if (!path) { result = { ok: false, output: "missing path" }; break; }
         const name = (path as string).split("/").pop() ?? path;
+
+        // Resolve runtime_type from the project's default agent_instance →
+        // agent_definition. Falls back to "claude-code" for projects that
+        // have no default_agent_instance_id (legacy / unbootstrapped) or
+        // when the lookup fails for any reason — defensive by design so
+        // a DB hiccup never blocks a project start.
+        let runtimeType = "claude-code";
+        if (project_id) {
+          try {
+            const rows = await sql`
+              SELECT ad.runtime_type
+              FROM projects p
+              LEFT JOIN agent_instances ai ON ai.id = p.default_agent_instance_id
+              LEFT JOIN agent_definitions ad ON ad.id = ai.definition_id
+              WHERE p.id = ${project_id}
+              LIMIT 1
+            ` as Array<{ runtime_type: string | null }>;
+            if (rows[0]?.runtime_type) {
+              runtimeType = rows[0].runtime_type;
+            }
+            console.log(`[admin-daemon] proj_start ${name}: runtime_type=${runtimeType} (project_id=${project_id})`);
+          } catch (err) {
+            console.warn(
+              `[admin-daemon] runtime_type lookup failed for project ${project_id}, falling back to claude-code: ${String(err)}`,
+            );
+          }
+        } else {
+          console.log(`[admin-daemon] proj_start ${name}: no project_id in payload, defaulting runtime_type=claude-code`);
+        }
+
         try {
           const handle = { driver: "tmux", tmuxSession: "bots", tmuxWindow: name };
-          await tmuxDriver.start(handle, { projectPath: path, projectName: name });
-          result = { ok: true, output: `started ${name}` };
+          await tmuxDriver.start(handle, {
+            projectPath: path,
+            projectName: name,
+            runtimeType,
+          });
+          result = { ok: true, output: `started ${name} (runtime=${runtimeType})` };
         } catch (e: any) {
           result = { ok: false, output: e?.message ?? String(e) };
         }
