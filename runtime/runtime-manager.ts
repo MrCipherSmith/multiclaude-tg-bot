@@ -128,6 +128,26 @@ export class RuntimeManager {
       logger.warn({ instanceId: inst.id, err: String(err) }, "health probe threw — treating as unknown");
     }
 
+    // === First-observation grace period ===
+    // If actual_state is still 'new' (never reconciled), do NOT take any action.
+    // Just record what we observed and let the operator review desired_state
+    // before the next tick. This prevents the cold-boot regression where the
+    // reconciler kills tmux windows whose desired_state in DB happens to be
+    // 'stopped' but were running pre-restart.
+    if (inst.actualState === "new") {
+      const observed: typeof inst.actualState =
+        healthState === "running" ? "running" :
+        healthState === "stopped" ? "stopped" : "new";
+      if (observed !== "new") {
+        await agentMgr.setActualState(
+          inst.id,
+          observed,
+          `first observation: health=${healthState}, desired=${inst.desiredState}`,
+        );
+      }
+      return;
+    }
+
     // === desired=running ===
     if (inst.desiredState === "running") {
       if (healthState === "running") {

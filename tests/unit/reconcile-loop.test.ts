@@ -250,7 +250,7 @@ describe("reconcile-loop: desired=running", () => {
     const agentMgr = makeMockAgentMgr();
     const inst = makeInstance({
       desiredState: "running",
-      actualState: "new",
+      actualState: "stopped", // post-first-observation
       runtimeHandle: {
         driver: "tmux",
         projectPath: "/p",
@@ -265,6 +265,55 @@ describe("reconcile-loop: desired=running", () => {
     expect(driver.start).toHaveBeenCalled();
     expect(agentMgr.updateRuntimeHandle).toHaveBeenCalled();
     expect(agentMgr.logEvent).toHaveBeenCalled();
+  });
+
+  test("first-observation grace period: actual=new only records, no driver action", async () => {
+    const driver = makeStoppedDriver();
+    const mgr = new RuntimeManager();
+    mgr.registerDriver(driver);
+    const agentMgr = makeMockAgentMgr();
+    const inst = makeInstance({
+      desiredState: "running",
+      actualState: "new", // first observation
+      runtimeHandle: {
+        driver: "tmux",
+        projectPath: "/p",
+        projectName: "test",
+      },
+    });
+
+    await (mgr as any).reconcileInstance(inst, agentMgr, 3);
+
+    // No driver action on first observation — just records observed state
+    expect(driver.start).not.toHaveBeenCalled();
+    expect(driver.stop).not.toHaveBeenCalled();
+    // Should have set actual_state to 'stopped' (matching health probe)
+    const calls = (agentMgr.setActualState as any).mock.calls;
+    const states = calls.map((c: any[]) => c[1]);
+    expect(states).toContain("stopped");
+  });
+
+  test("first-observation grace period: actual=new + desired=stopped + health=running does NOT call stop", async () => {
+    // Critical regression test: bootstrapped instances with desired=stopped
+    // but live tmux windows must NOT be killed on first reconcile tick.
+    const driver = makeMockDriver(); // health returns 'running' by default
+    const mgr = new RuntimeManager();
+    mgr.registerDriver(driver);
+    const agentMgr = makeMockAgentMgr();
+    const inst = makeInstance({
+      desiredState: "stopped",
+      actualState: "new",
+      runtimeHandle: { driver: "tmux", tmuxSession: "bots", tmuxWindow: "test" },
+    });
+
+    await (mgr as any).reconcileInstance(inst, agentMgr, 3);
+
+    expect(driver.stop).not.toHaveBeenCalled();
+    expect(driver.start).not.toHaveBeenCalled();
+    // Should have just recorded observed state
+    const calls = (agentMgr.setActualState as any).mock.calls;
+    const states = calls.map((c: any[]) => c[1]);
+    expect(states).toContain("running");
   });
 
   test("calls driver.start when actual=stopped and health=stopped (cold restart)", async () => {
@@ -341,7 +390,7 @@ describe("reconcile-loop: desired=running", () => {
     const agentMgr = makeMockAgentMgr();
     const inst = makeInstance({
       desiredState: "running",
-      actualState: "new",
+      actualState: "stopped", // post-first-observation
       runtimeHandle: {
         driver: "tmux",
         projectPath: "/p",
