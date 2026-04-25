@@ -48,6 +48,7 @@ export function createBot(): Bot {
     { command: "model", description: "Set Claude model for current session" },
     { command: "providers", description: "List configured model providers" },
     { command: "models", description: "List model profiles, set one for session" },
+    { command: "agents", description: "List agents with desired/actual state" },
     // Remote control
     { command: "interrupt", description: "Interrupt running Claude session (send Escape)" },
     { command: "monitor", description: "Process dashboard (daemon, Docker, sessions)" },
