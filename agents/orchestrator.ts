@@ -12,9 +12,13 @@
  *   - Auto-approval workflows for waiting_approval state
  *   - Cross-agent task reassignment on failure
  */
+import { z } from "zod";
 import { sql } from "../memory/db.ts";
 import { logger } from "../logger.ts";
 import { agentManager, type AgentInstance } from "./agent-manager.ts";
+import { resolveProfile, resolveSessionProvider } from "../llm/profile-resolver.ts";
+import { generateResponse } from "../llm/client.ts";
+import type { MessageParam, ResolvedProvider } from "../llm/types.ts";
 
 export type TaskStatus =
   | "pending" | "in_progress" | "blocked" | "review" | "done" | "cancelled" | "failed";
@@ -68,7 +72,60 @@ function rowToTask(r: any): AgentTask {
   };
 }
 
+// ---------- LLM-driven decomposition (Phase 9) ----------
+
+export interface DecomposeOptions {
+  /** Specific model_profile_id to use. Defaults to env-based fallback. */
+  modelProfileId?: number;
+  /** Profile name lookup (e.g., 'deepseek-default'). Used if modelProfileId not provided. */
+  modelProfileName?: string;
+  /** Max number of subtasks to request. Default: 7. */
+  maxSubtasks?: number;
+  /** Min number of subtasks. Default: 2. */
+  minSubtasks?: number;
+  /** Override system prompt. Default: see DEFAULT_SYSTEM_PROMPT. */
+  systemPrompt?: string;
+}
+
+export interface DecomposeResult {
+  parentTask: AgentTask;
+  subtasks: AgentTask[];
+  rawLlmResponse: string;
+  attempts: number;
+}
+
+const SubtaskSchema = z.object({
+  title: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  capabilities: z.array(z.string()).default([]),
+  priority: z.number().int().min(0).max(10).default(0),
+});
+
+const DecompositionSchema = z.object({
+  subtasks: z.array(SubtaskSchema).min(1).max(20),
+});
+
 export class Orchestrator {
+  private static readonly DEFAULT_SYSTEM_PROMPT = `You are a task decomposition assistant. Given a high-level task description, break it down into concrete actionable subtasks.
+
+Output ONLY a JSON object in this exact format:
+{
+  "subtasks": [
+    {
+      "title": "<short imperative title, max 200 chars>",
+      "description": "<optional details, max 2000 chars>",
+      "capabilities": ["<capability1>", "<capability2>"],
+      "priority": <integer 0-10, higher = more urgent>
+    }
+  ]
+}
+
+Rules:
+- Produce {{MIN_SUBTASKS}} to {{MAX_SUBTASKS}} subtasks
+- capabilities must be drawn from: code, review, plan, debug, test, design, document, orchestrate
+- Each subtask should be independently actionable (a single agent can complete it)
+- Output ONLY the JSON. No markdown fences, no preamble, no commentary.`;
+
   // ---------- Task CRUD ----------
 
   async createTask(input: CreateTaskInput): Promise<AgentTask> {
@@ -274,6 +331,126 @@ export class Orchestrator {
       results.push(created);
     }
     return results;
+  }
+
+  // ---------- LLM-driven decomposition (Phase 9) ----------
+
+  /**
+   * Decompose a task by asking an LLM to split its description into concrete
+   * subtasks, then create them via addSubtasks(). Up to 3 attempts to coerce
+   * valid JSON from the model. Records a `task_decomposed` audit event on the
+   * parent task with provider/model/attempts metadata.
+   */
+  async decomposeTask(taskId: number, options: DecomposeOptions = {}): Promise<DecomposeResult> {
+    const task = await this.getTask(taskId);
+    if (!task) throw new Error(`agent_task ${taskId} not found`);
+
+    const minSubtasks = options.minSubtasks ?? 2;
+    const maxSubtasks = options.maxSubtasks ?? 7;
+
+    // Resolve provider: explicit profileId > profileName lookup > env fallback
+    let provider: ResolvedProvider;
+    if (options.modelProfileId) {
+      provider = await resolveProfile(options.modelProfileId);
+    } else if (options.modelProfileName) {
+      const rows = await sql`
+        SELECT id FROM model_profiles WHERE name = ${options.modelProfileName} LIMIT 1
+      ` as any[];
+      const row = rows[0];
+      if (!row) throw new Error(`model_profile "${options.modelProfileName}" not found`);
+      provider = await resolveProfile(Number(row.id));
+    } else {
+      provider = await resolveSessionProvider(null);
+    }
+
+    const system = (options.systemPrompt ?? Orchestrator.DEFAULT_SYSTEM_PROMPT)
+      .replace("{{MIN_SUBTASKS}}", String(minSubtasks))
+      .replace("{{MAX_SUBTASKS}}", String(maxSubtasks));
+
+    const userMessage =
+      `Task title: ${task.title}\n` +
+      (task.description ? `Task description: ${task.description}\n` : "") +
+      `\nDecompose this task into ${minSubtasks}-${maxSubtasks} subtasks. Output JSON only.`;
+
+    const messages: MessageParam[] = [{ role: "user", content: userMessage }];
+
+    // Try up to 3 times: 1 initial + 2 retries on parse failure
+    const MAX_ATTEMPTS = 3;
+    let attempts = 0;
+    let lastError: string | null = null;
+    let rawResponse = "";
+    let parsed: z.infer<typeof DecompositionSchema> | null = null;
+
+    while (attempts < MAX_ATTEMPTS) {
+      attempts++;
+      const retryHint = lastError
+        ? `\n\nIMPORTANT: Your previous response had this error: ${lastError}. Fix it. Output JSON only.`
+        : "";
+      const finalUser = userMessage + retryHint;
+      messages[0] = { role: "user", content: finalUser };
+
+      rawResponse = await generateResponse(messages, system, { provider } as any);
+
+      // Strip optional markdown code fences
+      let text = rawResponse.trim();
+      if (text.startsWith("```json")) text = text.slice(7);
+      else if (text.startsWith("```")) text = text.slice(3);
+      if (text.endsWith("```")) text = text.slice(0, -3);
+      text = text.trim();
+
+      try {
+        const json = JSON.parse(text);
+        parsed = DecompositionSchema.parse(json);
+        break;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message.slice(0, 300) : String(err);
+        logger.warn(
+          { taskId, attempt: attempts, err: lastError },
+          "decomposeTask: parse/validate failed, retrying",
+        );
+      }
+    }
+
+    if (!parsed) {
+      throw new Error(
+        `decomposeTask failed after ${MAX_ATTEMPTS} attempts: ${lastError}\n\nRaw LLM output:\n${rawResponse}`,
+      );
+    }
+
+    // Create subtasks via existing addSubtasks (each call selects an agent by capability)
+    const subtaskInputs: CreateTaskInput[] = parsed.subtasks.map((s) => ({
+      title: s.title,
+      description: s.description,
+      payload: { source: "llm-decomposition", capabilities: s.capabilities },
+      priority: s.priority,
+      requiredCapabilities: s.capabilities.length > 0 ? s.capabilities : undefined,
+    }));
+
+    const created = await this.addSubtasks(taskId, subtaskInputs);
+
+    // Audit event on the parent task
+    await sql`
+      INSERT INTO agent_events (agent_instance_id, task_id, event_type, message, metadata)
+      VALUES (
+        ${task.agentInstanceId ?? null},
+        ${taskId},
+        'task_decomposed',
+        ${`Decomposed into ${created.length} subtasks via LLM (${provider.providerType}/${provider.model})`},
+        ${JSON.stringify({
+          provider_type: provider.providerType,
+          model: provider.model,
+          attempts,
+          subtask_count: created.length,
+        })}::jsonb
+      )
+    `;
+
+    return {
+      parentTask: task,
+      subtasks: created,
+      rawLlmResponse: rawResponse,
+      attempts,
+    };
   }
 
   // ---------- Agent selection ----------
