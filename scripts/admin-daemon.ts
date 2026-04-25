@@ -185,6 +185,13 @@ if (botToken) {
 // queued messages into the window via TmuxDriver.sendInput.
 startNonClaudePoller(sql, tmuxDriver);
 
+// Start the agent reconcile loop. Converges agent_instances.actual_state
+// toward desired_state via TmuxDriver. Disabled when CONFIG.AGENT_RECONCILE_INTERVAL_MS=0.
+// Probes driver.health() before deciding to start, so existing tmux windows
+// are recognized rather than killed and re-launched.
+const { agentManager } = await import("../agents/agent-manager.ts");
+runtimeManager.startReconcileLoop(agentManager);
+
 async function processCommand(row: { id: bigint; command: string; payload: any }): Promise<void> {
   // postgres.js may return JSONB as string — normalize
   const payload: Record<string, any> = typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload;
