@@ -51,6 +51,7 @@ export function createBot(): Bot {
     { command: "agents", description: "List agents with desired/actual state" },
     { command: "tasks", description: "List active agent tasks" },
     { command: "orchestrate", description: "Create a root task and assign to an agent" },
+    { command: "task", description: "View/manage a single task by ID" },
     // Remote control
     { command: "interrupt", description: "Interrupt running Claude session (send Escape)" },
     { command: "monitor", description: "Process dashboard (daemon, Docker, sessions)" },
