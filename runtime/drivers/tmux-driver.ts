@@ -326,19 +326,119 @@ export class TmuxDriver implements RuntimeDriver {
     }
   }
 
-  async health(_handle: RuntimeHandle): Promise<RuntimeHealth> {
-    throw new RuntimeDriverError(
-      "tmux",
-      "validation",
-      "health() not implemented in this wave — see Wave 3",
+  /**
+   * Check tmux session/window health.
+   *
+   *  - If the session itself is missing → `stopped` with `reason: "session_missing"`.
+   *  - If no `tmuxWindow` is set on the handle → session-level `running`.
+   *  - Otherwise list windows in the session and report `running` if the
+   *    window name is present, `stopped` otherwise.
+   *
+   * Cheap operation: at most two `tmux` calls (`has-session`, `list-windows`).
+   */
+  async health(handle: RuntimeHandle): Promise<RuntimeHealth> {
+    const session = handle.tmuxSession ?? this.config.defaultSession ?? "bots";
+    const window = handle.tmuxWindow;
+
+    // 1. Check that the session exists at all.
+    const sessionCheck = await this.config.runShell(
+      `tmux has-session -t ${session} 2>/dev/null`,
     );
+    if (sessionCheck.exitCode !== 0) {
+      return {
+        state: "stopped",
+        lastChecked: new Date(),
+        details: { reason: "session_missing", session },
+      };
+    }
+
+    // 2. No window on the handle → just report session-level running.
+    if (!window) {
+      return {
+        state: "running",
+        lastChecked: new Date(),
+        details: { session },
+      };
+    }
+
+    // 3. Window name validation — return "unknown" rather than throwing,
+    //    health is meant to be a cheap status probe.
+    if (!NAME_REGEX.test(window)) {
+      return {
+        state: "unknown",
+        lastChecked: new Date(),
+        details: { reason: "invalid_window_name", window },
+      };
+    }
+
+    // 4. List windows and check for the target name.
+    const windows = await this.config.runShell(
+      `tmux list-windows -t ${session} -F "#{window_name}"`,
+    );
+    if (windows.exitCode !== 0) {
+      return {
+        state: "unknown",
+        lastChecked: new Date(),
+        details: { reason: "list_windows_failed", stderr: windows.stderr },
+      };
+    }
+
+    const found = windows.stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .includes(window);
+
+    return {
+      state: found ? "running" : "stopped",
+      lastChecked: new Date(),
+      details: { session, window, found },
+    };
   }
 
-  async snapshot(_handle: RuntimeHandle, _options?: SnapshotOptions): Promise<SnapshotResult> {
-    throw new RuntimeDriverError(
-      "tmux",
-      "validation",
-      "snapshot() not implemented in this wave — see Wave 3",
-    );
+  /**
+   * Capture pane content from the tmux window.
+   *
+   * Matches `tmux-watchdog.ts` shell commands 1:1 so watchdog detection
+   * heuristics (permission prompts, stalls, editor open) keep working
+   * unchanged when callers route through the driver:
+   *
+   *  - visible only (no scroll-back): `tmux capture-pane -t "session:window" -p`
+   *  - scroll-back N lines:           `tmux capture-pane -t "session:window" -p -S -N`
+   *
+   * Selection rule: if `visibleOnly === true` OR `lines` is undefined →
+   *   visible only. Otherwise → `-S -${lines}`.
+   */
+  async snapshot(handle: RuntimeHandle, options?: SnapshotOptions): Promise<SnapshotResult> {
+    const session = handle.tmuxSession ?? this.config.defaultSession ?? "bots";
+    const window = handle.tmuxWindow;
+    if (!window || !NAME_REGEX.test(window)) {
+      throw new RuntimeDriverError(
+        "tmux",
+        "invalid_handle",
+        `tmux window name missing or invalid: ${window}`,
+      );
+    }
+    const target = `${session}:${window}`;
+
+    const useVisibleOnly = options?.visibleOnly === true || options?.lines === undefined;
+    const cmd = useVisibleOnly
+      ? `tmux capture-pane -t "${target}" -p`
+      : `tmux capture-pane -t "${target}" -p -S -${options!.lines}`;
+
+    const result = await this.config.runShell(cmd);
+    if (result.exitCode !== 0) {
+      throw new RuntimeDriverError(
+        "tmux",
+        "shell_error",
+        `capture-pane failed: ${result.stderr || result.stdout}`,
+      );
+    }
+
+    return {
+      lines: result.stdout.split("\n"),
+      capturedAt: new Date(),
+      handle: { ...handle, driver: "tmux", tmuxSession: session, tmuxWindow: window },
+    };
   }
 }
