@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { streamResponse, type MessageParam, type StreamContext } from "../claude/client.ts";
+import { streamResponse, type MessageParam, type StreamContext } from "../llm/client.ts";
 import { chunkText } from "../utils/chunk.ts";
 import { markdownToTelegramHtml } from "./format.ts";
 import { startTyping } from "../utils/typing.ts";

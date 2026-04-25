@@ -1,6 +1,6 @@
 import type { Context } from "grammy";
 import { composePrompt } from "../claude/prompt.ts";
-import { getProviderInfo, type ContentBlock } from "../claude/client.ts";
+import { getProviderInfo, type ContentBlock } from "../llm/client.ts";
 import { addMessage } from "../memory/short-term.ts";
 import { streamToTelegram } from "./streaming.ts";
 import { routeMessage } from "../sessions/router.ts";

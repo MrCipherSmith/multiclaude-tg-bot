@@ -6,7 +6,7 @@
 import { readdir, stat, readFile } from "fs/promises";
 import { join, basename } from "path";
 import { rememberSmart } from "./long-term.ts";
-import { generateResponse } from "../claude/client.ts";
+import { generateResponse } from "../llm/client.ts";
 import { sql } from "./db.ts";
 
 const EXCLUDED_DIRS = new Set([
