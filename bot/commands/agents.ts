@@ -5,7 +5,7 @@
  *   - Show: name, project, desired_state, actual_state, last_health_at
  *   - If desired=stopped: button "▶️ Start"  → set desired=running
  *   - If desired=running: button "⏹ Stop"   → set desired=stopped
- *   - Always: button "↻ Restart"             → set desired=stopped, then desired=running
+ *   - Always: button "↻ Restart"             → set desired=running (reconciler converges)
  *
  * Callback patterns:
  *   agent:start:<id>
@@ -116,11 +116,14 @@ export async function handleAgentCallback(ctx: Context): Promise<void> {
       await agentManager.setDesiredState(id, "stopped", "telegram /agents");
       await ctx.answerCallbackQuery({ text: `${inst.name}: desired=stopped` });
     } else if (action === "restart") {
-      await agentManager.setDesiredState(id, "stopped", "telegram /agents restart");
-      // Brief delay to let observable transition land in DB
-      await new Promise(r => setTimeout(r, 100));
+      // The reconciler probes health each tick. If we just need a kick-restart,
+      // setting desired_state='running' triggers driver.start when actual='stopped'
+      // (after first observation). For a forced restart of an already-running agent,
+      // we'd need a separate restart_requested flag — out of scope here. The 100ms
+      // back-to-back stop/start hack from the original implementation was racy and
+      // generated misleading audit events.
       await agentManager.setDesiredState(id, "running", "telegram /agents restart");
-      await ctx.answerCallbackQuery({ text: `${inst.name}: restart requested` });
+      await ctx.answerCallbackQuery({ text: `${inst.name}: desired=running (reconciler will probe)` });
     }
   } catch (err) {
     await ctx.answerCallbackQuery({ text: `Error: ${String(err).slice(0, 100)}`, show_alert: true });
