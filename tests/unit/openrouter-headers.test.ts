@@ -1,6 +1,6 @@
 /**
  * Unit tests verifying that the OpenAI-compatible HTTP client in
- * `claude/client.ts` adds the OpenRouter attribution headers
+ * `llm/client.ts` adds the OpenRouter attribution headers
  * (`HTTP-Referer` and `X-Title`) ONLY when the request is going to
  * `openrouter.ai`.
  *
@@ -14,15 +14,33 @@
  *     OpenRouter-specific headers.
  *
  * Note on dynamic import:
- *   `claude/client.ts` performs side-effects at module load (provider
+ *   `llm/client.ts` performs side-effects at module load (provider
  *   detection, `console.log`). Importing it once at the top of the file
  *   is sufficient — we don't need to re-evaluate the module per test
  *   because the override path inside `effectiveConfig()` ignores the
  *   module-level globals when `ctx.provider` is supplied.
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { generateResponse } from "../../claude/client.ts";
+import { describe, test, expect, beforeEach, afterEach, mock } from "bun:test";
+
+// Mock recordApiRequest BEFORE importing the module under test, so its
+// `import { recordApiRequest } from "../utils/stats.ts"` binding resolves
+// to the no-op stub. Without this, generateResponse fires real INSERTs
+// against api_request_stats — errors get silently swallowed in stats.ts
+// but generate noise + slow CI when no DB is available.
+mock.module("../../utils/stats.ts", () => ({
+  recordApiRequest: mock(async () => {}),
+  recordTranscription: mock(async () => {}),
+  appendLog: mock(async () => {}),
+  getApiStats: mock(async () => ({})),
+  getTranscriptionStats: mock(async () => ({})),
+  getRecentErrors: mock(async () => []),
+  getSessionLogs: mock(async () => []),
+  getRecentLogs: mock(async () => []),
+  getMessageStats: mock(async () => ({})),
+}));
+
+import { generateResponse } from "../../llm/client.ts";
 import type { ResolvedProvider } from "../../llm/types.ts";
 
 interface CapturedRequest {
