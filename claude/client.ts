@@ -2,6 +2,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { CONFIG } from "../config.ts";
 import { recordApiRequest } from "../utils/stats.ts";
+import type { ResolvedProvider } from "../llm/types.ts";
 
 export type ContentBlock =
   | { type: "text"; text: string }
@@ -67,7 +68,51 @@ const effectiveApiKey = provider === "google-ai" ? CONFIG.GOOGLE_AI_API_KEY : CO
 const effectiveBaseUrl = provider === "google-ai" ? googleAiUrl : CONFIG.OPENROUTER_BASE_URL;
 const effectiveModel = provider === "google-ai" ? CONFIG.GOOGLE_AI_MODEL : CONFIG.OPENROUTER_MODEL;
 
-export function getProviderInfo() {
+/** Per-call effective config — either pulled from override or module-level globals. */
+interface EffectiveConfig {
+  provider: string;
+  model: string;
+  apiKey: string | undefined;
+  baseUrl: string | undefined;
+  maxTokens: number;
+}
+
+/**
+ * Compute the effective provider/model/keys for a single call.
+ * If `override` is provided, use it. Otherwise return the module-level globals
+ * (preserves existing behavior — backward compat path).
+ */
+function effectiveConfig(override?: ResolvedProvider): EffectiveConfig {
+  if (override) {
+    return {
+      provider: override.providerType,
+      model: override.model,
+      apiKey: override.apiKey,
+      baseUrl: override.baseUrl,
+      maxTokens: override.maxTokens ?? CONFIG.MAX_TOKENS,
+    };
+  }
+  return {
+    provider,
+    model: effectiveModel,
+    apiKey: effectiveApiKey,
+    baseUrl: effectiveBaseUrl,
+    maxTokens: CONFIG.MAX_TOKENS,
+  };
+}
+
+/**
+ * Map provider type to wire format. `custom-openai` (DeepSeek and similar)
+ * uses the same OpenAI-compatible wire protocol.
+ */
+function wireFormatOf(providerType: string): string {
+  return providerType === "custom-openai" ? "openai" : providerType;
+}
+
+export function getProviderInfo(override?: ResolvedProvider): { provider: string; model: string } {
+  if (override) {
+    return { provider: override.providerType, model: override.model };
+  }
   const model = provider === "anthropic" ? CONFIG.CLAUDE_MODEL
     : provider === "google-ai" ? CONFIG.GOOGLE_AI_MODEL
     : provider === "openai" ? CONFIG.OPENROUTER_MODEL
@@ -82,29 +127,38 @@ console.log(`[client] provider: ${provider}${
   : ""
 }`);
 
-// --- OpenAI-compatible API (OpenRouter) ---
+// --- OpenAI-compatible API (OpenRouter, Google AI, custom-openai) ---
 
 // Per-call usage tracking for streaming (avoids global mutable state race)
 interface StreamUsage { input?: number; output?: number; }
 
-/** Shared fetch for OpenAI-compatible APIs (OpenRouter, Google AI) */
+/** Shared fetch for OpenAI-compatible APIs (OpenRouter, Google AI, custom-openai). */
 async function fetchOpenai(
   messages: { role: string; content: string }[],
   stream: boolean,
+  cfg: EffectiveConfig,
 ): Promise<Response> {
   const body: Record<string, unknown> = {
-    model: effectiveModel,
+    model: cfg.model,
     messages,
     stream,
   };
   if (stream) body.stream_options = { include_usage: true };
 
-  const res = await fetch(`${effectiveBaseUrl}/chat/completions`, {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${cfg.apiKey}`,
+  };
+  // OpenRouter recommends HTTP-Referer and X-Title for attribution / leaderboard.
+  // See https://openrouter.ai/docs/api-reference/overview#headers
+  if (cfg.baseUrl?.includes("openrouter.ai")) {
+    headers["HTTP-Referer"] = "https://github.com/MrCipherSmith/helyx";
+    headers["X-Title"] = "Helyx";
+  }
+
+  const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${effectiveApiKey}`,
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
@@ -118,12 +172,14 @@ async function fetchOpenai(
 async function* openaiStream(
   messages: MessageParam[],
   system: string,
+  cfg: EffectiveConfig,
   usage: StreamUsage = {},
 ): AsyncGenerator<string> {
 
   const res = await withRetry(() => fetchOpenai(
     [{ role: "system", content: system }, ...toTextMessages(messages)],
     true,
+    cfg,
   ), "stream");
 
   if (!res.ok) {
@@ -173,10 +229,12 @@ interface GenerateResult {
 async function openaiGenerate(
   messages: MessageParam[],
   system: string,
+  cfg: EffectiveConfig,
 ): Promise<GenerateResult> {
   const res = await withRetry(() => fetchOpenai(
     [{ role: "system", content: system }, ...toTextMessages(messages)],
     false,
+    cfg,
   ), "generate");
 
   if (!res.ok) {
@@ -202,12 +260,14 @@ async function openaiGenerate(
 async function* ollamaStream(
   messages: MessageParam[],
   system: string,
+  cfg: EffectiveConfig,
 ): AsyncGenerator<string> {
-  const res = await fetch(`${CONFIG.OLLAMA_URL}/api/chat`, {
+  const ollamaUrl = cfg.baseUrl ?? CONFIG.OLLAMA_URL;
+  const res = await fetch(`${ollamaUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: CONFIG.OLLAMA_CHAT_MODEL,
+      model: cfg.model,
       messages: [{ role: "system", content: system }, ...toTextMessages(messages)],
       stream: true,
     }),
@@ -256,12 +316,14 @@ async function* ollamaStream(
 async function ollamaGenerate(
   messages: MessageParam[],
   system: string,
+  cfg: EffectiveConfig,
 ): Promise<GenerateResult> {
-  const res = await fetch(`${CONFIG.OLLAMA_URL}/api/chat`, {
+  const ollamaUrl = cfg.baseUrl ?? CONFIG.OLLAMA_URL;
+  const res = await fetch(`${ollamaUrl}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: CONFIG.OLLAMA_CHAT_MODEL,
+      model: cfg.model,
       messages: [{ role: "system", content: system }, ...toTextMessages(messages)],
       stream: false,
     }),
@@ -285,6 +347,12 @@ export interface StreamContext {
   sessionId?: number | null;
   chatId?: string | null;
   operation?: string;
+  /**
+   * Optional per-call override — when provided, this provider/model/key/baseUrl
+   * is used INSTEAD of the module-level env-driven globals. When absent, the
+   * existing globals (env detection) are used. This preserves backward compat.
+   */
+  provider?: ResolvedProvider;
 }
 
 export async function* streamResponse(
@@ -292,29 +360,35 @@ export async function* streamResponse(
   system: string,
   ctx?: StreamContext,
 ): AsyncGenerator<string> {
-  const { provider: p, model: m } = getProviderInfo();
+  const cfg = effectiveConfig(ctx?.provider);
+  const wire = wireFormatOf(cfg.provider);
   const start = Date.now();
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
   let error: string | undefined;
 
   try {
-    switch (provider) {
+    switch (wire) {
       case "google-ai":
       case "openai": {
         const streamUsage: StreamUsage = {};
-        yield* openaiStream(messages, system, streamUsage);
+        yield* openaiStream(messages, system, cfg, streamUsage);
         inputTokens = streamUsage.input;
         outputTokens = streamUsage.output;
-      }
         break;
+      }
       case "ollama":
-        yield* ollamaStream(messages, system);
+        yield* ollamaStream(messages, system, cfg);
         break;
       case "anthropic": {
-        const stream = anthropic!.messages.stream({
-          model: CONFIG.CLAUDE_MODEL,
-          max_tokens: CONFIG.MAX_TOKENS,
+        // The Anthropic SDK reads ANTHROPIC_API_KEY from env by default. When an
+        // override is provided we must construct a per-call client with that key.
+        const client = ctx?.provider
+          ? new Anthropic({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) })
+          : anthropic!;
+        const stream = client.messages.stream({
+          model: cfg.model,
+          max_tokens: cfg.maxTokens,
           system,
           messages,
         });
@@ -334,6 +408,8 @@ export async function* streamResponse(
         outputTokens = final.usage?.output_tokens;
         break;
       }
+      default:
+        throw new Error(`Unknown provider: ${cfg.provider}`);
     }
   } catch (err: any) {
     error = err?.message ?? String(err);
@@ -342,8 +418,8 @@ export async function* streamResponse(
     recordApiRequest({
       sessionId: ctx?.sessionId,
       chatId: ctx?.chatId,
-      provider: p,
-      model: m,
+      provider: cfg.provider,
+      model: cfg.model,
       operation: ctx?.operation ?? "chat",
       durationMs: Date.now() - start,
       status: error ? "error" : "success",
@@ -360,33 +436,37 @@ export async function generateResponse(
   system: string,
   ctx?: StreamContext,
 ): Promise<string> {
-  const { provider: p, model: m } = getProviderInfo();
+  const cfg = effectiveConfig(ctx?.provider);
+  const wire = wireFormatOf(cfg.provider);
   const start = Date.now();
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
 
   try {
     let result: string;
-    switch (provider) {
+    switch (wire) {
       case "google-ai":
       case "openai": {
-        const r = await openaiGenerate(messages, system);
+        const r = await openaiGenerate(messages, system, cfg);
         result = r.content;
         inputTokens = r.inputTokens;
         outputTokens = r.outputTokens;
         break;
       }
       case "ollama": {
-        const r = await ollamaGenerate(messages, system);
+        const r = await ollamaGenerate(messages, system, cfg);
         result = r.content;
         inputTokens = r.inputTokens;
         outputTokens = r.outputTokens;
         break;
       }
       case "anthropic": {
-        const response = await anthropic!.messages.create({
-          model: CONFIG.CLAUDE_MODEL,
-          max_tokens: CONFIG.MAX_TOKENS,
+        const client = ctx?.provider
+          ? new Anthropic({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) })
+          : anthropic!;
+        const response = await client.messages.create({
+          model: cfg.model,
+          max_tokens: cfg.maxTokens,
           system,
           messages,
         });
@@ -399,14 +479,14 @@ export async function generateResponse(
         break;
       }
       default:
-        throw new Error(`Unknown provider: ${provider}`);
+        throw new Error(`Unknown provider: ${cfg.provider}`);
     }
 
     recordApiRequest({
       sessionId: ctx?.sessionId,
       chatId: ctx?.chatId,
-      provider: p,
-      model: m,
+      provider: cfg.provider,
+      model: cfg.model,
       operation: ctx?.operation ?? "generate",
       durationMs: Date.now() - start,
       status: "success",
@@ -420,8 +500,8 @@ export async function generateResponse(
     recordApiRequest({
       sessionId: ctx?.sessionId,
       chatId: ctx?.chatId,
-      provider: p,
-      model: m,
+      provider: cfg.provider,
+      model: cfg.model,
       operation: ctx?.operation ?? "generate",
       durationMs: Date.now() - start,
       status: "error",
@@ -433,6 +513,7 @@ export async function generateResponse(
 
 export async function summarizeConversation(
   messages: { role: string; content: string }[],
+  ctx?: StreamContext,
 ): Promise<{ summary: string; facts: string[] }> {
   const formatted = messages
     .map((m) => `${m.role}: ${m.content}`)
@@ -449,7 +530,10 @@ ${formatted}`;
 
   const systemPrompt = "You extract structured information from conversations. Reply only with valid JSON, no markdown.";
 
-  // Use local Ollama model for summarization if configured (cheaper, offline)
+  // Use local Ollama model for summarization if configured (cheaper, offline).
+  // Note: SUMMARIZE_MODEL is a global default that always uses local Ollama —
+  // it is independent of any per-call provider override (the override would be
+  // for the main model, not the summarizer fast-path).
   if (CONFIG.SUMMARIZE_MODEL && CONFIG.OLLAMA_URL) {
     try {
       const res = await fetch(`${CONFIG.OLLAMA_URL}/api/chat`, {
@@ -479,6 +563,7 @@ ${formatted}`;
   const response = await generateResponse(
     [{ role: "user", content: userPrompt }],
     systemPrompt,
+    ctx,
   );
 
   try {
