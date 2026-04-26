@@ -26,6 +26,7 @@
 import { sql } from "../memory/db.ts";
 import { generateResponse, type MessageParam, type StreamContext } from "../llm/client.ts";
 import { resolveProfile, resolveSessionProvider } from "../llm/profile-resolver.ts";
+import { resolveTierOverride } from "../llm/tier-resolver.ts";
 import { logger } from "../logger.ts";
 
 const POLL_INTERVAL_MS = Number(process.env.STANDALONE_LLM_POLL_MS ?? "3000");
@@ -203,7 +204,17 @@ async function processOneTask(task: { id: number; title: string; description: st
     await failTask(task.id, "agent_definition lookup failed");
     return;
   }
-  const { provider, defName, systemPrompt } = agentCtx;
+  const { defName, systemPrompt } = agentCtx;
+  // Per-task tier override (payload.model_tier ∈ {"flash","pro"}). Returns
+  // null on missing/invalid/unmapped → keep the agent's default provider.
+  const tierProvider = await resolveTierOverride(task.payload).catch((err) => {
+    logger.warn(
+      { taskId: task.id, err: String(err) },
+      "tier-resolver threw; using agent default",
+    );
+    return null;
+  });
+  const provider = tierProvider ?? agentCtx.provider;
 
   // Build a prompt that gives the model context about its role + the task.
   // Roles are inferred from the agent definition name (planner/reviewer/orchestrator).

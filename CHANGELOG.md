@@ -2,6 +2,31 @@
 
 ## v1.36.0
 
+### feat: per-task model_tier override ("flash" / "pro")
+
+`agent_tasks.payload.model_tier = "flash" | "pro"` now overrides the agent
+definition's default `model_profile` for an individual task without
+re-binding the agent. Resolution is advisory — invalid tiers, missing
+profiles, or resolver errors all fall back to the agent's default
+(no task failures).
+
+`llm/tier-resolver.ts` (new): `isValidTier`, `resolveTierOverride`. Maps
+`"flash" → deepseek-flash`, `"pro" → deepseek-pro` (profile names from
+the v31 migration). Hardcoded mapping intentionally — adding a new tier
+must touch this file.
+
+`scripts/standalone-llm-worker.ts`: after resolving the agent's default
+provider, calls `resolveTierOverride(task.payload)` and uses the override
+when present.
+
+`agents/orchestrator.ts`: documents the reserved payload keys
+(`model_tier`, `required_capabilities`) on `CreateTaskInput.payload`.
+
+`tests/unit/tier-resolver.test.ts` (new): 13 tests covering the
+`isValidTier` type guard (7), payload-shape short-circuits without DB
+(6), and DB-backed profile resolution + cross-tier model uniqueness
+(3 gated on DATABASE_URL).
+
 ### test: integration tests lock in jsonb capability routing fix
 
 `tests/unit/capability-routing.integration.test.ts` — 8 new tests against a

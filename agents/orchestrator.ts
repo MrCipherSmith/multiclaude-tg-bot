@@ -44,6 +44,15 @@ export interface CreateTaskInput {
   description?: string;
   agentInstanceId?: number | null;  // explicit assignment, otherwise selectAgent is called
   parentTaskId?: number;
+  /**
+   * Free-form payload persisted as JSONB. Reserved keys honored by the
+   * runtime layer:
+   *  - `model_tier: "flash" | "pro"` — overrides the agent's default
+   *    model_profile per-task in the standalone-llm worker. Unknown
+   *    values are ignored (advisory). See llm/tier-resolver.ts.
+   *  - `required_capabilities: string[]` — fallback used by
+   *    handleFailure when the failing agent's definition is missing.
+   */
   payload?: Record<string, unknown>;
   priority?: number;
   /** When provided AND agentInstanceId is omitted, selectAgent uses these to filter. */
