@@ -60,6 +60,36 @@ export function _resetFallbackCacheForTests(): void {
   cachedFallback = undefined;
 }
 
+/**
+ * Best-effort write to agent_events for fallback traceability (PRD §11.2).
+ * Lazy-imports memory/db.ts to avoid a hard dependency on the DB at module
+ * load — if the import fails (e.g. running tests without a configured
+ * Postgres), the write is silently skipped. agent_events is observability
+ * data; failure to record must NEVER fail the actual LLM call.
+ */
+async function recordFallbackEvent(
+  eventType: "model_primary_failed" | "model_fallback_selected" | "model_request_completed",
+  ctx: StreamContext | undefined,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  if (!ctx?.taskId && !ctx?.agentInstanceId) return; // no traceability context — skip
+  try {
+    const { sql } = await import("../memory/db.ts");
+    await sql`
+      INSERT INTO agent_events (agent_instance_id, task_id, event_type, message, metadata)
+      VALUES (
+        ${ctx.agentInstanceId ?? null},
+        ${ctx.taskId ?? null},
+        ${eventType},
+        ${typeof metadata.message === "string" ? metadata.message : null},
+        ${JSON.stringify(metadata)}::jsonb
+      )
+    `;
+  } catch (err) {
+    logger.warn({ err: String(err), eventType }, "agent_events write failed (observability-only, ignoring)");
+  }
+}
+
 export type ContentBlock =
   | { type: "text"; text: string }
   | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
@@ -415,6 +445,17 @@ export interface StreamContext {
    * dispatch logic; callers should not pass this directly.
    */
   _fallbackInProgress?: boolean;
+  /**
+   * Optional task/agent context for §11.2 traceability — when set, fallback
+   * decisions are written to agent_events as model.primary_failed /
+   * model.fallback_selected / model.request_completed so an operator can
+   * reconstruct what happened on a per-task basis. Callers in the
+   * orchestrator path (decomposeTask, handleFailure) supply these; ad-hoc
+   * callers (summarizer, supervisor) leave them unset and only get
+   * api_request_stats records.
+   */
+  taskId?: number | null;
+  agentInstanceId?: number | null;
 }
 
 export async function* streamResponse(
@@ -590,6 +631,19 @@ export async function generateResponse(
           "primary provider failed, attempting fallback",
         );
 
+        // Per PRD §11.2 — record traceability events (best effort).
+        await recordFallbackEvent("model_primary_failed", ctx, {
+          message: `primary provider ${cfg.provider} (${cfg.model}) failed: ${primaryErrorMsg}`,
+          provider: cfg.provider,
+          model: cfg.model,
+          duration_ms: primaryDuration,
+        });
+        await recordFallbackEvent("model_fallback_selected", ctx, {
+          message: `fallback provider ${fallback.providerType} (${fallback.model}) selected`,
+          provider: fallback.providerType,
+          model: fallback.model,
+        });
+
         // Re-dispatch with the fallback provider config. Mark _fallbackInProgress
         // so this attempt cannot itself trigger another fallback.
         const fbStart = Date.now();
@@ -612,6 +666,13 @@ export async function generateResponse(
             { primary: cfg.provider, fallback: fbCfg.provider, model: fbCfg.model },
             "fallback provider succeeded",
           );
+          await recordFallbackEvent("model_request_completed", ctx, {
+            message: `request completed via fallback ${fbCfg.provider} (${fbCfg.model})`,
+            provider: fbCfg.provider,
+            model: fbCfg.model,
+            duration_ms: Date.now() - fbStart,
+            outcome: "fallback-success",
+          });
           return r.result;
         } catch (fbErr: any) {
           recordApiRequest({
@@ -623,6 +684,12 @@ export async function generateResponse(
             durationMs: Date.now() - fbStart,
             status: "error",
             errorMessage: fbErr?.message ?? String(fbErr),
+          });
+          await recordFallbackEvent("model_request_completed", ctx, {
+            message: `request failed via both primary and fallback`,
+            primary_error: primaryErrorMsg,
+            fallback_error: fbErr?.message ?? String(fbErr),
+            outcome: "fallback-failed",
           });
           // Throw the ORIGINAL primary error — that's what callers expect to
           // see (the fallback failure is in stats for debugging).

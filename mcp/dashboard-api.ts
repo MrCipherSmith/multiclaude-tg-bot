@@ -898,6 +898,130 @@ async function handleReassignTask(req: IncomingMessage, res: ServerResponse, id:
   }
 }
 
+/**
+ * Re-link an agent_instance's definition to a different model_profile.
+ * Implements the runtime side of `helyx model set <agent> <profile>`
+ * (PRD §17.7) and the future dashboard model-routing UI.
+ *
+ * Note on shape: model_profile_id lives on `agent_definitions`, not on
+ * `agent_instances` — definitions are role templates and the profile
+ * binding belongs there. We update the linked definition rather than
+ * the instance row directly. The caller scope is "this agent uses this
+ * profile" but the storage is one-level deeper. This is acceptable for
+ * the current 1:N (definition:instances) cardinality; if multiple
+ * instances of the same definition need different profiles, a per-
+ * instance override column will be needed later.
+ */
+async function handleSetAgentProfile(req: IncomingMessage, res: ServerResponse, id: number): Promise<void> {
+  const body = await parseBody(req).catch(() => ({}));
+  const profileRef = body?.profile;
+  if (!profileRef || (typeof profileRef !== "string" && typeof profileRef !== "number")) {
+    sendError(res, "body must include `profile` (id or name)", 400);
+    return;
+  }
+
+  // Resolve profile id by id or name
+  let profileId: number | null = null;
+  if (typeof profileRef === "number" || /^\d+$/.test(String(profileRef))) {
+    profileId = Number(profileRef);
+    const exists = (await sql`SELECT id FROM model_profiles WHERE id = ${profileId} AND enabled = true LIMIT 1`) as any[];
+    if (exists.length === 0) { sendError(res, `model_profile id=${profileId} not found or disabled`, 404); return; }
+  } else {
+    const rows = (await sql`SELECT id FROM model_profiles WHERE name = ${profileRef} AND enabled = true LIMIT 1`) as any[];
+    if (rows.length === 0) { sendError(res, `model_profile "${profileRef}" not found or disabled`, 404); return; }
+    profileId = Number(rows[0].id);
+  }
+
+  // Look up the instance + its definition.
+  const inst = (await sql`SELECT id, definition_id, name FROM agent_instances WHERE id = ${id} LIMIT 1`) as any[];
+  if (inst.length === 0) { sendError(res, "agent not found", 404); return; }
+  const definitionId = Number(inst[0].definition_id);
+  await sql`
+    UPDATE agent_definitions SET model_profile_id = ${profileId}, updated_at = now()
+    WHERE id = ${definitionId}
+  `;
+  // Audit event so operators can see when bindings changed.
+  await sql`
+    INSERT INTO agent_events (agent_instance_id, event_type, message, metadata)
+    VALUES (
+      ${id},
+      'model_profile_change',
+      ${`profile binding updated to model_profile_id=${profileId}`},
+      ${JSON.stringify({ definition_id: definitionId, model_profile_id: profileId })}::jsonb
+    )
+  `;
+  sendJson(res, { ok: true, agent_id: id, definition_id: definitionId, model_profile_id: profileId });
+}
+
+/**
+ * Create a new agent_instance from an existing definition. Validates:
+ *   - definition exists and is enabled
+ *   - project_id, if provided, exists
+ *   - (project_id, name) is unique (DB constraint will reject otherwise)
+ *
+ * Does NOT create new agent_definitions — definitions are seeded by
+ * migrations and the wizard. To add a new definition, edit a migration
+ * (long-term) or use `helyx setup-agents` (operational).
+ */
+async function handleCreateAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await parseBody(req).catch(() => null);
+  if (!body || typeof body !== "object") { sendError(res, "JSON body required", 400); return; }
+
+  const definitionRef = body.definition;
+  const projectRef = body.project ?? null;
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  const desiredState = body.desired_state ?? "stopped";
+
+  if (!definitionRef) { sendError(res, "definition (id or name) required", 400); return; }
+  if (!name) { sendError(res, "name required", 400); return; }
+  if (!["running", "stopped", "paused"].includes(desiredState)) {
+    sendError(res, `desired_state must be one of: running, stopped, paused`, 400);
+    return;
+  }
+
+  // Resolve definition by id or name.
+  let definitionId: number | null = null;
+  if (typeof definitionRef === "number" || /^\d+$/.test(String(definitionRef))) {
+    const r = (await sql`SELECT id FROM agent_definitions WHERE id = ${Number(definitionRef)} AND enabled = true LIMIT 1`) as any[];
+    if (r.length === 0) { sendError(res, `agent_definition id=${definitionRef} not found or disabled`, 404); return; }
+    definitionId = Number(r[0].id);
+  } else {
+    const r = (await sql`SELECT id FROM agent_definitions WHERE name = ${definitionRef} AND enabled = true LIMIT 1`) as any[];
+    if (r.length === 0) { sendError(res, `agent_definition "${definitionRef}" not found or disabled`, 404); return; }
+    definitionId = Number(r[0].id);
+  }
+
+  // Resolve project by id or name (optional — null = unattached agent).
+  let projectId: number | null = null;
+  if (projectRef !== null && projectRef !== undefined && projectRef !== "") {
+    if (typeof projectRef === "number" || /^\d+$/.test(String(projectRef))) {
+      const r = (await sql`SELECT id FROM projects WHERE id = ${Number(projectRef)} LIMIT 1`) as any[];
+      if (r.length === 0) { sendError(res, `project id=${projectRef} not found`, 404); return; }
+      projectId = Number(r[0].id);
+    } else {
+      const r = (await sql`SELECT id FROM projects WHERE name = ${projectRef} LIMIT 1`) as any[];
+      if (r.length === 0) { sendError(res, `project "${projectRef}" not found`, 404); return; }
+      projectId = Number(r[0].id);
+    }
+  }
+
+  try {
+    const inserted = (await sql`
+      INSERT INTO agent_instances (definition_id, project_id, name, desired_state, actual_state)
+      VALUES (${definitionId}, ${projectId}, ${name}, ${desiredState}, 'new')
+      RETURNING *
+    `) as any[];
+    sendJson(res, inserted[0]);
+  } catch (err: any) {
+    // Unique constraint (project_id, name) → 409 Conflict.
+    if (err?.code === "23505" || /duplicate.*key/i.test(String(err?.message))) {
+      sendError(res, `agent with name "${name}" already exists in project ${projectId ?? "(global)"}`, 409);
+      return;
+    }
+    sendError(res, err?.message ?? String(err), 400);
+  }
+}
+
 async function handleAgentEvents(res: ServerResponse, id: number, url: URL): Promise<void> {
   // Return recent agent_events for an agent instance. Default limit 50;
   // accepts ?limit=N (capped at 500). Used by `helyx agent logs <id>`
@@ -912,6 +1036,69 @@ async function handleAgentEvents(res: ServerResponse, id: number, url: URL): Pro
     LIMIT ${limit}
   ` as any[];
   sendJson(res, rows);
+}
+
+/**
+ * Send a tiny live request to the provider's API to verify credentials +
+ * endpoint reachability (PRD §16.6 #9). Doesn't burn a model_profile —
+ * uses default_model from the model_providers row directly.
+ *
+ * The fallback policy is intentionally bypassed (_fallbackInProgress=true)
+ * so the user sees the primary provider's actual error, not a masking
+ * fallback success.
+ */
+async function handleProviderTest(res: ServerResponse, id: number): Promise<void> {
+  const rows = await sql`
+    SELECT id, name, provider_type, base_url, api_key_env, default_model
+    FROM model_providers WHERE id = ${id} LIMIT 1
+  ` as any[];
+  const p = rows[0];
+  if (!p) { sendError(res, "provider not found", 404); return; }
+
+  const apiKey = p.api_key_env ? process.env[p.api_key_env] : "";
+  // Ollama is the only currently-supported provider that doesn't need a key.
+  if (!apiKey && p.provider_type !== "ollama") {
+    sendJson(res, {
+      ok: false,
+      provider: p.name,
+      error: `API key env "${p.api_key_env}" is not set in the bot's environment`,
+      durationMs: 0,
+    });
+    return;
+  }
+
+  const { generateResponse } = await import("../llm/client.ts");
+  const resolved = {
+    providerType: p.provider_type,
+    model: p.default_model || "claude-haiku-4-5",
+    apiKey: apiKey || undefined,
+    baseUrl: p.base_url ?? undefined,
+    maxTokens: 16,
+  };
+
+  const start = Date.now();
+  try {
+    const result = await generateResponse(
+      [{ role: "user", content: "ping" }],
+      "Reply with one word.",
+      { provider: resolved as any, operation: "provider-test", _fallbackInProgress: true },
+    );
+    sendJson(res, {
+      ok: true,
+      provider: p.name,
+      model: resolved.model,
+      durationMs: Date.now() - start,
+      response: result.slice(0, 200),
+    });
+  } catch (err: any) {
+    sendJson(res, {
+      ok: false,
+      provider: p.name,
+      model: resolved.model,
+      durationMs: Date.now() - start,
+      error: err?.message ?? String(err),
+    });
+  }
 }
 
 async function handleListProviders(res: ServerResponse): Promise<void> {
@@ -1307,6 +1494,9 @@ export async function handleDashboardRequest(
     if (pathname === "/api/agents" && method === "GET") {
       await handleListAgents(res, url); return true;
     }
+    if (pathname === "/api/agents" && method === "POST") {
+      await handleCreateAgent(req, res); return true;
+    }
     if (pathname === "/api/agents/definitions" && method === "GET") {
       await handleListAgentDefinitions(res); return true;
     }
@@ -1323,6 +1513,10 @@ export async function handleDashboardRequest(
     const agentEventsMatch = pathname.match(/^\/api\/agents\/(\d+)\/events$/);
     if (agentEventsMatch && method === "GET") {
       await handleAgentEvents(res, Number(agentEventsMatch[1]), url); return true;
+    }
+    const agentProfileMatch = pathname.match(/^\/api\/agents\/(\d+)\/model-profile$/);
+    if (agentProfileMatch && (method === "PATCH" || method === "POST")) {
+      await handleSetAgentProfile(req, res, Number(agentProfileMatch[1])); return true;
     }
 
     // --- Tasks API ---
@@ -1341,6 +1535,10 @@ export async function handleDashboardRequest(
     // --- Providers / Profiles API ---
     if (pathname === "/api/providers" && method === "GET") {
       await handleListProviders(res); return true;
+    }
+    const providerTestMatch = pathname.match(/^\/api\/providers\/(\d+)\/test$/);
+    if (providerTestMatch && method === "POST") {
+      await handleProviderTest(res, Number(providerTestMatch[1])); return true;
     }
     if (pathname === "/api/profiles" && method === "GET") {
       await handleListProfiles(res); return true;

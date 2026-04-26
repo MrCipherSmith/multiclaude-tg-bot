@@ -1075,6 +1075,42 @@ async function cmdAgents() {
   console.log();
 }
 
+async function cmdAgentCreate() {
+  const api = await makeApiCall();
+  console.log(`\n  ${c.bold("Create agent instance")}`);
+  // List definitions so the user knows what's available
+  const defs = await api<any[]>("/api/agents/definitions");
+  console.log(`  ${c.dim("Available definitions:")}`);
+  for (const d of defs) {
+    const caps = Array.isArray(d.capabilities) && d.capabilities.length > 0 ? d.capabilities.join(",") : "—";
+    console.log(`    ${c.cyan(`#${d.id}`)} ${d.name}  ${c.dim(`caps=[${caps}]`)}`);
+  }
+  console.log();
+  const definition = ask("Definition (id or name)");
+  if (!definition) {
+    console.log(c.red("  definition required"));
+    process.exit(1);
+  }
+  const name = ask("Instance name (e.g. my-project:coder)");
+  if (!name) {
+    console.log(c.red("  name required"));
+    process.exit(1);
+  }
+  const project = ask("Project (id, name, or Enter for none)");
+  const desiredState = ask("Desired state [stopped|running|paused]", "stopped");
+
+  const result = await api<any>("/api/agents", {
+    method: "POST",
+    body: {
+      definition,
+      name,
+      project: project || null,
+      desired_state: desiredState,
+    },
+  });
+  console.log(`  ${c.green("✓")} created agent #${result.id} (${result.name}, desired=${result.desired_state})`);
+}
+
 async function cmdAgentAction(action: "start" | "stop" | "restart", ref: string | undefined) {
   if (!ref) {
     console.log(c.red(`  Usage: helyx agent ${action} <id|name>`));
@@ -1150,6 +1186,40 @@ async function cmdProviders() {
   console.log();
 }
 
+async function cmdProviderTest(ref: string | undefined) {
+  if (!ref) {
+    console.log(c.red("  Usage: helyx provider test <id|name>"));
+    process.exit(1);
+  }
+  const api = await makeApiCall();
+  // Resolve name → id by listing all (small table; tens of rows max).
+  let id: number;
+  if (/^\d+$/.test(ref)) {
+    id = Number(ref);
+  } else {
+    const all = await api<any[]>("/api/providers");
+    const match = all.find((p) => p.name === ref);
+    if (!match) {
+      throw new Error(`provider "${ref}" not found. Available: ${all.map((p) => p.name).join(", ")}`);
+    }
+    id = Number(match.id);
+  }
+
+  console.log(`  ${c.dim(`probing provider #${id}…`)}`);
+  const result = await api<{ ok: boolean; provider: string; model?: string; durationMs: number; response?: string; error?: string }>(
+    `/api/providers/${id}/test`,
+    { method: "POST" },
+  );
+  if (result.ok) {
+    console.log(`  ${c.green("✓")} ${result.provider} (${result.model}) — ${result.durationMs}ms`);
+    if (result.response) console.log(c.dim(`    response: ${result.response}`));
+  } else {
+    console.log(`  ${c.red("✗")} ${result.provider} (${result.model ?? "?"}) — ${result.durationMs}ms`);
+    console.log(c.red(`    ${result.error ?? "unknown error"}`));
+    process.exit(1);
+  }
+}
+
 async function cmdModels() {
   const api = await makeApiCall();
   const profiles = await api<any[]>("/api/profiles");
@@ -1159,6 +1229,21 @@ async function cmdModels() {
     console.log(`    ${c.cyan(`#${p.id}`)} ${p.name}  ${enabled}  ${c.dim(`${p.provider_name} → ${p.model}`)}`);
   }
   console.log();
+}
+
+async function cmdModelSet(agentRef: string | undefined, profileRef: string | undefined) {
+  if (!agentRef || !profileRef) {
+    console.log(c.red("  Usage: helyx model set <agent-id|name> <profile-id|name>"));
+    process.exit(1);
+  }
+  const api = await makeApiCall();
+  const agentId = await resolveAgentId(api, agentRef);
+  // profile param is sent as-is — server resolves by id-or-name.
+  const result = await api<any>(`/api/agents/${agentId}/model-profile`, {
+    method: "PATCH",
+    body: { profile: /^\d+$/.test(profileRef) ? Number(profileRef) : profileRef },
+  });
+  console.log(`  ${c.green("✓")} agent #${agentId} → model_profile_id=${result.model_profile_id} (definition #${result.definition_id})`);
 }
 
 // --- helyx setup-agents (wave-5, PRD §17.7) ---
@@ -1563,6 +1648,65 @@ async function runtimeDoctor() {
       detail: v ? `${k.env}=*** (${v.length} chars)` : `${k.env} not set`,
       required: k.required,
     });
+  }
+
+  // 9. Telegram token validity — actually call getMe (PRD §16.6 #4).
+  //    Skipped silently when token is missing; that's already FAIL'd above.
+  const tgToken = envMap.TELEGRAM_BOT_TOKEN;
+  if (tgToken) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${tgToken}/getMe`, { signal: AbortSignal.timeout(5000) });
+      const j = (await r.json()) as { ok?: boolean; result?: { username?: string }; description?: string };
+      checks.push({
+        name: "Telegram token valid",
+        result: j?.ok ? "PASS" : "FAIL",
+        detail: j?.ok ? `bot @${j.result?.username ?? "?"}` : `getMe rejected: ${j?.description ?? "?"}`,
+        required: true,
+      });
+    } catch (err) {
+      checks.push({
+        name: "Telegram token valid",
+        result: "FAIL",
+        detail: `getMe call failed: ${err instanceof Error ? err.message : String(err)}`,
+        required: true,
+      });
+    }
+  }
+
+  // 10. Forum setup status (PRD §16.6 #5) — projects with topic_id NULL hint
+  //     that /forum_setup hasn't been run for them. Optional; always emits SKIP
+  //     for non-Telegram-forum installs.
+  if (tgToken) {
+    try {
+      const postgres = (await import("postgres")).default;
+      const dbUrl = envMap.DATABASE_URL;
+      if (dbUrl) {
+        const sql = postgres(dbUrl, { max: 1, onnotice: () => {}, idle_timeout: 2 });
+        try {
+          const rows = (await sql`SELECT
+            COUNT(*) FILTER (WHERE forum_topic_id IS NOT NULL)::int AS with_topic,
+            COUNT(*)::int AS total
+          FROM projects`) as { with_topic: number; total: number }[];
+          const r = rows[0]!;
+          if (r.total === 0) {
+            checks.push({ name: "Forum topics", result: "SKIP", detail: "no projects yet", required: false });
+          } else if (r.with_topic === r.total) {
+            checks.push({ name: "Forum topics", result: "PASS", detail: `${r.total}/${r.total} projects linked`, required: false });
+          } else {
+            checks.push({
+              name: "Forum topics",
+              result: "SKIP",
+              detail: `${r.with_topic}/${r.total} projects linked — run /forum_setup in Telegram for the rest`,
+              required: false,
+            });
+          }
+        } finally {
+          await sql.end({ timeout: 2 });
+        }
+      }
+    } catch {
+      // DB probe failed — already covered by the postgres-reachable check above.
+    }
   }
 
   // Print results.
@@ -2587,13 +2731,16 @@ function help() {
 
   ${c.bold("Agents (PRD §17.7):")}
     agents              List agent definitions and instances
+    agent create        Interactive — create a new agent instance from a definition
     agent start <ref>   Set desired_state=running for agent (id or name)
     agent stop <ref>    Set desired_state=stopped
     agent restart <ref> Reconcile-driven restart
     agent snapshot <ref> Show last captured runtime snapshot
     agent logs <ref> [n] Show last N agent_events (default 50)
     providers           List model providers
+    provider test <ref> Validate provider credentials + endpoint reachability
     models              List model profiles
+    model set <a> <p>   Bind agent <a> (id|name) to profile <p> (id|name)
 
   ${c.bold("Bot (Docker service):")}
     bot-start       Start bot (docker compose up -d)
@@ -2655,16 +2802,40 @@ switch (command) {
     else if (sub === "restart") await runApiCmd(() => cmdAgentAction("restart", ref));
     else if (sub === "snapshot") await runApiCmd(() => cmdAgentSnapshot(ref));
     else if (sub === "logs")     await runApiCmd(() => cmdAgentLogs(ref, Number(process.argv[5] ?? "50")));
+    else if (sub === "create")   await runApiCmd(() => cmdAgentCreate());
     else {
       console.log(c.red(`  Unknown agent subcommand: ${sub ?? "(missing)"}`));
-      console.log(`  Available: ${c.cyan("start")}, ${c.cyan("stop")}, ${c.cyan("restart")}, ${c.cyan("snapshot")}, ${c.cyan("logs")}`);
-      console.log(`  Usage: helyx agent <subcommand> <id|name>`);
+      console.log(`  Available: ${c.cyan("create")}, ${c.cyan("start")}, ${c.cyan("stop")}, ${c.cyan("restart")}, ${c.cyan("snapshot")}, ${c.cyan("logs")}`);
+      console.log(`  Usage: helyx agent <subcommand> [args]`);
       process.exit(2);
     }
     break;
   }
   case "providers": await runApiCmd(() => cmdProviders()); break;
+  case "provider": {
+    const sub = process.argv[3];
+    const ref = process.argv[4];
+    if (sub === "test") await runApiCmd(() => cmdProviderTest(ref));
+    else {
+      console.log(c.red(`  Unknown provider subcommand: ${sub ?? "(missing)"}`));
+      console.log(`  Available: ${c.cyan("test")}`);
+      console.log(`  Usage: helyx provider test <id|name>`);
+      process.exit(2);
+    }
+    break;
+  }
   case "models":    await runApiCmd(() => cmdModels()); break;
+  case "model": {
+    const sub = process.argv[3];
+    if (sub === "set") await runApiCmd(() => cmdModelSet(process.argv[4], process.argv[5]));
+    else {
+      console.log(c.red(`  Unknown model subcommand: ${sub ?? "(missing)"}`));
+      console.log(`  Available: ${c.cyan("set")}`);
+      console.log(`  Usage: helyx model set <agent> <profile>`);
+      process.exit(2);
+    }
+    break;
+  }
   case "remote":      await remote(); break;
   // Bot (Docker service)
   case "bot-start":   await dockerStart(); break;
