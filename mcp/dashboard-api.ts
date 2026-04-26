@@ -920,37 +920,58 @@ async function handleSetAgentProfile(req: IncomingMessage, res: ServerResponse, 
     return;
   }
 
-  // Resolve profile id by id or name
-  let profileId: number | null = null;
-  if (typeof profileRef === "number" || /^\d+$/.test(String(profileRef))) {
-    profileId = Number(profileRef);
-    const exists = (await sql`SELECT id FROM model_profiles WHERE id = ${profileId} AND enabled = true LIMIT 1`) as any[];
-    if (exists.length === 0) { sendError(res, `model_profile id=${profileId} not found or disabled`, 404); return; }
-  } else {
-    const rows = (await sql`SELECT id FROM model_profiles WHERE name = ${profileRef} AND enabled = true LIMIT 1`) as any[];
-    if (rows.length === 0) { sendError(res, `model_profile "${profileRef}" not found or disabled`, 404); return; }
-    profileId = Number(rows[0].id);
-  }
+  // All four steps (profile lookup, instance lookup, agent_definitions
+  // UPDATE, agent_events INSERT) must be atomic. Without a transaction,
+  // a concurrent profile DELETE between lookup and UPDATE could ON DELETE
+  // SET NULL silently — caller would see ok=true but the DB has
+  // model_profile_id=NULL. The audit event is also lost on partial crash.
+  try {
+    const result = await sql.begin(async (tx) => {
+      let profileId: number;
+      if (typeof profileRef === "number" || /^\d+$/.test(String(profileRef))) {
+        profileId = Number(profileRef);
+        const exists = (await tx`
+          SELECT id FROM model_profiles WHERE id = ${profileId} AND enabled = true LIMIT 1
+        `) as any[];
+        if (exists.length === 0) throw new Error(`__NOT_FOUND__:model_profile id=${profileId} not found or disabled`);
+      } else {
+        const rows = (await tx`
+          SELECT id FROM model_profiles WHERE name = ${profileRef} AND enabled = true LIMIT 1
+        `) as any[];
+        if (rows.length === 0) throw new Error(`__NOT_FOUND__:model_profile "${profileRef}" not found or disabled`);
+        profileId = Number(rows[0].id);
+      }
 
-  // Look up the instance + its definition.
-  const inst = (await sql`SELECT id, definition_id, name FROM agent_instances WHERE id = ${id} LIMIT 1`) as any[];
-  if (inst.length === 0) { sendError(res, "agent not found", 404); return; }
-  const definitionId = Number(inst[0].definition_id);
-  await sql`
-    UPDATE agent_definitions SET model_profile_id = ${profileId}, updated_at = now()
-    WHERE id = ${definitionId}
-  `;
-  // Audit event so operators can see when bindings changed.
-  await sql`
-    INSERT INTO agent_events (agent_instance_id, event_type, message, metadata)
-    VALUES (
-      ${id},
-      'model_profile_change',
-      ${`profile binding updated to model_profile_id=${profileId}`},
-      ${JSON.stringify({ definition_id: definitionId, model_profile_id: profileId })}::jsonb
-    )
-  `;
-  sendJson(res, { ok: true, agent_id: id, definition_id: definitionId, model_profile_id: profileId });
+      const inst = (await tx`
+        SELECT id, definition_id, name FROM agent_instances WHERE id = ${id} LIMIT 1
+      `) as any[];
+      if (inst.length === 0) throw new Error("__NOT_FOUND__:agent not found");
+      const definitionId = Number(inst[0].definition_id);
+
+      await tx`
+        UPDATE agent_definitions SET model_profile_id = ${profileId}, updated_at = now()
+        WHERE id = ${definitionId}
+      `;
+      await tx`
+        INSERT INTO agent_events (agent_instance_id, event_type, message, metadata)
+        VALUES (
+          ${id},
+          'model_profile_change',
+          ${`profile binding updated to model_profile_id=${profileId}`},
+          ${JSON.stringify({ definition_id: definitionId, model_profile_id: profileId })}::jsonb
+        )
+      `;
+      return { agent_id: id, definition_id: definitionId, model_profile_id: profileId };
+    });
+    sendJson(res, { ok: true, ...result });
+  } catch (err: any) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("__NOT_FOUND__:")) {
+      sendError(res, msg.slice("__NOT_FOUND__:".length), 404);
+    } else {
+      sendError(res, msg, 400);
+    }
+  }
 }
 
 /**
@@ -1067,6 +1088,28 @@ async function handleProviderTest(res: ServerResponse, id: number): Promise<void
     return;
   }
 
+  // SSRF guard: validate base_url before issuing an authenticated outbound
+  // HTTP call. Without this an authenticated operator who edited a
+  // model_providers row could point base_url at cloud-metadata services
+  // (169.254.169.254) or internal RFC-1918 ranges, then read up to 200
+  // chars of the response back through the API reply. helyx is single-
+  // tenant but operator privilege ≠ trust to read internal network.
+  //
+  // Allowed: known-good public hosts (api.anthropic.com, api.openai.com,
+  // openrouter.ai, generativelanguage.googleapis.com, api.deepseek.com,
+  // api.groq.com), or the explicit Ollama localhost configured at install.
+  // Anything else is rejected before the fetch.
+  const baseUrlValidationError = validateProviderBaseUrl(p.base_url, p.provider_type);
+  if (baseUrlValidationError) {
+    sendJson(res, {
+      ok: false,
+      provider: p.name,
+      error: baseUrlValidationError,
+      durationMs: 0,
+    });
+    return;
+  }
+
   const { generateResponse } = await import("../llm/client.ts");
   const resolved = {
     providerType: p.provider_type,
@@ -1083,22 +1126,87 @@ async function handleProviderTest(res: ServerResponse, id: number): Promise<void
       "Reply with one word.",
       { provider: resolved as any, operation: "provider-test", _fallbackInProgress: true },
     );
+    // Truncate response to a short snippet AND strip anything that looks
+    // like a bearer token, in case the upstream echoed something like
+    // "your key sk-... is invalid" in the response body.
+    const snippet = result.slice(0, 200).replace(/\b(?:sk|pk|Bearer)[A-Za-z0-9_.-]{8,}/gi, "***");
     sendJson(res, {
       ok: true,
       provider: p.name,
       model: resolved.model,
       durationMs: Date.now() - start,
-      response: result.slice(0, 200),
+      response: snippet,
     });
   } catch (err: any) {
+    // Sanitize error message identically — third-party SDKs may include
+    // partial keys or tokens in their thrown errors.
+    const msg = (err?.message ?? String(err)).slice(0, 500)
+      .replace(/\b(?:sk|pk|Bearer)[A-Za-z0-9_.-]{8,}/gi, "***");
     sendJson(res, {
       ok: false,
       provider: p.name,
       model: resolved.model,
       durationMs: Date.now() - start,
-      error: err?.message ?? String(err),
+      error: msg,
     });
   }
+}
+
+/**
+ * SSRF allowlist for provider test calls. Returns null when the URL is
+ * acceptable; otherwise returns a human-readable rejection reason.
+ *
+ *   - Ollama: localhost / 127.0.0.1 / host.docker.internal allowed
+ *     (Ollama is intentionally a local service)
+ *   - All others: must be HTTPS + a hostname in the public allowlist
+ *
+ * IPv6 link-local / unique-local + RFC-1918 / loopback / link-local IPv4
+ * are explicitly rejected even when the user types them as the host.
+ */
+function validateProviderBaseUrl(baseUrl: string | null, providerType: string): string | null {
+  if (!baseUrl) {
+    // Anthropic and a few others use SDK-default URL; that path skips
+    // base_url entirely and goes through the official endpoint. OK.
+    return null;
+  }
+  let parsed: URL;
+  try { parsed = new URL(baseUrl); }
+  catch { return `invalid base_url: "${baseUrl}"`; }
+
+  const host = parsed.hostname.toLowerCase();
+  const ollamaHosts = new Set(["localhost", "127.0.0.1", "host.docker.internal", "::1"]);
+  if (providerType === "ollama") {
+    if (ollamaHosts.has(host)) return null;
+    return `Ollama base_url must be one of: ${[...ollamaHosts].join(", ")} (got "${host}")`;
+  }
+  // For non-Ollama providers, demand HTTPS + a public allowlisted host.
+  if (parsed.protocol !== "https:") {
+    return `non-Ollama provider must use https:// (got "${parsed.protocol}")`;
+  }
+  // Reject obvious internal addresses by IP form.
+  if (/^(?:10\.|127\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|0\.|::1$|fe80:|fc00:|fd00:)/.test(host)) {
+    return `base_url points to an internal address (${host}) — refused (SSRF guard)`;
+  }
+  if (ollamaHosts.has(host)) {
+    return `base_url points to a local address (${host}) but provider_type is "${providerType}" — refused`;
+  }
+  // Allowlist of well-known managed-LLM endpoints. Add to this list when
+  // a new public provider lands. We deliberately do NOT allow arbitrary
+  // public hostnames — operators with custom enterprise endpoints should
+  // add them explicitly via a code patch (gateways inside private
+  // networks are out of scope for the test endpoint).
+  const allowedSuffixes = [
+    "api.anthropic.com",
+    "api.openai.com",
+    "openrouter.ai",
+    "generativelanguage.googleapis.com",
+    "api.deepseek.com",
+    "api.groq.com",
+  ];
+  if (!allowedSuffixes.some((s) => host === s || host.endsWith("." + s))) {
+    return `base_url host "${host}" is not in the allowlist for provider test. Allowed: ${allowedSuffixes.join(", ")}`;
+  }
+  return null;
 }
 
 async function handleListProviders(res: ServerResponse): Promise<void> {

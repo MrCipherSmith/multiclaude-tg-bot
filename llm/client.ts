@@ -8,6 +8,23 @@ import { resolveProfileByName } from "./profile-resolver.ts";
 import type { ResolvedProvider } from "./types.ts";
 
 /**
+ * Strip API-key-shaped tokens from upstream error/response bodies before
+ * we store them in api_request_stats.error_message or surface them via
+ * /api/stats/errors. Third-party providers occasionally echo partial keys
+ * or bearer tokens in their JSON error replies; with single-tenant trust
+ * we still don't want operator-visible logs to retain them.
+ *
+ * The body is also length-capped at 500 bytes — long stack-trace-like
+ * payloads bloat the stats table and rarely add diagnostic value.
+ */
+function sanitizeUpstreamMessage(msg: string): string {
+  return msg
+    .slice(0, 500)
+    .replace(/\b(?:sk|pk|Bearer)[A-Za-z0-9_.-]{8,}/gi, "***")
+    .replace(/\bapi[_-]?key["':\s=]+[A-Za-z0-9_.-]{8,}/gi, "api_key=***");
+}
+
+/**
  * Classify a provider error as retryable (worth attempting fallback) or
  * non-retryable (fail fast — fallback wouldn't help). Per PRD §11.2:
  *   retryable: 429 rate limit, 5xx, timeout, network failure, provider unavailable
@@ -249,7 +266,7 @@ async function fetchOpenai(
   });
 
   if (!res.ok && (res.status === 429 || res.status >= 500)) {
-    throw new Error(`API failed: ${res.status} ${await res.text()}`);
+    throw new Error(`API failed: ${res.status} ${sanitizeUpstreamMessage(await res.text())}`);
   }
 
   return res;
@@ -269,7 +286,7 @@ async function* openaiStream(
   ), "stream");
 
   if (!res.ok) {
-    throw new Error(`API failed: ${res.status} ${await res.text()}`);
+    throw new Error(`API failed: ${res.status} ${sanitizeUpstreamMessage(await res.text())}`);
   }
 
   const reader = res.body?.getReader();
@@ -324,7 +341,7 @@ async function openaiGenerate(
   ), "generate");
 
   if (!res.ok) {
-    throw new Error(`API failed: ${res.status} ${await res.text()}`);
+    throw new Error(`API failed: ${res.status} ${sanitizeUpstreamMessage(await res.text())}`);
   }
 
   interface OpenAIResponse {

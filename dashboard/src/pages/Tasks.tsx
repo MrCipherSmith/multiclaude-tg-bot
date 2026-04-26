@@ -145,13 +145,20 @@ function TaskRow({
       </td>
       <td className="px-4 py-2 text-gray-400 text-xs">{task.agentInstanceId ?? '—'}</td>
       <td className="px-4 py-2 text-xs">
+        {/*
+          Parent column. The button label shows the parent task's id and
+          drilling into it filters by parent_task_id == that id (i.e. shows
+          siblings of this row). Earlier impl passed task.id (children of
+          self) which mismatched the visible label and broke navigation —
+          fixed in F-003.
+        */}
         {task.parentTaskId != null ? (
           <button
-            onClick={() => onPivot(task.id)}
+            onClick={() => onPivot(task.parentTaskId!)}
             className="text-indigo-400 hover:text-indigo-300 underline"
-            title="show children of this task"
+            title="show siblings under this parent"
           >
-            #{task.parentTaskId} ⇣
+            #{task.parentTaskId} ⇡
           </button>
         ) : (
           <span className="text-gray-600">root</span>

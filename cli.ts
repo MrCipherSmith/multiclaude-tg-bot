@@ -16,7 +16,7 @@
  *   bun cli.ts mcp-register   Register MCP servers in Claude Code
  */
 
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { resolve, basename, dirname } from "path";
 import { homedir } from "os";
 
@@ -628,6 +628,10 @@ async function setup() {
   ];
 
   await Bun.write(`${BOT_DIR}/.env`, envLines.join("\n") + "\n");
+  // Restrict to owner-read+write only (0600) — file contains TELEGRAM_BOT_TOKEN,
+  // ANTHROPIC_API_KEY, GROQ_API_KEY, DB password, webhook secret. Bun.write
+  // honors umask which on most Linux installs leaves 0644 (world-readable).
+  try { chmodSync(`${BOT_DIR}/.env`, 0o600); } catch { /* best-effort — ignore on FS without modes */ }
   done();
 
   } // end of `if (!skipQuestions)` — install steps below run in BOTH branches
@@ -1411,6 +1415,9 @@ async function setupAgents() {
   }
   step("Updating .env");
   await Bun.write(envPath, newLines.join("\n"));
+  // Re-apply 0600 (Bun.write resets file mode on overwrite). See full
+  // setup() for context on why .env must not be world-readable.
+  try { chmodSync(envPath, 0o600); } catch { /* best-effort */ }
   done();
 
   if (wantBootstrap) {

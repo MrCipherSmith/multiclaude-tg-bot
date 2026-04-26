@@ -35,7 +35,14 @@ export function AgentsPage() {
   const actionMut = useMutation({
     mutationFn: ({ id, action }: { id: number; action: 'start' | 'stop' | 'restart' }) =>
       api.agentAction(id, action),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agents-instances'] }),
+    onSuccess: () => {
+      // Both queries derive from the same underlying state; invalidate
+      // both so the runtime-status strip at the top of the page reflects
+      // start/stop/restart immediately instead of waiting up to 5s for
+      // the next poll tick.
+      queryClient.invalidateQueries({ queryKey: ['agents-instances'] })
+      queryClient.invalidateQueries({ queryKey: ['runtime-status'] })
+    },
   })
 
   if (instLoading || defLoading) return <div className="text-gray-400">{t('common.loading')}</div>
@@ -135,7 +142,13 @@ export function AgentsPage() {
           </thead>
           <tbody className="divide-y divide-gray-800">
             {(instances ?? []).map((i) => {
-              const drift = i.desired_state !== i.actual_state && i.desired_state !== 'stopped'
+              // Drift = desired and actual are different. The previous guard
+              // suppressed drift only when desired='stopped' which produced a
+              // false positive any time a paused agent's actual_state lagged
+              // behind a paused desired_state. Plain inequality is the right
+              // signal — operators can interpret what direction the
+              // reconciler is moving in via the desired/actual columns.
+              const drift = i.desired_state !== i.actual_state
               return (
                 <tr key={i.id} className="hover:bg-gray-800/30">
                   <td className="px-4 py-2 text-gray-500 font-mono">{i.id}</td>

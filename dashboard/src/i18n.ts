@@ -138,6 +138,9 @@ const translations = {
 
     // Monitor
     'nav.monitor': 'Monitor',
+    'nav.agents': 'Agents',
+    'nav.tasks': 'Tasks',
+    'nav.models': 'Models',
 
     // Permissions
     'nav.permissions': 'Permissions',
@@ -297,6 +300,9 @@ const translations = {
 
     // Monitor
     'nav.monitor': 'Мониторинг',
+    'nav.agents': 'Агенты',
+    'nav.tasks': 'Задачи',
+    'nav.models': 'Модели',
 
     // Permissions
     'nav.permissions': 'Разрешения',

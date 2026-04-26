@@ -121,17 +121,39 @@ async function claimTask(): Promise<{ id: number; title: string; description: st
   }) as any;
 }
 
+/**
+ * Cap a string so its JSON-encoded form fits within `byteLimit` bytes.
+ * Naive `slice(0, N)` counts characters; after JSON.stringify escapes
+ * non-ASCII to `\uXXXX` (6 bytes each) the encoded result can be 2–6×
+ * longer. Loop-truncates the input until the encoded payload fits.
+ */
+function capJsonOutput(s: string, byteLimit = 50_000): { output: string } {
+  let raw = s;
+  for (let i = 0; i < 5; i++) {
+    const encoded = JSON.stringify({ output: raw });
+    if (Buffer.byteLength(encoded, "utf8") <= byteLimit) return { output: raw };
+    // Halve until it fits or we hit the iteration cap.
+    raw = raw.slice(0, Math.floor(raw.length / 2));
+  }
+  return { output: raw };
+}
+
 async function completeTask(taskId: number, result: string) {
   await sql.begin(async (tx) => {
+    // status='done' matches the agent_tasks CHECK constraint from migration v23
+    // (allowed: pending|in_progress|blocked|review|done|cancelled|failed).
+    // Earlier versions of this worker wrote 'completed' which the constraint
+    // rejected — every task crashed after a successful LLM call.
+    const payload = capJsonOutput(result, 50_000);
     await tx`
       UPDATE agent_tasks
-      SET status = 'completed', completed_at = now(), updated_at = now(),
-          result = ${JSON.stringify({ output: result.slice(0, 50_000) })}::jsonb
+      SET status = 'done', completed_at = now(), updated_at = now(),
+          result = ${JSON.stringify(payload)}::jsonb
       WHERE id = ${taskId}
     `;
     await tx`
       INSERT INTO agent_events (agent_instance_id, task_id, event_type, from_state, to_state, message)
-      VALUES (${agentInstanceId}, ${taskId}, 'task_status_change', 'in_progress', 'completed', 'standalone-llm worker finished task')
+      VALUES (${agentInstanceId}, ${taskId}, 'task_status_change', 'in_progress', 'done', 'standalone-llm worker finished task')
     `;
   });
 }
@@ -207,7 +229,41 @@ async function processOneTask(task: { id: number; title: string; description: st
   }
 }
 
+/**
+ * Crash-recovery sweep on worker startup: any task assigned to this
+ * agent_instance still in `in_progress` was claimed by a previous worker
+ * incarnation that died (SIGKILL, OOM, crash) without writing the
+ * terminal status update. Reset them to `pending` so the next claim
+ * cycle picks them up.
+ *
+ * orchestrator.handleFailure could also pick these up via its
+ * reassignment path, but that requires explicit invocation. The
+ * self-healing sweep here covers the common case where the same agent
+ * just restarts.
+ */
+async function recoverInflightTasks() {
+  const rows = (await sql`
+    UPDATE agent_tasks
+    SET status = 'pending', started_at = NULL, updated_at = now()
+    WHERE agent_instance_id = ${agentInstanceId}
+      AND status = 'in_progress'
+    RETURNING id
+  `) as { id: number }[];
+  if (rows.length === 0) return;
+  console.log(`[standalone-llm-worker] recovered ${rows.length} stuck in_progress task(s) → pending`);
+  for (const r of rows) {
+    await sql`
+      INSERT INTO agent_events (agent_instance_id, task_id, event_type, from_state, to_state, message)
+      VALUES (${agentInstanceId}, ${r.id}, 'task_status_change', 'in_progress', 'pending',
+              'startup recovery: previous worker did not finish this task')
+    `.catch(() => {}); // best-effort audit; never block worker start
+  }
+}
+
 async function main() {
+  await recoverInflightTasks().catch((err) => {
+    logger.warn({ err: String(err) }, "recoverInflightTasks failed; continuing");
+  });
   await setActualState("running", "standalone-llm worker started");
 
   let lastHeartbeat = 0;
