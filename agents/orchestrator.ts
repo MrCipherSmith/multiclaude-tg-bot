@@ -551,15 +551,20 @@ Rules:
     if (required.length === 0) return null;
 
     // Find agent_instances whose definition has ALL required capabilities.
-    // Use jsonb @> (contains) operator: capabilities @> '["a","b"]'
-    const requiredJson = JSON.stringify(required);
+    // Use jsonb @> (contains) operator with sql.json(...) — postgres.js v3
+    // strips trailing `::jsonb` casts on parameter placeholders, so writing
+    // `@> ${requiredJson}::jsonb` silently binds the parameter as TEXT and
+    // never matches any row. sql.json() forces JSONB encoding at the wire
+    // protocol level. This was discovered end-to-end during the v1.34.0
+    // smoke test — capability routing had been silently broken since the
+    // orchestrator MVP shipped.
     const rows = await sql`
       SELECT ai.*, ad.capabilities, ad.runtime_type, ai.actual_state
       FROM agent_instances ai
       JOIN agent_definitions ad ON ad.id = ai.definition_id
       WHERE ad.enabled = true
         AND ai.desired_state != 'stopped'
-        AND ad.capabilities @> ${requiredJson}::jsonb
+        AND ad.capabilities @> ${sql.json(required)}
       ORDER BY
         CASE ai.actual_state
           WHEN 'running' THEN 0
@@ -723,15 +728,16 @@ Rules:
         );
       }
 
-      // 6. Find candidate agents (filter excluded IDs in JS for SQL robustness).
-      const requiredJson = JSON.stringify(requiredCapabilities);
+      // 6. Find candidate agents (filter excluded IDs in JS for SQL
+      // robustness). sql.json(...) — see selectAgent for the rationale;
+      // `${json}::jsonb` silently fails because postgres.js strips the cast.
       const candidates = (await tx`
         SELECT ai.id
         FROM agent_instances ai
         JOIN agent_definitions ad ON ad.id = ai.definition_id
         WHERE ad.enabled = true
           AND ai.desired_state != 'stopped'
-          AND ad.capabilities @> ${requiredJson}::jsonb
+          AND ad.capabilities @> ${tx.json(requiredCapabilities)}
         ORDER BY
           CASE ai.actual_state
             WHEN 'running' THEN 0
