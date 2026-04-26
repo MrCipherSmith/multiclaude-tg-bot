@@ -704,16 +704,16 @@ async function setup() {
     bootOk ? done() : fail("bootstrap failed (non-fatal — register agents manually via /agents)");
   }
 
-  // Inform the user about deferred planner/reviewer instance creation.
-  // PRD §16.4 lists planner/reviewer per-project instances, but these
-  // need a working standalone-llm runtime adapter (PRD §10.4) which is
-  // not yet implemented in run-cli.sh. Creating instances now would
-  // produce broken agents that can never start. So we surface a notice
-  // instead of seeding broken rows.
+  // Per-project planner/reviewer/orchestrator agent_instances. Now that
+  // the standalone-llm runtime adapter exists (scripts/standalone-llm-
+  // worker.ts) and migration v29 seeds the role definitions, the wizard
+  // can safely create per-project instances. They land in
+  // desired_state='stopped' (PRD §17.4 conservative bootstrap) — operator
+  // starts them manually via `helyx agent start <project>:planner`.
   if (createPlannerReviewer) {
-    console.log(`  ${c.dim("Note: planner/reviewer per-project instances are deferred until")}`);
-    console.log(`  ${c.dim("the standalone-llm runtime adapter ships (PRD §10.4). Their")}`);
-    console.log(`  ${c.dim("model_profiles are already seeded — see /providers in Telegram.")}`);
+    step("Bootstrapping per-project planner/reviewer agents");
+    const ok = await seedRoleAgentBootstrap({ dbUrl });
+    ok ? done() : fail("planner/reviewer bootstrap failed (non-fatal — create manually via /agents)");
   }
 
   // Register MCP servers
@@ -925,21 +925,33 @@ async function seedModelProfiles(opts: {
       providerId = Number(inserted[0]!.id);
     }
 
-    // Insert / update three role profiles. Names are canonical; downstream
-    // code looks them up by name (e.g. orchestrator.decomposeTask uses
-    // "orchestrator-default" via env DEFAULT_ORCHESTRATOR_MODEL → profile).
-    for (const [profileName, model] of [
-      ["planner-default", opts.plannerModel],
-      ["reviewer-default", opts.reviewerModel],
-      ["orchestrator-default", opts.orchestratorModel],
+    // Insert / update three role profiles AND link the corresponding
+    // standalone-llm agent_definitions to them. The role profiles and
+    // the role definitions share names — planner-default profile binds
+    // to planner-default definition, etc. — so a single subquery in the
+    // UPDATE handles the link.
+    for (const [profileName, model, definitionName] of [
+      ["planner-default", opts.plannerModel, "planner-default"],
+      ["reviewer-default", opts.reviewerModel, "reviewer-default"],
+      ["orchestrator-default", opts.orchestratorModel, "orchestrator-default"],
     ] as const) {
-      await sql`
+      const profileRow = (await sql`
         INSERT INTO model_profiles (name, provider_id, model)
         VALUES (${profileName}, ${providerId}, ${model})
         ON CONFLICT (name) DO UPDATE
           SET provider_id = EXCLUDED.provider_id,
               model       = EXCLUDED.model,
               updated_at  = now()
+        RETURNING id
+      `) as { id: number }[];
+      const profileIdNumeric = Number(profileRow[0]!.id);
+      // Bind the matching standalone-llm agent_definition to this profile
+      // (idempotent — if already pointed at the same id, the UPDATE is a
+      // no-op). The definitions are seeded by migration v29.
+      await sql`
+        UPDATE agent_definitions
+        SET model_profile_id = ${profileIdNumeric}, updated_at = now()
+        WHERE name = ${definitionName}
       `;
     }
     return true;
@@ -1479,6 +1491,60 @@ async function seedAgentBootstrap(opts: { dbUrl: string }): Promise<boolean> {
     }
 
     console.log(c.dim(`    ${created} new instance(s) created across ${projects.length} project(s)`));
+    return true;
+  } catch (err) {
+    console.error(c.red(`  bootstrap error: ${err instanceof Error ? err.message : String(err)}`));
+    return false;
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
+}
+
+/**
+ * Per-project bootstrap for planner/reviewer/orchestrator standalone-llm
+ * agents. Mirror of seedAgentBootstrap but targets the role definitions
+ * (planner-default, reviewer-default, orchestrator-default) instead of
+ * the coder definition.
+ *
+ * Each project gets three new instances with names <project>:planner /
+ * :reviewer / :orchestrator, all desired_state='stopped'. Idempotent on
+ * the (project_id, name) unique constraint.
+ */
+async function seedRoleAgentBootstrap(opts: { dbUrl: string }): Promise<boolean> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => {} });
+  try {
+    const defRows = (await sql`
+      SELECT id, name FROM agent_definitions
+      WHERE name IN ('planner-default', 'reviewer-default', 'orchestrator-default')
+        AND enabled = true
+    `) as { id: number; name: string }[];
+    if (defRows.length < 3) {
+      console.error(c.red("  one or more role definitions missing (run migrate first)"));
+      return false;
+    }
+    const defByName = new Map(defRows.map((r) => [r.name, Number(r.id)] as const));
+
+    const projects = (await sql`SELECT id, name FROM projects`) as { id: number; name: string }[];
+    let created = 0;
+    for (const proj of projects) {
+      for (const [defName, role] of [
+        ["planner-default", "planner"],
+        ["reviewer-default", "reviewer"],
+        ["orchestrator-default", "orchestrator"],
+      ] as const) {
+        const definitionId = defByName.get(defName)!;
+        const instanceName = `${proj.name}:${role}`;
+        const ins = (await sql`
+          INSERT INTO agent_instances (definition_id, project_id, name, desired_state, actual_state)
+          VALUES (${definitionId}, ${proj.id}, ${instanceName}, 'stopped', 'new')
+          ON CONFLICT (project_id, name) DO NOTHING
+          RETURNING id
+        `) as { id: number }[];
+        if (ins[0]) created++;
+      }
+    }
+    console.log(c.dim(`    ${created} new instance(s) across ${projects.length} project(s) (planner+reviewer+orchestrator)`));
     return true;
   } catch (err) {
     console.error(c.red(`  bootstrap error: ${err instanceof Error ? err.message : String(err)}`));

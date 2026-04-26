@@ -77,9 +77,20 @@ case "$RUNTIME_TYPE" in
     launcher_cmd="bun \"$HELYX_DIR/scripts/deepseek-repl.ts\""
     needs_claude_confirm=0
     ;;
+  standalone-llm)
+    # Worker loop that polls agent_tasks and runs them via generateResponse.
+    # Requires AGENT_INSTANCE_ID env var (admin-daemon sets it when launching
+    # standalone-llm agents through the runtime driver).
+    if [ -z "$AGENT_INSTANCE_ID" ]; then
+      echo "[run-cli] ERROR: standalone-llm requires AGENT_INSTANCE_ID env var"
+      exit 2
+    fi
+    launcher_cmd="bun \"$HELYX_DIR/scripts/standalone-llm-worker.ts\""
+    needs_claude_confirm=0
+    ;;
   *)
     echo "[run-cli] ERROR: unknown runtime_type '$RUNTIME_TYPE'"
-    echo "[run-cli] Supported: claude-code, codex-cli, opencode, deepseek-cli"
+    echo "[run-cli] Supported: claude-code, codex-cli, opencode, deepseek-cli, standalone-llm"
     exit 2
     ;;
 esac

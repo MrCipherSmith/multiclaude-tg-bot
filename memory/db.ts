@@ -894,6 +894,33 @@ const migrations: Migration[] = [
       await tx`CREATE INDEX IF NOT EXISTS idx_agent_definitions_capabilities ON agent_definitions USING gin(capabilities)`;
     },
   },
+  {
+    version: 29,
+    name: "phase12: standalone-llm agent_definitions for planner/reviewer/orchestrator",
+    up: async (tx) => {
+      // Three role-specific agent_definitions backed by the new
+      // standalone-llm runtime adapter (scripts/standalone-llm-worker.ts).
+      // model_profile_id is NULL initially; the setup wizard (or
+      // `helyx setup-agents`) populates it via seedModelProfiles() —
+      // see cli.ts which now also UPDATEs these definitions to point at
+      // the freshly-seeded role profiles.
+      await tx`
+        INSERT INTO agent_definitions
+          (name, description, runtime_type, runtime_driver, capabilities, config)
+        VALUES
+          ('planner-default',     'Planner agent — decomposes tasks into subtasks via API LLM',
+           'standalone-llm', 'tmux', '["plan"]'::jsonb,
+           '{"role": "planner"}'::jsonb),
+          ('reviewer-default',    'Reviewer agent — reviews work products via API LLM',
+           'standalone-llm', 'tmux', '["review"]'::jsonb,
+           '{"role": "reviewer"}'::jsonb),
+          ('orchestrator-default','Orchestrator agent — routes and coordinates tasks via API LLM',
+           'standalone-llm', 'tmux', '["orchestrate", "plan", "review"]'::jsonb,
+           '{"role": "orchestrator"}'::jsonb)
+        ON CONFLICT (name) DO NOTHING
+      `;
+    },
+  },
 ];
 
 // --- Public API ---

@@ -58,12 +58,13 @@ const NAME_REGEX = /^[a-zA-Z0-9_-]+$/;
  * argument. Used to reject shell-injection attempts via runtime_type, which
  * is otherwise sourced from agent_definitions.runtime_type in the DB.
  */
-type SupportedRuntimeType = "claude-code" | "codex-cli" | "opencode" | "deepseek-cli";
+type SupportedRuntimeType = "claude-code" | "codex-cli" | "opencode" | "deepseek-cli" | "standalone-llm";
 const SUPPORTED_RUNTIME_TYPES = new Set<SupportedRuntimeType>([
   "claude-code",
   "codex-cli",
   "opencode",
   "deepseek-cli",
+  "standalone-llm",
 ]);
 function isSupportedRuntimeType(s: string): s is SupportedRuntimeType {
   return (SUPPORTED_RUNTIME_TYPES as Set<string>).has(s);
