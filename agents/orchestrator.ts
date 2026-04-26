@@ -609,8 +609,16 @@ Rules:
       const excluded = new Set<number>(explicitExclusions);
       if (task.agentInstanceId) excluded.add(task.agentInstanceId);
 
-      // 4. Reassignment-cap reached → terminal failure.
-      if (attempts >= maxReassignments) {
+      // Helper: terminal-failure path. UPDATE status='failed' + audit event +
+      // refresh the row, all inside the current transaction. Used by all
+      // non-reassigned outcomes (limit_reached, no_alternative). Closes M1
+      // from the consolidated review — three identical inline blocks were
+      // collapsed into one, so adding a new failure column / message field
+      // requires a single edit instead of three.
+      const inlineFail = async (
+        outcome: "limit_reached" | "no_alternative",
+        failureMessage: string,
+      ) => {
         await tx`
           UPDATE agent_tasks
           SET status = 'failed', completed_at = now(), updated_at = now()
@@ -624,17 +632,25 @@ Rules:
             'task_status_change',
             ${task.status},
             'failed',
-            ${`${reason}: reassignment limit (${maxReassignments}) reached`}
+            ${failureMessage}
           )
         `;
         const updatedRows = (await tx`SELECT * FROM agent_tasks WHERE id = ${taskId}`) as any[];
         return {
           task: rowToTask(updatedRows[0]),
-          outcome: "limit_reached" as const,
+          outcome,
           newAgentInstanceId: null as number | null,
           attempts,
           previousAgentId: task.agentInstanceId,
         };
+      };
+
+      // 4. Reassignment-cap reached → terminal failure.
+      if (attempts >= maxReassignments) {
+        return inlineFail(
+          "limit_reached",
+          `${reason}: reassignment limit (${maxReassignments}) reached`,
+        );
       }
 
       // 5. Resolve required capabilities — first from the failed agent's
@@ -661,30 +677,23 @@ Rules:
       }
 
       if (requiredCapabilities.length === 0) {
-        await tx`
-          UPDATE agent_tasks
-          SET status = 'failed', completed_at = now(), updated_at = now()
-          WHERE id = ${taskId}
-        `;
-        await tx`
-          INSERT INTO agent_events (agent_instance_id, task_id, event_type, from_state, to_state, message)
-          VALUES (
-            ${task.agentInstanceId ?? null},
-            ${taskId},
-            'task_status_change',
-            ${task.status},
-            'failed',
-            ${`${reason}: cannot determine required capabilities`}
-          )
-        `;
-        const updatedRows = (await tx`SELECT * FROM agent_tasks WHERE id = ${taskId}`) as any[];
-        return {
-          task: rowToTask(updatedRows[0]),
-          outcome: "no_alternative" as const,
-          newAgentInstanceId: null as number | null,
-          attempts,
-          previousAgentId: task.agentInstanceId,
-        };
+        return inlineFail(
+          "no_alternative",
+          `${reason}: cannot determine required capabilities`,
+        );
+      }
+
+      // M2: guard against non-string entries that may have slipped in via
+      // task.payload (the source is untrusted). JSON.stringify will encode
+      // anything, but the @>-containment check on jsonb only matches by
+      // exact value+type — an integer or object in `required` silently
+      // never matches and we'd burn a reassignment slot finding "no winner".
+      // Reject up-front instead.
+      if (!requiredCapabilities.every((c) => typeof c === "string")) {
+        return inlineFail(
+          "no_alternative",
+          `${reason}: required_capabilities contains non-string entries`,
+        );
       }
 
       // 6. Find candidate agents (filter excluded IDs in JS for SQL robustness).
@@ -709,30 +718,10 @@ Rules:
       const winner = candidates.find((c) => !excluded.has(Number(c.id)));
 
       if (!winner) {
-        await tx`
-          UPDATE agent_tasks
-          SET status = 'failed', completed_at = now(), updated_at = now()
-          WHERE id = ${taskId}
-        `;
-        await tx`
-          INSERT INTO agent_events (agent_instance_id, task_id, event_type, from_state, to_state, message)
-          VALUES (
-            ${task.agentInstanceId ?? null},
-            ${taskId},
-            'task_status_change',
-            ${task.status},
-            'failed',
-            ${`${reason}: no alternative agent with capabilities ${requiredCapabilities.join(", ")}`}
-          )
-        `;
-        const updatedRows = (await tx`SELECT * FROM agent_tasks WHERE id = ${taskId}`) as any[];
-        return {
-          task: rowToTask(updatedRows[0]),
-          outcome: "no_alternative" as const,
-          newAgentInstanceId: null as number | null,
-          attempts,
-          previousAgentId: task.agentInstanceId,
-        };
+        return inlineFail(
+          "no_alternative",
+          `${reason}: no alternative agent with capabilities ${requiredCapabilities.join(", ")}`,
+        );
       }
 
       const newAgentId = Number(winner.id);
