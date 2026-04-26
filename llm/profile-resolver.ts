@@ -63,6 +63,28 @@ export async function resolveProfile(profileId: number): Promise<ResolvedProvide
 }
 
 /**
+ * Resolve a model_profile by NAME (rather than id). Used by the LLM
+ * fallback policy (PRD §11.2) which configures the secondary provider
+ * via an env var holding the profile name (LLM_FALLBACK_PROFILE).
+ *
+ * Returns null when the profile is missing or disabled — callers should
+ * treat that as "no fallback configured" rather than fail loudly, since
+ * fallback is opt-in.
+ */
+export async function resolveProfileByName(name: string): Promise<ResolvedProvider | null> {
+  const rows = await sql`
+    SELECT id FROM model_profiles WHERE name = ${name} AND enabled = true LIMIT 1
+  ` as { id: number }[];
+  if (rows.length === 0) return null;
+  try {
+    return await resolveProfile(Number(rows[0]!.id));
+  } catch (err) {
+    logger.warn({ name, err: String(err) }, "fallback profile resolution failed");
+    return null;
+  }
+}
+
+/**
  * Fallback: detect provider from environment variables (current claude/client.ts behavior).
  * Used when no model_profile_id is associated with the session.
  * IMPORTANT: This is the backward-compatibility path — see analysis report R3.

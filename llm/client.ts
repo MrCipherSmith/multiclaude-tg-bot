@@ -3,7 +3,62 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { CONFIG } from "../config.ts";
 import { recordApiRequest } from "../utils/stats.ts";
+import { logger } from "../logger.ts";
+import { resolveProfileByName } from "./profile-resolver.ts";
 import type { ResolvedProvider } from "./types.ts";
+
+/**
+ * Classify a provider error as retryable (worth attempting fallback) or
+ * non-retryable (fail fast — fallback wouldn't help). Per PRD §11.2:
+ *   retryable: 429 rate limit, 5xx, timeout, network failure, provider unavailable
+ *   non-retryable: invalid API key, model not found, context length, schema/policy
+ */
+function classifyProviderError(err: unknown): "retryable" | "non-retryable" {
+  const e = err as { status?: number; response?: { status?: number }; message?: string };
+  const status = e?.status ?? e?.response?.status;
+  const msg = String(e?.message ?? err ?? "");
+
+  if (status === 429) return "retryable";
+  if (typeof status === "number" && status >= 500 && status < 600) return "retryable";
+  if (status === 401 || status === 403) return "non-retryable";  // invalid key / unauthorized
+  if (status === 404) return "non-retryable";                     // model not found
+  if (status === 400) {
+    if (/context.{0,5}length|tokens.*exceed|too.*many.*tokens/i.test(msg)) return "non-retryable";
+    return "non-retryable";  // schema / policy / invalid request — fallback won't help
+  }
+
+  // Error-message heuristics for transports without HTTP status (e.g. SDK timeouts).
+  if (/timeout|timed.?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ENETUNREACH|EAI_AGAIN/i.test(msg)) return "retryable";
+  if (/rate.?limit/i.test(msg)) return "retryable";
+  if (/unavailable|service.*down/i.test(msg)) return "retryable";
+
+  // Default conservative: non-retryable. Avoids fallback storms on unknown
+  // SDK errors that may be misconfiguration rather than transient failure.
+  return "non-retryable";
+}
+
+let cachedFallback: ResolvedProvider | null | undefined; // undefined = not loaded; null = none configured
+
+async function getFallbackProvider(): Promise<ResolvedProvider | null> {
+  if (cachedFallback !== undefined) return cachedFallback;
+  const name = process.env.LLM_FALLBACK_PROFILE;
+  if (!name) {
+    cachedFallback = null;
+    return null;
+  }
+  cachedFallback = await resolveProfileByName(name);
+  if (!cachedFallback) {
+    logger.warn({ name }, "LLM_FALLBACK_PROFILE set but profile not found/disabled — fallback disabled");
+  } else {
+    logger.info({ name, provider: cachedFallback.providerType, model: cachedFallback.model }, "LLM fallback configured");
+  }
+  return cachedFallback;
+}
+
+/** Test-only hook: reset the cached fallback so a subsequent call re-reads env + DB. */
+export function _resetFallbackCacheForTests(): void {
+  cachedFallback = undefined;
+}
 
 export type ContentBlock =
   | { type: "text"; text: string }
@@ -354,6 +409,12 @@ export interface StreamContext {
    * existing globals (env detection) are used. This preserves backward compat.
    */
   provider?: ResolvedProvider;
+  /**
+   * Internal: when set, this generateResponse call is itself a fallback
+   * attempt — do not recurse into another fallback. Set by the fallback
+   * dispatch logic; callers should not pass this directly.
+   */
+  _fallbackInProgress?: boolean;
 }
 
 export async function* streamResponse(
@@ -432,57 +493,63 @@ export async function* streamResponse(
   }
 }
 
+/**
+ * Internal: dispatch a single attempt to the configured provider. Pure —
+ * no stats recording, no fallback handling. Used by generateResponse and
+ * its fallback path.
+ */
+async function callProvider(
+  messages: MessageParam[],
+  system: string,
+  cfg: EffectiveConfig,
+  override?: ResolvedProvider,
+): Promise<{ result: string; inputTokens?: number; outputTokens?: number }> {
+  const wire = wireFormatOf(cfg.provider);
+  switch (wire) {
+    case "google-ai":
+    case "openai": {
+      const r = await openaiGenerate(messages, system, cfg);
+      return { result: r.content, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+    }
+    case "ollama": {
+      const r = await ollamaGenerate(messages, system, cfg);
+      return { result: r.content, inputTokens: r.inputTokens, outputTokens: r.outputTokens };
+    }
+    case "anthropic": {
+      const client = override
+        ? new Anthropic({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) })
+        : anthropic!;
+      const response = await client.messages.create({
+        model: cfg.model,
+        max_tokens: cfg.maxTokens,
+        system,
+        messages,
+      });
+      const result = response.content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join("");
+      return {
+        result,
+        inputTokens: response.usage?.input_tokens,
+        outputTokens: response.usage?.output_tokens,
+      };
+    }
+    default:
+      throw new Error(`Unknown provider: ${cfg.provider}`);
+  }
+}
+
 export async function generateResponse(
   messages: MessageParam[],
   system: string,
   ctx?: StreamContext,
 ): Promise<string> {
   const cfg = effectiveConfig(ctx?.provider);
-  const wire = wireFormatOf(cfg.provider);
   const start = Date.now();
-  let inputTokens: number | undefined;
-  let outputTokens: number | undefined;
 
   try {
-    let result: string;
-    switch (wire) {
-      case "google-ai":
-      case "openai": {
-        const r = await openaiGenerate(messages, system, cfg);
-        result = r.content;
-        inputTokens = r.inputTokens;
-        outputTokens = r.outputTokens;
-        break;
-      }
-      case "ollama": {
-        const r = await ollamaGenerate(messages, system, cfg);
-        result = r.content;
-        inputTokens = r.inputTokens;
-        outputTokens = r.outputTokens;
-        break;
-      }
-      case "anthropic": {
-        const client = ctx?.provider
-          ? new Anthropic({ apiKey: cfg.apiKey, ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}) })
-          : anthropic!;
-        const response = await client.messages.create({
-          model: cfg.model,
-          max_tokens: cfg.maxTokens,
-          system,
-          messages,
-        });
-        inputTokens = response.usage?.input_tokens;
-        outputTokens = response.usage?.output_tokens;
-        result = response.content
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join("");
-        break;
-      }
-      default:
-        throw new Error(`Unknown provider: ${cfg.provider}`);
-    }
-
+    const r = await callProvider(messages, system, cfg, ctx?.provider);
     recordApiRequest({
       sessionId: ctx?.sessionId,
       chatId: ctx?.chatId,
@@ -491,22 +558,90 @@ export async function generateResponse(
       operation: ctx?.operation ?? "generate",
       durationMs: Date.now() - start,
       status: "success",
-      inputTokens,
-      outputTokens,
-      totalTokens: inputTokens && outputTokens ? inputTokens + outputTokens : null,
+      inputTokens: r.inputTokens,
+      outputTokens: r.outputTokens,
+      totalTokens: r.inputTokens && r.outputTokens ? r.inputTokens + r.outputTokens : null,
     });
-
-    return result;
+    return r.result;
   } catch (err: any) {
+    const primaryDuration = Date.now() - start;
+    const primaryErrorMsg = err?.message ?? String(err);
+
+    // PRD §11.2: provider failover. Only retry on classified-retryable errors;
+    // skip when the caller is already running as a fallback (avoid recursion).
+    const classification = classifyProviderError(err);
+    if (classification === "retryable" && !ctx?._fallbackInProgress) {
+      const fallback = await getFallbackProvider().catch(() => null);
+      if (fallback && fallback.providerType !== cfg.provider) {
+        // Record the primary failure with a special operation tag so stats
+        // queries can distinguish "primary failed" from "single attempt failed".
+        recordApiRequest({
+          sessionId: ctx?.sessionId,
+          chatId: ctx?.chatId,
+          provider: cfg.provider,
+          model: cfg.model,
+          operation: `${ctx?.operation ?? "generate"}:primary-failed`,
+          durationMs: primaryDuration,
+          status: "error",
+          errorMessage: primaryErrorMsg,
+        });
+        logger.warn(
+          { primary: cfg.provider, fallback: fallback.providerType, error: primaryErrorMsg },
+          "primary provider failed, attempting fallback",
+        );
+
+        // Re-dispatch with the fallback provider config. Mark _fallbackInProgress
+        // so this attempt cannot itself trigger another fallback.
+        const fbStart = Date.now();
+        const fbCfg = effectiveConfig(fallback);
+        try {
+          const r = await callProvider(messages, system, fbCfg, fallback);
+          recordApiRequest({
+            sessionId: ctx?.sessionId,
+            chatId: ctx?.chatId,
+            provider: fbCfg.provider,
+            model: fbCfg.model,
+            operation: `${ctx?.operation ?? "generate"}:fallback-success`,
+            durationMs: Date.now() - fbStart,
+            status: "success",
+            inputTokens: r.inputTokens,
+            outputTokens: r.outputTokens,
+            totalTokens: r.inputTokens && r.outputTokens ? r.inputTokens + r.outputTokens : null,
+          });
+          logger.info(
+            { primary: cfg.provider, fallback: fbCfg.provider, model: fbCfg.model },
+            "fallback provider succeeded",
+          );
+          return r.result;
+        } catch (fbErr: any) {
+          recordApiRequest({
+            sessionId: ctx?.sessionId,
+            chatId: ctx?.chatId,
+            provider: fbCfg.provider,
+            model: fbCfg.model,
+            operation: `${ctx?.operation ?? "generate"}:fallback-failed`,
+            durationMs: Date.now() - fbStart,
+            status: "error",
+            errorMessage: fbErr?.message ?? String(fbErr),
+          });
+          // Throw the ORIGINAL primary error — that's what callers expect to
+          // see (the fallback failure is in stats for debugging).
+          throw err;
+        }
+      }
+    }
+
+    // No fallback (not configured, non-retryable error, or already in fallback) —
+    // record + rethrow as before.
     recordApiRequest({
       sessionId: ctx?.sessionId,
       chatId: ctx?.chatId,
       provider: cfg.provider,
       model: cfg.model,
       operation: ctx?.operation ?? "generate",
-      durationMs: Date.now() - start,
+      durationMs: primaryDuration,
       status: "error",
-      errorMessage: err?.message ?? String(err),
+      errorMessage: primaryErrorMsg,
     });
     throw err;
   }
