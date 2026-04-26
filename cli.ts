@@ -177,6 +177,20 @@ async function setup() {
   let dbUrl: string;
   let botToken: string;
 
+  // Pre-declare wave-3 (PRD §17.2) vars at outer scope so the post-migration
+  // seed step (wave-4 — model_profiles) can read them after the questions
+  // block closes. The skip-questions branch leaves them at safe defaults
+  // and skips the seed step entirely.
+  let createPlannerReviewer = false;
+  let plannerReviewerProvider = "";
+  let plannerReviewerProviderName = "";
+  let plannerReviewerBaseUrl = "";
+  let plannerReviewerApiKey = "";
+  let plannerReviewerKeyEnv = "";
+  let plannerModel = "";
+  let reviewerModel = "";
+  let orchestratorModel = "";
+
   // Skip-questions path: parse the existing .env, derive the few vars
   // needed by the post-questions install steps, and jump there.
   if (skipQuestions) {
@@ -268,6 +282,116 @@ async function setup() {
   } else {
     console.log(c.dim("  Ollama not detected. Semantic memory search and local summarization will be disabled."));
     console.log(c.dim("  Install later: https://ollama.com/download → ollama pull nomic-embed-text\n"));
+  }
+
+  // 3c. Agent Runtime Configuration (PRD §17.2)
+  //
+  // Helyx is provider-agnostic: agents can run via different runtime drivers
+  // (tmux/pty/docker/process) and different coding CLIs (claude-code, codex,
+  // opencode, gemini). These four prompts configure the defaults; per-agent
+  // overrides come later via /agents in Telegram or `helyx agent create`.
+  //
+  // The defaults written here also drive `helyx runtime doctor` checks —
+  // e.g. tmux is only required if DEFAULT_RUNTIME_DRIVER=tmux.
+  console.log();
+  console.log(`  ${c.bold("Agent Runtime Configuration")}`);
+  const driverIdx = askChoice("Default runtime driver for interactive coding agents:", [
+    "tmux (recommended — works on existing installs)",
+    "pty (experimental — no tmux dependency)",
+    "docker (sandboxed — advanced)",
+  ]);
+  const defaultRuntimeDriver = ["tmux", "pty", "docker"][driverIdx] ?? "tmux";
+
+  const codingIdx = askChoice("Default coding runtime:", [
+    "claude-code (recommended if already installed)",
+    "opencode",
+    "codex-cli",
+    "gemini-cli",
+    "None — configure later",
+  ]);
+  const defaultCodingRuntime = ["claude-code", "opencode", "codex-cli", "gemini-cli", "none"][codingIdx] ?? "claude-code";
+
+  const createDefaultAgentsIdx = askChoice("Create default project agents?", [
+    "Yes — create a coder agent for every registered project",
+    "No — I will configure agents manually via /agents",
+  ]);
+  const createDefaultAgents = createDefaultAgentsIdx === 0;
+
+  const createPlannerReviewerIdx = askChoice("Create planner + reviewer agents (use API models, not interactive CLIs)?", [
+    "Yes — create planner + reviewer using API models",
+    "No — coder agents only",
+  ]);
+  createPlannerReviewer = createPlannerReviewerIdx === 0;
+
+  // model_providers.name lookup — populated below per-provider.
+  let plannerReviewerProviderId = "";
+
+  if (createPlannerReviewer) {
+    const apiIdx = askChoice("API model provider for planner/reviewer:", [
+      "OpenAI-compatible custom endpoint (DeepSeek, etc.)",
+      "OpenRouter",
+      "Anthropic",
+      "Google AI",
+      "Ollama (local)",
+    ]);
+    if (apiIdx === 0) {
+      plannerReviewerProvider = "custom-openai";
+      plannerReviewerProviderName = ask("Provider display name", "DeepSeek");
+      plannerReviewerProviderId = ask("Provider ID (used in DB)", "deepseek-direct");
+      plannerReviewerBaseUrl = ask("Base URL", "https://api.deepseek.com");
+      plannerReviewerKeyEnv = ask("API key env name", "DEEPSEEK_API_KEY");
+      plannerReviewerApiKey = ask("API key");
+      plannerModel = ask("Planner model", "deepseek-chat");
+      reviewerModel = ask("Reviewer model", "deepseek-chat");
+      orchestratorModel = ask("Orchestrator model", "deepseek-chat");
+    } else if (apiIdx === 1) {
+      plannerReviewerProvider = "openrouter";
+      plannerReviewerProviderId = "openrouter-default";
+      plannerReviewerProviderName = "OpenRouter";
+      plannerReviewerBaseUrl = "https://openrouter.ai/api/v1";
+      plannerReviewerKeyEnv = "OPENROUTER_API_KEY";
+      // Re-use the key already collected in step 3 if user picked OpenRouter
+      // there; otherwise prompt for one.
+      plannerReviewerApiKey = openrouterKey || ask("OpenRouter API Key");
+      plannerModel = ask("Planner model", "deepseek/deepseek-chat");
+      reviewerModel = ask("Reviewer model", "anthropic/claude-sonnet-4.5");
+      orchestratorModel = ask("Orchestrator model", "deepseek/deepseek-chat");
+    } else if (apiIdx === 2) {
+      plannerReviewerProvider = "anthropic";
+      plannerReviewerProviderId = "anthropic-default";
+      plannerReviewerProviderName = "Anthropic";
+      plannerReviewerBaseUrl = "https://api.anthropic.com";
+      plannerReviewerKeyEnv = "ANTHROPIC_API_KEY";
+      plannerReviewerApiKey = anthropicKey || ask("Anthropic API Key");
+      plannerModel = ask("Planner model", "claude-haiku-4-5");
+      reviewerModel = ask("Reviewer model", "claude-sonnet-4-6");
+      orchestratorModel = ask("Orchestrator model", "claude-sonnet-4-6");
+    } else if (apiIdx === 3) {
+      plannerReviewerProvider = "google-ai";
+      plannerReviewerProviderId = "google-ai-default";
+      plannerReviewerProviderName = "Google AI";
+      plannerReviewerBaseUrl = "https://generativelanguage.googleapis.com/v1";
+      plannerReviewerKeyEnv = "GOOGLE_AI_API_KEY";
+      plannerReviewerApiKey = googleAiKey || ask("Google AI API Key");
+      plannerModel = ask("Planner model", "gemma-4-31b-it");
+      reviewerModel = ask("Reviewer model", "gemma-4-31b-it");
+      orchestratorModel = ask("Orchestrator model", "gemma-4-31b-it");
+    } else {
+      plannerReviewerProvider = "ollama";
+      plannerReviewerProviderId = "ollama-default";
+      plannerReviewerProviderName = "Ollama";
+      plannerReviewerBaseUrl = "http://localhost:11434";
+      plannerReviewerKeyEnv = ""; // no key needed
+      plannerModel = ask("Planner model", "qwen3:8b");
+      reviewerModel = ask("Reviewer model", "qwen3:8b");
+      orchestratorModel = ask("Orchestrator model", "qwen3:8b");
+    }
+
+    // PRD §16.5 important limitation — surface to user before they wait
+    // for an "agent" that can't actually edit files.
+    console.log(`\n  ${c.yellow("Note:")} planner/reviewer/orchestrator agents reason and route tasks but`);
+    console.log(`  ${c.dim("do not edit files or run commands until tool execution is configured.")}`);
+    console.log(`  ${c.dim("Use Claude Code/OpenCode/Codex/Aider for code-writing agents.\n")}`);
   }
 
   // 4. Telegram transport
@@ -472,6 +596,34 @@ async function setup() {
     "# Host paths (used inside Docker to verify project existence)",
     `HOST_HOME=${process.env.HOME ?? "/root"}`,
     `HOST_PROJECTS_DIR=${process.env.HOME ?? "/root"}`,
+    "",
+    "# Agent runtime (PRD §17.3)",
+    `DEFAULT_RUNTIME_DRIVER=${defaultRuntimeDriver}`,
+    `DEFAULT_CODING_RUNTIME=${defaultCodingRuntime}`,
+    `AGENT_RECONCILE_INTERVAL_MS=5000`,
+    `AGENT_HEARTBEAT_TIMEOUT_MS=120000`,
+    `AGENT_RESTART_LIMIT=3`,
+    ...(createPlannerReviewer ? [
+      "",
+      "# Planner / reviewer / orchestrator (API-based agents — PRD §17.3)",
+      `DEFAULT_PLANNER_PROVIDER=${plannerReviewerProvider}`,
+      `DEFAULT_PLANNER_MODEL=${plannerModel}`,
+      `DEFAULT_REVIEWER_PROVIDER=${plannerReviewerProvider}`,
+      `DEFAULT_REVIEWER_MODEL=${reviewerModel}`,
+      `DEFAULT_ORCHESTRATOR_PROVIDER=${plannerReviewerProvider}`,
+      `DEFAULT_ORCHESTRATOR_MODEL=${orchestratorModel}`,
+      // For OpenAI-compatible custom endpoint, write the alias env vars too.
+      // CUSTOM_OPENAI_* is the canonical name; DEEPSEEK_* is the alias.
+      ...(plannerReviewerProvider === "custom-openai" ? [
+        `CUSTOM_OPENAI_API_KEY=${plannerReviewerApiKey}`,
+        `CUSTOM_OPENAI_BASE_URL=${plannerReviewerBaseUrl}`,
+        `CUSTOM_OPENAI_DEFAULT_MODEL=${plannerModel}`,
+        ...(plannerReviewerKeyEnv === "DEEPSEEK_API_KEY" ? [
+          `DEEPSEEK_API_KEY=${plannerReviewerApiKey}`,
+          `DEEPSEEK_BASE_URL=${plannerReviewerBaseUrl}`,
+        ] : []),
+      ] : []),
+    ] : []),
   ];
 
   await Bun.write(`${BOT_DIR}/.env`, envLines.join("\n") + "\n");
@@ -517,6 +669,27 @@ async function setup() {
   } else {
     const migrate = await run(["bun", "memory/db.ts"]);
     migrate.ok ? done() : fail();
+  }
+
+  // Seed planner/reviewer/orchestrator model_profiles (PRD §17.5).
+  // The v22 migration already inserts default model_providers rows
+  // (Anthropic, OpenRouter, Google AI, Ollama, DeepSeek). We only add
+  // the role-specific profiles (planner-default / reviewer-default /
+  // orchestrator-default) referencing the user's chosen provider. The
+  // skip-questions branch leaves createPlannerReviewer=false → no-op.
+  if (createPlannerReviewer && plannerReviewerProvider) {
+    step("Seeding model_profiles for planner/reviewer/orchestrator");
+    const seedOk = await seedModelProfiles({
+      providerType: plannerReviewerProvider,
+      providerName: plannerReviewerProviderName,
+      providerBaseUrl: plannerReviewerBaseUrl,
+      providerKeyEnv: plannerReviewerKeyEnv,
+      plannerModel,
+      reviewerModel,
+      orchestratorModel,
+      dbUrl,
+    });
+    seedOk ? done() : fail("seed failed (non-fatal — agents will still start, profile lookup falls back to env)");
   }
 
   // Register MCP servers
@@ -653,6 +826,105 @@ Write as self-contained sentences. Good: \`"Port 3847 serves both MCP and dashbo
   console.log(`    ${c.cyan("helyx bounce")}   — restart all sessions`);
   console.log(`    ${c.cyan("helyx ps")}       — list session status`);
   console.log(`    ${c.cyan("helyx down")}     — stop all sessions\n`);
+}
+
+// --- Model profile seed (wave-4, PRD §17.5) ---
+
+/**
+ * Insert model_profiles rows for planner-default / reviewer-default /
+ * orchestrator-default, all linked to the model_providers row that matches
+ * the user-selected provider type. Idempotent — re-runs UPDATE existing
+ * rows so wizard re-runs converge to the latest collected values.
+ *
+ * Returns false on any DB error so the caller can warn but continue (the
+ * runtime LLM client falls back to env-var-driven profiles when no DB
+ * profile exists, so this seed is a convenience, not a hard requirement).
+ *
+ * Connects directly via postgres.js using the .env DATABASE_URL — does NOT
+ * import the project's `sql` singleton, since cli.ts may be invoked outside
+ * a normal bot context (e.g. from `helyx setup` with the bot not yet up).
+ */
+async function seedModelProfiles(opts: {
+  providerType: string;
+  providerName: string;
+  providerBaseUrl: string;
+  providerKeyEnv: string;
+  plannerModel: string;
+  reviewerModel: string;
+  orchestratorModel: string;
+  dbUrl: string;
+}): Promise<boolean> {
+  const postgres = (await import("postgres")).default;
+  const sql = postgres(opts.dbUrl, { max: 2, onnotice: () => {} });
+  try {
+    // Look up model_providers.id by provider_type. The v22 bootstrap inserts
+    // canonical names (Anthropic / OpenRouter / Google AI / Ollama / DeepSeek)
+    // matched on (provider_type) when there's exactly one. If multiple
+    // providers share a type (e.g. two openai-compatible custom endpoints),
+    // we prefer the one matching `name` collected from the wizard, falling
+    // back to provider_type otherwise.
+    let providerId: number | null = null;
+    const byName = (await sql`
+      SELECT id FROM model_providers WHERE name = ${opts.providerName} LIMIT 1
+    `) as { id: number }[];
+    if (byName[0]) {
+      providerId = Number(byName[0].id);
+      // Refresh base_url / api_key_env / default_model in case the user
+      // tweaked them in the wizard.
+      await sql`
+        UPDATE model_providers
+        SET base_url      = ${opts.providerBaseUrl || null},
+            api_key_env   = ${opts.providerKeyEnv || null},
+            default_model = ${opts.plannerModel},
+            updated_at    = now()
+        WHERE id = ${providerId}
+      `;
+    } else {
+      // Provider row not present — create it. Idempotent on (name).
+      const inserted = (await sql`
+        INSERT INTO model_providers (name, provider_type, base_url, api_key_env, default_model)
+        VALUES (
+          ${opts.providerName},
+          ${opts.providerType},
+          ${opts.providerBaseUrl || null},
+          ${opts.providerKeyEnv || null},
+          ${opts.plannerModel}
+        )
+        ON CONFLICT (name) DO UPDATE
+          SET provider_type = EXCLUDED.provider_type,
+              base_url      = EXCLUDED.base_url,
+              api_key_env   = EXCLUDED.api_key_env,
+              default_model = EXCLUDED.default_model,
+              updated_at    = now()
+        RETURNING id
+      `) as { id: number }[];
+      providerId = Number(inserted[0]!.id);
+    }
+
+    // Insert / update three role profiles. Names are canonical; downstream
+    // code looks them up by name (e.g. orchestrator.decomposeTask uses
+    // "orchestrator-default" via env DEFAULT_ORCHESTRATOR_MODEL → profile).
+    for (const [profileName, model] of [
+      ["planner-default", opts.plannerModel],
+      ["reviewer-default", opts.reviewerModel],
+      ["orchestrator-default", opts.orchestratorModel],
+    ] as const) {
+      await sql`
+        INSERT INTO model_profiles (name, provider_id, model)
+        VALUES (${profileName}, ${providerId}, ${model})
+        ON CONFLICT (name) DO UPDATE
+          SET provider_id = EXCLUDED.provider_id,
+              model       = EXCLUDED.model,
+              updated_at  = now()
+      `;
+    }
+    return true;
+  } catch (err) {
+    console.error(c.red(`  seed error: ${err instanceof Error ? err.message : String(err)}`));
+    return false;
+  } finally {
+    await sql.end({ timeout: 2 });
+  }
 }
 
 // --- Runtime doctor ---
