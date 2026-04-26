@@ -19,6 +19,7 @@
 import { existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { resolve, basename, dirname } from "path";
 import { homedir } from "os";
+import { CODING_RUNTIMES } from "./runtime/supported-runtimes.ts";
 
 // --- ANSI colors ---
 const c = {
@@ -303,14 +304,21 @@ async function setup() {
   ]);
   const defaultRuntimeDriver = ["tmux", "pty", "docker"][driverIdx] ?? "tmux";
 
-  const codingIdx = askChoice("Default coding runtime:", [
-    "claude-code (recommended if already installed)",
-    "opencode",
-    "codex-cli",
-    "gemini-cli",
-    "None — configure later",
-  ]);
-  const defaultCodingRuntime = ["claude-code", "opencode", "codex-cli", "gemini-cli", "none"][codingIdx] ?? "claude-code";
+  // F-008 residual: derive options from the runtime SoT so the wizard
+  // can never offer an option the runtime would later reject. Adding a
+  // new coding runtime requires editing runtime/supported-runtimes.ts
+  // (and run-cli.sh — enforced by the drift test). The wizard label
+  // for "claude-code" gets the recommended-suffix; everything else
+  // shows the bare type name.
+  const codingChoices = [...CODING_RUNTIMES];
+  const codingLabels: string[] = codingChoices.map((r) =>
+    r === "claude-code" ? "claude-code (recommended if already installed)" : (r as string),
+  );
+  codingLabels.push("None — configure later");
+  const codingIdx = askChoice("Default coding runtime:", codingLabels);
+  const defaultCodingRuntime = codingIdx < codingChoices.length
+    ? codingChoices[codingIdx]!
+    : "none";
 
   const createDefaultAgentsIdx = askChoice("Create default project agents?", [
     "Yes — create a coder agent for every registered project",
@@ -1318,17 +1326,14 @@ async function setupAgents() {
   );
   const driver = ["tmux", "pty", "docker"][driverIdx] ?? "tmux";
 
+  // F-008 residual: same SoT-derived list as the full setup() wizard.
+  const codingChoices = [...CODING_RUNTIMES];
+  const codingLabels = [...codingChoices, "None — configure later"];
   const codingIdx = askChoice(
     `Default coding runtime (current: ${envMap.DEFAULT_CODING_RUNTIME ?? "claude-code"}):`,
-    [
-      "claude-code",
-      "opencode",
-      "codex-cli",
-      "gemini-cli",
-      "None — configure later",
-    ],
+    codingLabels,
   );
-  const coding = ["claude-code", "opencode", "codex-cli", "gemini-cli", "none"][codingIdx] ?? "claude-code";
+  const coding = codingIdx < codingChoices.length ? codingChoices[codingIdx]! : "none";
 
   const bootIdx = askChoice("Bootstrap per-project coder agents now?", [
     "Yes — create coder agent for every project without one",

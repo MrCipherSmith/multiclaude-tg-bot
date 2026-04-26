@@ -101,6 +101,39 @@ describe("TmuxDriver", () => {
       ).rejects.toThrow(/invalid projectName/);
     });
 
+    test("rejects projectPath with `..` segment (traversal)", async () => {
+      const { runShell } = makeMockShell(new Map());
+      const driver = makeDriver(runShell);
+      await expect(
+        driver.start(
+          { driver: "tmux" },
+          { projectPath: "/foo/../etc", projectName: "p" },
+        ),
+      ).rejects.toThrow(/invalid projectPath/);
+    });
+
+    test("rejects projectPath with `.` segment", async () => {
+      const { runShell } = makeMockShell(new Map());
+      const driver = makeDriver(runShell);
+      await expect(
+        driver.start(
+          { driver: "tmux" },
+          { projectPath: "/foo/./bar", projectName: "p" },
+        ),
+      ).rejects.toThrow(/invalid projectPath/);
+    });
+
+    test("rejects projectPath with empty segment (//)", async () => {
+      const { runShell } = makeMockShell(new Map());
+      const driver = makeDriver(runShell);
+      await expect(
+        driver.start(
+          { driver: "tmux" },
+          { projectPath: "/foo//bar", projectName: "p" },
+        ),
+      ).rejects.toThrow(/invalid projectPath/);
+    });
+
     test("returns updated handle with session and window set", async () => {
       const { runShell } = makeMockShell(
         new Map([

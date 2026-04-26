@@ -498,17 +498,20 @@ Rules:
     // Previously the audit event was a separate `sql` call after addSubtasks;
     // a crash between the two would leave subtasks orphaned (no record of
     // who decomposed them or via which model).
-    const created = (await sql.begin(async (tx) => {
-      // F-018: refresh task.agentInstanceId inside the tx — between the
-      // initial getTask() at line ~410 and now, a concurrent
-      // handleFailure could have reassigned the task to a different
-      // agent. Using the stale id in the audit event would mis-attribute
-      // the decomposition. The refresh is a single-row read, no FOR
-      // UPDATE needed (audit events are write-once).
-      const refreshRows = (await tx`
-        SELECT agent_instance_id FROM agent_tasks WHERE id = ${taskId} LIMIT 1
-      `) as { agent_instance_id: number | null }[];
-      const currentAgentInstanceId = refreshRows[0]?.agent_instance_id ?? task.agentInstanceId ?? null;
+    const txResult = (await sql.begin(async (tx) => {
+      // F-018 + H-1: refresh the FULL task row inside the tx — between
+      // the initial getTask() at line ~410 and now, a concurrent
+      // handleFailure could have reassigned the task. Using the stale
+      // id in the audit event would mis-attribute the decomposition,
+      // AND returning the stale `task` object as parentTask would mislead
+      // downstream callers (the original H-1 review finding). Refresh
+      // both the column used in the audit event AND the task object
+      // returned from this function.
+      const taskRows = (await tx`
+        SELECT * FROM agent_tasks WHERE id = ${taskId} LIMIT 1
+      `) as any[];
+      const refreshedTask = taskRows[0] ? rowToTask(taskRows[0]) : task;
+      const currentAgentInstanceId = refreshedTask.agentInstanceId ?? task.agentInstanceId ?? null;
 
       const subs = await this.addSubtasksTx(tx, taskId, subtaskInputs);
       await tx`
@@ -526,12 +529,12 @@ Rules:
           })}::jsonb
         )
       `;
-      return subs;
-    })) as AgentTask[];
+      return { subs, parentTask: refreshedTask };
+    })) as { subs: AgentTask[]; parentTask: AgentTask };
 
     return {
-      parentTask: task,
-      subtasks: created,
+      parentTask: txResult.parentTask,
+      subtasks: txResult.subs,
       rawLlmResponse: rawResponse,
       attempts,
     };

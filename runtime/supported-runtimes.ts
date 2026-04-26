@@ -40,3 +40,18 @@ export function isSupportedRuntimeType(s: string): s is SupportedRuntimeType {
  * in run-cli.sh (`${2:-claude-code}`).
  */
 export const DEFAULT_RUNTIME_TYPE: SupportedRuntimeType = "claude-code";
+
+/**
+ * Subset suitable as a "coding runtime" — interactive CLI agents that
+ * write code on behalf of an operator. Used by the wizard prompt for
+ * `DEFAULT_CODING_RUNTIME`. Excludes `standalone-llm` (which serves the
+ * planner/reviewer/orchestrator roles, not coding).
+ *
+ * Derived from SUPPORTED_RUNTIMES_LIST so adding a new runtime to the
+ * SoT also makes it available in the wizard if it qualifies as a coding
+ * runtime; otherwise add it to the EXCLUDED_FROM_CODING set below.
+ */
+const EXCLUDED_FROM_CODING: ReadonlySet<SupportedRuntimeType> = new Set(["standalone-llm"]);
+export const CODING_RUNTIMES: ReadonlyArray<SupportedRuntimeType> = SUPPORTED_RUNTIMES_LIST.filter(
+  (r) => !EXCLUDED_FROM_CODING.has(r),
+);

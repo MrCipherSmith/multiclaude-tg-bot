@@ -59,11 +59,19 @@ export interface TmuxDriverConfig {
 const PATH_REGEX = /^[a-zA-Z0-9/_.-]+$/;
 function validateProjectPath(p: string): boolean {
   if (!PATH_REGEX.test(p)) return false;
-  // Reject any `..` segment — even though all chars are allowlisted,
-  // tmux resolves the path before `cd`, so /a/b/../../etc would land in
-  // /etc despite the operator-only write surface. Defense in depth.
-  for (const seg of p.split("/")) {
-    if (seg === "..") return false;
+  // Reject `..`, `.`, and empty path segments — defense in depth even
+  // though the regex character class already restricts the alphabet.
+  // - `..`  : parent traversal (`/foo/../etc` → `/etc`).
+  // - `.`   : current-dir reference; never legitimate in a project path
+  //           and could confuse a future tmux/mount-namespace edge case.
+  // - empty : produced by `//` (regex allows it because `/` is in the
+  //           charset); operationally equivalent to a single `/` but
+  //           rejecting forces canonical paths.
+  // The leading `/` of an absolute path produces an empty first segment
+  // from split() — strip it before iterating.
+  const segments = p.startsWith("/") ? p.slice(1).split("/") : p.split("/");
+  for (const seg of segments) {
+    if (seg === ".." || seg === "." || seg === "") return false;
   }
   return true;
 }

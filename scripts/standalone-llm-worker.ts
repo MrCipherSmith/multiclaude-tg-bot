@@ -68,11 +68,16 @@ interface AgentContext {
  * skip the task without crashing.
  */
 async function resolveAgentContext(agentId: number): Promise<AgentContext | null> {
+  // `ad.enabled = true` filter (F-008-followup): if an operator disables
+  // the definition while the worker is running, processOneTask should
+  // fail the next task rather than continue silently with the disabled
+  // config. The worker exits its loop on subsequent claim failures since
+  // `failTask` correctly fires regardless.
   const rows = (await sql`
-    SELECT ad.id AS def_id, ad.name AS def_name, ad.system_prompt, ad.model_profile_id
+    SELECT ad.id AS def_id, ad.name AS def_name, ad.system_prompt, ad.model_profile_id, ad.enabled
     FROM agent_instances ai
     JOIN agent_definitions ad ON ad.id = ai.definition_id
-    WHERE ai.id = ${agentId}
+    WHERE ai.id = ${agentId} AND ad.enabled = true
     LIMIT 1
   `) as { def_id: number; def_name: string; system_prompt: string | null; model_profile_id: number | null }[];
   if (rows.length === 0) return null;

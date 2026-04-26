@@ -1011,39 +1011,40 @@ async function handleCreateAgent(req: IncomingMessage, res: ServerResponse): Pro
     return;
   }
 
-  // Resolve definition by id or name.
-  let definitionId: number | null = null;
+  // Resolve definition through agentManager — F-006-residual: previously
+  // this handler issued raw SQL on agent_definitions / projects, the same
+  // boundary leak F-006 closed for handleListAgents. Now both writes and
+  // reads in this file route through services.
+  let def: import("../agents/agent-manager.ts").AgentDefinition | null = null;
   if (typeof definitionRef === "number" || /^\d+$/.test(String(definitionRef))) {
-    const r = (await sql`SELECT id FROM agent_definitions WHERE id = ${Number(definitionRef)} AND enabled = true LIMIT 1`) as any[];
-    if (r.length === 0) { sendError(res, `agent_definition id=${definitionRef} not found or disabled`, 404); return; }
-    definitionId = Number(r[0].id);
+    def = await agentManager.getDefinition(Number(definitionRef));
   } else {
-    const r = (await sql`SELECT id FROM agent_definitions WHERE name = ${definitionRef} AND enabled = true LIMIT 1`) as any[];
-    if (r.length === 0) { sendError(res, `agent_definition "${definitionRef}" not found or disabled`, 404); return; }
-    definitionId = Number(r[0].id);
+    def = await agentManager.getDefinitionByName(String(definitionRef));
   }
+  if (!def) { sendError(res, `agent_definition "${definitionRef}" not found`, 404); return; }
+  if (!def.enabled) { sendError(res, `agent_definition "${def.name}" is disabled`, 404); return; }
 
-  // Resolve project by id or name (optional — null = unattached agent).
+  // Resolve project through projectService (optional — null = unattached).
   let projectId: number | null = null;
   if (projectRef !== null && projectRef !== undefined && projectRef !== "") {
+    let proj: import("../services/project-service.ts").Project | null = null;
     if (typeof projectRef === "number" || /^\d+$/.test(String(projectRef))) {
-      const r = (await sql`SELECT id FROM projects WHERE id = ${Number(projectRef)} LIMIT 1`) as any[];
-      if (r.length === 0) { sendError(res, `project id=${projectRef} not found`, 404); return; }
-      projectId = Number(r[0].id);
+      proj = await projectService.get(Number(projectRef));
     } else {
-      const r = (await sql`SELECT id FROM projects WHERE name = ${projectRef} LIMIT 1`) as any[];
-      if (r.length === 0) { sendError(res, `project "${projectRef}" not found`, 404); return; }
-      projectId = Number(r[0].id);
+      proj = await projectService.getByName(String(projectRef));
     }
+    if (!proj) { sendError(res, `project "${projectRef}" not found`, 404); return; }
+    projectId = proj.id;
   }
 
   try {
-    const inserted = (await sql`
-      INSERT INTO agent_instances (definition_id, project_id, name, desired_state, actual_state)
-      VALUES (${definitionId}, ${projectId}, ${name}, ${desiredState}, 'new')
-      RETURNING *
-    `) as any[];
-    sendJson(res, inserted[0]);
+    const inst = await agentManager.createInstance({
+      definitionId: def.id,
+      projectId,
+      name,
+      desiredState,
+    });
+    sendJson(res, inst);
   } catch (err: any) {
     // Unique constraint (project_id, name) → 409 Conflict.
     if (err?.code === "23505" || /duplicate.*key/i.test(String(err?.message))) {

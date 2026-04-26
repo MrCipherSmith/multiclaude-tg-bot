@@ -921,6 +921,22 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 30,
+    name: "phase12-followup: index on agent_instances.project_id for listInstancesEnriched filter",
+    up: async (tx) => {
+      // F-008-followup from the PR #8 review: AgentManager.
+      // listInstancesEnriched filters by `ai.project_id = ${projectId}`
+      // on every dashboard agents-page render. Postgres does not auto-
+      // index FK columns; without this the filter degrades to a
+      // sequential scan as agent_instances grows.
+      //
+      // Plain CREATE INDEX (not CONCURRENTLY) — same constraint as v28
+      // (no CONCURRENTLY inside sql.begin). agent_instances is small,
+      // brief lock acceptable.
+      await tx`CREATE INDEX IF NOT EXISTS idx_agent_instances_project_id ON agent_instances(project_id)`;
+    },
+  },
 ];
 
 // --- Public API ---

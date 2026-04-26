@@ -84,10 +84,18 @@ export function _resetFallbackCacheForTests(): void {
  * underlying DB row + env-var key. Without this hook, a key rotation
  * required a full bot restart.
  *
- * Listener is installed once at module load and never removed; SIGUSR1
- * is otherwise unused by the bot. Kept idempotent — multiple imports
- * of this module would not stack listeners (Node deduplicates by
- * function reference).
+ * Idempotent at module-load time only. Node/Bun module cache ensures
+ * `sigusr1Handler` is registered exactly once per process — NOT because
+ * EventEmitter dedupes listeners (it does not), but because module
+ * evaluation runs once per process. If you ever call `process.on(...)`
+ * with this handler from multiple sites, add a guard:
+ *   if (!process.listeners("SIGUSR1").includes(sigusr1Handler))
+ * SIGUSR1 is otherwise unused by the bot.
+ *
+ * Bun caveat (F-020 follow-up): SIGUSR1 delivery has had open issues
+ * (oven-sh/bun#21508). The startup log line below provides ops-side
+ * confirmation that the handler was registered; if rotation doesn't
+ * take effect after `kill -USR1`, the log absence is the diagnostic.
  */
 const sigusr1Handler = () => {
   if (cachedFallback !== undefined) {
@@ -96,6 +104,7 @@ const sigusr1Handler = () => {
   }
 };
 process.on("SIGUSR1", sigusr1Handler);
+logger.debug("SIGUSR1 cache-reset handler registered (LLM fallback)");
 
 /**
  * Best-effort dispatch of a fallback traceability event to the caller-
@@ -110,7 +119,7 @@ process.on("SIGUSR1", sigusr1Handler);
  * shape is part of the public contract.
  */
 async function recordFallbackEvent(
-  eventType: "model_primary_failed" | "model_fallback_selected" | "model_request_completed",
+  eventType: FallbackEventType,
   ctx: StreamContext | undefined,
   metadata: Record<string, unknown>,
 ): Promise<void> {
@@ -491,10 +500,16 @@ export interface StreamContext {
    * propagate — observability must not break the primary flow.
    */
   onFallbackEvent?: (
-    type: "model_primary_failed" | "model_fallback_selected" | "model_request_completed",
+    type: FallbackEventType,
     metadata: Record<string, unknown>,
   ) => void | Promise<void>;
 }
+
+/** Fallback event type union — exported so callers can type their callbacks. */
+export type FallbackEventType =
+  | "model_primary_failed"
+  | "model_fallback_selected"
+  | "model_request_completed";
 
 export async function* streamResponse(
   messages: MessageParam[],
@@ -644,7 +659,12 @@ export async function generateResponse(
     return r.result;
   } catch (err: any) {
     const primaryDuration = Date.now() - start;
-    const primaryErrorMsg = err?.message ?? String(err);
+    // F-007 follow-up: sanitize the error message at capture point.
+    // fetchOpenai already calls sanitizeUpstreamMessage on the body it
+    // embeds, but errors from the Anthropic SDK (and other branches of
+    // callProvider) bypass that path and would otherwise flow raw into
+    // api_request_stats.error_message and the onFallbackEvent metadata.
+    const primaryErrorMsg = sanitizeUpstreamMessage(err?.message ?? String(err));
 
     // PRD §11.2: provider failover. Only retry on classified-retryable errors;
     // skip when the caller is already running as a fallback (avoid recursion).

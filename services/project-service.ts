@@ -42,6 +42,17 @@ export class ProjectService {
     return rows[0] ?? null;
   }
 
+  /**
+   * Lookup by name. Used by dashboard / CLI handlers that accept a
+   * project ref as either id or name. The `name` column is unique
+   * (CREATE TABLE projects ... name TEXT NOT NULL UNIQUE) so this
+   * always returns ≤ 1 row.
+   */
+  async getByName(name: string): Promise<Project | null> {
+    const rows = await sql`SELECT id, name, path, tmux_session_name, created_at FROM projects WHERE name = ${name}` as unknown as Project[];
+    return rows[0] ?? null;
+  }
+
   async create(name: string, path: string): Promise<Project | null> {
     const tmuxName = name.toLowerCase().replace(/[^a-z0-9_-]/g, "_");
     const rows = await sql`
