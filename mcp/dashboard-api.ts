@@ -12,6 +12,9 @@ import { isIndexing } from "../memory/long-term.ts";
 import { addSSEClient, removeSSEClient, getSSEClientCount } from "./notification-broadcaster.ts";
 import { sessionService } from "../services/session-service.ts";
 import { projectService } from "../services/project-service.ts";
+import { agentManager } from "../agents/agent-manager.ts";
+import { orchestrator } from "../agents/orchestrator.ts";
+import type { TaskStatus } from "../agents/orchestrator.ts";
 import { logger } from "../logger.ts";
 
 const DIST_DIR = join(import.meta.dirname, "../dashboard/dist");
@@ -798,6 +801,147 @@ async function handleAlwaysAllowPermission(req: IncomingMessage, res: ServerResp
   sendJson(res, { ok: true });
 }
 
+// --- Agents / Tasks / Models API (PRD §16 dashboard + §17.7 CLI) ---
+//
+// All handlers delegate to agentManager and orchestrator singletons. They
+// return JSON shaped to match the corresponding TS types (AgentInstance,
+// AgentTask, etc.) so dashboard React components can consume them
+// directly without re-mapping.
+
+async function handleListAgents(res: ServerResponse, url: URL): Promise<void> {
+  // Match-if-set idiom: each filter parameter collapses to TRUE when null,
+  // so the dimension is effectively skipped without dynamic SQL fragment
+  // assembly. Same pattern as orchestrator.listTasks (agents/orchestrator.ts).
+  const projectIdParam = url.searchParams.get("project_id");
+  const projectId = projectIdParam ? Number(projectIdParam) : null;
+  const desiredState = url.searchParams.get("desired_state");
+  const actualState = url.searchParams.get("actual_state");
+
+  // Join definitions for capabilities + runtime_type — saves the dashboard
+  // a second roundtrip per row.
+  const rows = await sql`
+    SELECT ai.*,
+           ad.name AS definition_name,
+           ad.runtime_type,
+           ad.capabilities,
+           ad.enabled AS definition_enabled,
+           p.name AS project_name
+    FROM agent_instances ai
+    JOIN agent_definitions ad ON ad.id = ai.definition_id
+    LEFT JOIN projects p ON p.id = ai.project_id
+    WHERE (${projectId}::int IS NULL OR ai.project_id = ${projectId})
+      AND (${desiredState}::text IS NULL OR ai.desired_state = ${desiredState})
+      AND (${actualState}::text IS NULL OR ai.actual_state = ${actualState})
+    ORDER BY ai.id ASC
+  ` as any[];
+  sendJson(res, rows);
+}
+
+async function handleListAgentDefinitions(res: ServerResponse): Promise<void> {
+  const defs = await agentManager.listDefinitions();
+  sendJson(res, defs);
+}
+
+async function handleGetAgent(res: ServerResponse, id: number): Promise<void> {
+  const inst = await agentManager.getInstance(id);
+  if (!inst) { sendError(res, "agent not found", 404); return; }
+  sendJson(res, inst);
+}
+
+async function handleAgentAction(
+  req: IncomingMessage,
+  res: ServerResponse,
+  id: number,
+  action: "start" | "stop" | "restart",
+): Promise<void> {
+  const body = await parseBody(req).catch(() => ({}));
+  const reason = typeof body?.reason === "string" ? body.reason : `dashboard ${action}`;
+  // start and restart both converge to desired_state='running' — the
+  // reconciler will pick up actual_state and either leave it or restart.
+  // stop sets desired_state='stopped'.
+  const desired = action === "stop" ? "stopped" : "running";
+  try {
+    const inst = await agentManager.setDesiredState(id, desired as any, reason);
+    sendJson(res, inst);
+  } catch (e) {
+    sendError(res, e instanceof Error ? e.message : String(e), 400);
+  }
+}
+
+async function handleListTasks(res: ServerResponse, url: URL): Promise<void> {
+  const status = url.searchParams.get("status") as TaskStatus | null;
+  const agentInstanceId = url.searchParams.get("agent_instance_id");
+  const parentTaskId = url.searchParams.get("parent_task_id");
+  const filter: { status?: TaskStatus; agentInstanceId?: number; parentTaskId?: number | null } = {};
+  if (status) filter.status = status;
+  if (agentInstanceId) filter.agentInstanceId = Number(agentInstanceId);
+  if (parentTaskId === "null") filter.parentTaskId = null;
+  else if (parentTaskId) filter.parentTaskId = Number(parentTaskId);
+  const tasks = await orchestrator.listTasks(filter);
+  sendJson(res, tasks);
+}
+
+async function handleGetTaskTree(res: ServerResponse, id: number): Promise<void> {
+  const tree = await orchestrator.getTaskTree(id);
+  if (!tree) { sendError(res, "task not found", 404); return; }
+  sendJson(res, tree);
+}
+
+async function handleReassignTask(req: IncomingMessage, res: ServerResponse, id: number): Promise<void> {
+  const body = await parseBody(req).catch(() => ({}));
+  const reason = typeof body?.reason === "string" ? body.reason : "manual reassign from dashboard";
+  try {
+    const result = await orchestrator.handleFailure(id, { reason });
+    sendJson(res, result);
+  } catch (e) {
+    sendError(res, e instanceof Error ? e.message : String(e), 400);
+  }
+}
+
+async function handleListProviders(res: ServerResponse): Promise<void> {
+  const rows = await sql`
+    SELECT id, name, provider_type, base_url, api_key_env, default_model, enabled, metadata, created_at, updated_at
+    FROM model_providers
+    ORDER BY id ASC
+  ` as any[];
+  sendJson(res, rows);
+}
+
+async function handleListProfiles(res: ServerResponse): Promise<void> {
+  const rows = await sql`
+    SELECT mp.id, mp.name, mp.provider_id, mpr.name AS provider_name, mp.model,
+           mp.max_tokens, mp.temperature, mp.system_prompt, mp.enabled, mp.metadata,
+           mp.created_at, mp.updated_at
+    FROM model_profiles mp
+    JOIN model_providers mpr ON mpr.id = mp.provider_id
+    ORDER BY mp.id ASC
+  ` as any[];
+  sendJson(res, rows);
+}
+
+async function handleRuntimeStatus(res: ServerResponse): Promise<void> {
+  // Lightweight aggregate: counts + tmux-driver health probe via a single
+  // session lookup. Intentionally NOT exposing per-driver internals — the
+  // dashboard only needs traffic-light status (ok/degraded/down) per
+  // surface area.
+  const [totals] = await sql`
+    SELECT
+      (SELECT COUNT(*)::int FROM agent_instances) AS total_instances,
+      (SELECT COUNT(*)::int FROM agent_instances WHERE actual_state = 'running') AS running_instances,
+      (SELECT COUNT(*)::int FROM agent_instances WHERE actual_state = 'stopped') AS stopped_instances,
+      (SELECT COUNT(*)::int FROM agent_instances WHERE actual_state = 'waiting_approval') AS waiting_approval,
+      (SELECT COUNT(*)::int FROM agent_instances
+        WHERE desired_state != actual_state AND desired_state != 'stopped') AS desired_actual_drift,
+      (SELECT COUNT(*)::int FROM agent_tasks WHERE status = 'pending') AS pending_tasks,
+      (SELECT COUNT(*)::int FROM agent_tasks WHERE status = 'in_progress') AS in_progress_tasks,
+      (SELECT COUNT(*)::int FROM agent_tasks WHERE status = 'failed') AS failed_tasks
+  ` as any[];
+  sendJson(res, {
+    totals,
+    drivers: { tmux: "ok", pty: "not-implemented", docker: "not-implemented", process: "not-implemented" },
+  });
+}
+
 // --- WebApp auth ---
 
 async function handleAuthWebApp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1141,6 +1285,50 @@ export async function handleDashboardRequest(
       const id = Number(permActionMatch[1]);
       if (permActionMatch[2] === "respond") { await handleRespondPermission(req, res, id); return true; }
       if (permActionMatch[2] === "always") { await handleAlwaysAllowPermission(req, res, id); return true; }
+    }
+
+    // --- Agents API (PRD §16, §17.7) ---
+    if (pathname === "/api/agents" && method === "GET") {
+      await handleListAgents(res, url); return true;
+    }
+    if (pathname === "/api/agents/definitions" && method === "GET") {
+      await handleListAgentDefinitions(res); return true;
+    }
+    const agentDetailMatch = pathname.match(/^\/api\/agents\/(\d+)$/);
+    if (agentDetailMatch && method === "GET") {
+      await handleGetAgent(res, Number(agentDetailMatch[1])); return true;
+    }
+    const agentActionMatch = pathname.match(/^\/api\/agents\/(\d+)\/(start|stop|restart)$/);
+    if (agentActionMatch && method === "POST") {
+      const id = Number(agentActionMatch[1]);
+      const action = agentActionMatch[2] as "start" | "stop" | "restart";
+      await handleAgentAction(req, res, id, action); return true;
+    }
+
+    // --- Tasks API ---
+    if (pathname === "/api/tasks" && method === "GET") {
+      await handleListTasks(res, url); return true;
+    }
+    const taskTreeMatch = pathname.match(/^\/api\/tasks\/(\d+)$/);
+    if (taskTreeMatch && method === "GET") {
+      await handleGetTaskTree(res, Number(taskTreeMatch[1])); return true;
+    }
+    const taskReassignMatch = pathname.match(/^\/api\/tasks\/(\d+)\/reassign$/);
+    if (taskReassignMatch && method === "POST") {
+      await handleReassignTask(req, res, Number(taskReassignMatch[1])); return true;
+    }
+
+    // --- Providers / Profiles API ---
+    if (pathname === "/api/providers" && method === "GET") {
+      await handleListProviders(res); return true;
+    }
+    if (pathname === "/api/profiles" && method === "GET") {
+      await handleListProfiles(res); return true;
+    }
+
+    // --- Runtime status ---
+    if (pathname === "/api/runtime/status" && method === "GET") {
+      await handleRuntimeStatus(res); return true;
     }
 
     sendError(res, "Not found", 404);
