@@ -871,6 +871,29 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 28,
+    name: "indexes for orchestrator handleFailure hot path",
+    up: async (tx) => {
+      // handleFailure (agents/orchestrator.ts) runs inside a FOR UPDATE
+      // transaction. Two queries inside the locked window depend on indexes
+      // that may not yet exist; without them, every failure-handle ticks
+      // against full-table scans of agent_events / agent_definitions while
+      // holding the task-row lock — bad under reconciler concurrency.
+      //
+      // 1. COUNT(*) FROM agent_events WHERE task_id = $ AND event_type = $
+      //    needs a (task_id, event_type) composite index.
+      // 2. SELECT ... FROM agent_definitions WHERE capabilities @> $::jsonb
+      //    needs a GIN index on the jsonb column for containment queries.
+      //
+      // CONCURRENTLY is unavailable inside a transaction; using plain
+      // CREATE INDEX IF NOT EXISTS instead. agent_events grows fast but
+      // agent_definitions is tiny — the brief lock during creation is fine.
+      // CREATE INDEX IF NOT EXISTS is also idempotent on re-run.
+      await tx`CREATE INDEX IF NOT EXISTS idx_agent_events_task_event ON agent_events(task_id, event_type)`;
+      await tx`CREATE INDEX IF NOT EXISTS idx_agent_definitions_capabilities ON agent_definitions USING gin(capabilities)`;
+    },
+  },
 ];
 
 // --- Public API ---
