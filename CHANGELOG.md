@@ -2,6 +2,55 @@
 
 ## v1.39.0
 
+### feat: skill-based agent_definitions seeded from goodai-base + /agents_catalog
+
+Closes the "no easy way to add agents to a project" gap. Previously
+operators had only 7 generic definitions (claude-code-default,
+codex-cli-default, etc.) and had to write SQL inserts to add specialized
+roles. v34 seeds 8 ready-made standalone-llm definitions distilled from
+goodai-base's skill catalog so adding a planner/reviewer/PRD-writer to
+a project is a one-liner:
+
+  /agent_create helyx:planner issue-analyzer helyx
+
+**Migration v34** — inserts (idempotent, ON CONFLICT DO NOTHING):
+- `issue-analyzer` — decompose issues into atomic tasks
+  (capabilities: plan, decompose, issue-management)
+- `brainstorm` — open-ended exploration with multiple perspectives
+  (plan, explore, design)
+- `prd-creator` — convert vague requests to formal PRDs
+  (plan, document, spec)
+- `interview` — surface unknowns before implementation
+  (plan, interview, requirements)
+- `feature-analyzer` — analyze code changes / branches
+  (analyze, review, code)
+- `review-logic` — code logic + edge case + contract review
+  (review, code, logic)
+- `changelog` — release notes from commits/diffs
+  (document, changelog)
+- `pr-issue-documenter` — PR descriptions and issue bodies
+  (document, pr-management)
+
+Each role's `system_prompt` is a focused 600-900 character distillation
+of the corresponding goodai-base SKILL.md — designed for standalone-llm
+runtime (no tool access required) so they work today without the
+claude-code `--append-system-prompt` plumbing (deferred).
+
+**`bot/commands/agents-catalog.ts`** (new): `/agents_catalog` Telegram
+command lists all available agent_definitions grouped by runtime_type
+with capabilities and descriptions. Bridges the discovery gap before
+operators can `/agent_create` something useful. Auto-chunks long
+catalogs across multiple messages to stay under the 4096-char Telegram
+cap.
+
+**Tests** (`tests/unit/seed-skills.integration.test.ts`) — 3 tests
+asserting all 8 seeds exist with non-trivial system prompts + at least
+one capability tag, that issue-analyzer has the `decompose` capability
+(orchestrator routing depends on this), and that re-running v34
+produces no duplicates.
+
+379/379 unit tests pass.
+
 ### feat: per-instance system prompt + project context injection + topic routing
 
 Closes the four context gaps surfaced after v1.38.0 (per-instance prompts,
