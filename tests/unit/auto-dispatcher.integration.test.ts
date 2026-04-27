@@ -47,6 +47,9 @@ beforeAll(async () => {
   const { sql, mgr } = await getCtx();
 
   // Definition WITH orchestrate capability — eligible for auto-dispatch.
+  // Use a RUN_TAG-scoped extra capability so other live agents in the
+  // DB (e.g. real orchestrator instances) don't accidentally match
+  // this test's recursive plan output.
   const [orchDef] = (await sql`
     INSERT INTO agent_definitions (name, description, runtime_type, runtime_driver, capabilities, enabled)
     VALUES (
@@ -54,7 +57,7 @@ beforeAll(async () => {
       'integration test orchestrator definition',
       'standalone-llm',
       'standalone',
-      ${sql.json(["orchestrate", "plan"])},
+      ${sql.json(["orchestrate", "plan", `test-only-${RUN_TAG}`])},
       true
     )
     RETURNING id
@@ -278,7 +281,7 @@ describe("auto-dispatcher — maybeDispatchOrchestration", () => {
     const recursivePlan = JSON.stringify({
       subtasks: [
         // Match the orch agent's own caps — would recurse pre-fix.
-        { title: "consolidate findings", capabilities: ["orchestrate", "plan"], priority: 0 },
+        { title: "consolidate findings", capabilities: ["orchestrate", "plan", `test-only-${RUN_TAG}`], priority: 0 },
         // Non-matching — stays unassigned (no specialist seeded), still legal.
         { title: "feature analyze", capabilities: ["analyze", "review", "code"], priority: 1 },
       ],
@@ -327,7 +330,7 @@ describe("auto-dispatcher — maybeDispatchOrchestration", () => {
     seed!.cleanupTaskIds.push(grandchild.id);
 
     const result = await dispatcher.maybeDispatchOrchestration(grandchild, JSON.stringify({
-      subtasks: [{ title: "leaf", capabilities: ["orchestrate"], priority: 0 }],
+      subtasks: [{ title: "leaf", capabilities: ["orchestrate", `test-only-${RUN_TAG}`], priority: 0 }],
     }));
     expect(result.dispatched).toBe(true);
     seed!.cleanupTaskIds.push(...result.subtaskIds);
