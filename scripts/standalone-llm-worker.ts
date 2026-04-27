@@ -27,6 +27,8 @@ import { sql } from "../memory/db.ts";
 import { generateResponse, type MessageParam, type StreamContext } from "../llm/client.ts";
 import { resolveProfile, resolveSessionProvider } from "../llm/profile-resolver.ts";
 import { resolveTierOverride } from "../llm/tier-resolver.ts";
+import { buildProjectContext, formatProjectContext } from "../agents/context-injector.ts";
+import { routeTaskResultToTopic } from "../agents/result-router.ts";
 import { logger } from "../logger.ts";
 
 const POLL_INTERVAL_MS = Number(process.env.STANDALONE_LLM_POLL_MS ?? "3000");
@@ -74,13 +76,25 @@ async function resolveAgentContext(agentId: number): Promise<AgentContext | null
   // fail the next task rather than continue silently with the disabled
   // config. The worker exits its loop on subsequent claim failures since
   // `failTask` correctly fires regardless.
+  //
+  // ai.system_prompt_override (v33+): when non-null, takes precedence
+  // over ad.system_prompt. Lets operators specialize a shared role per
+  // instance without cloning the whole definition.
   const rows = (await sql`
-    SELECT ad.id AS def_id, ad.name AS def_name, ad.system_prompt, ad.model_profile_id, ad.enabled
+    SELECT ad.id AS def_id, ad.name AS def_name, ad.system_prompt,
+           ad.model_profile_id, ad.enabled,
+           ai.system_prompt_override
     FROM agent_instances ai
     JOIN agent_definitions ad ON ad.id = ai.definition_id
     WHERE ai.id = ${agentId} AND ad.enabled = true
     LIMIT 1
-  `) as { def_id: number; def_name: string; system_prompt: string | null; model_profile_id: number | null }[];
+  `) as {
+    def_id: number;
+    def_name: string;
+    system_prompt: string | null;
+    model_profile_id: number | null;
+    system_prompt_override: string | null;
+  }[];
   if (rows.length === 0) return null;
   const row = rows[0]!;
   const provider = row.model_profile_id
@@ -88,7 +102,9 @@ async function resolveAgentContext(agentId: number): Promise<AgentContext | null
     : await resolveSessionProvider(null);
   return {
     defName: row.def_name,
-    systemPrompt: row.system_prompt,
+    // Per-instance override wins; falls back to definition's prompt;
+    // worker layer will fall back to a role-derived default if both are null.
+    systemPrompt: row.system_prompt_override ?? row.system_prompt,
     provider,
   };
 }
@@ -226,7 +242,22 @@ async function processOneTask(task: { id: number; title: string; description: st
         ? "a task orchestrator"
         : "an autonomous agent";
 
-  const system = systemPrompt ?? `You are ${role}. You receive a task description and produce a clear, actionable response. Be concise and structured.`;
+  const baseSystem = systemPrompt ?? `You are ${role}. You receive a task description and produce a clear, actionable response. Be concise and structured.`;
+
+  // v1.39.0 Gap 3: auto-inject project context (facts + recent messages)
+  // when the agent is bound to a project. Falls back silently when there
+  // is no project_id or no facts/messages exist for it.
+  let projectContextBlock = "";
+  try {
+    const projCtx = await buildProjectContext(agentInstanceId);
+    if (projCtx) projectContextBlock = "\n\n" + formatProjectContext(projCtx);
+  } catch (err) {
+    logger.warn(
+      { agentInstanceId, taskId: task.id, err: String(err) },
+      "project context injection failed; proceeding without it",
+    );
+  }
+  const system = baseSystem + projectContextBlock;
 
   const userMessage = [
     `Task #${task.id}: ${task.title}`,
@@ -266,6 +297,28 @@ async function processOneTask(task: { id: number; title: string; description: st
     const result = await generateResponse(messages, system, ctx);
     await completeTask(task.id, result);
     logger.info({ agentInstanceId, taskId: task.id, defName, len: result.length }, "standalone-llm task completed");
+
+    // v1.39.0 Gap 4: route result to forum topic if the agent_instance
+    // has forum_topic_id set. routeTaskResultToTopic is a no-op when
+    // the binding is absent or the bot_config has no forum_chat_id —
+    // failures are logged, never raised. The result is already
+    // persisted in agent_tasks.result regardless.
+    const posted = await routeTaskResultToTopic({
+      agentInstanceId,
+      agentName: defName,
+      taskId: task.id,
+      taskTitle: task.title,
+      resultText: result,
+    });
+    if (posted) {
+      // Audit trail so operators can correlate topic posts with task
+      // completions. Best-effort — DB hiccup here doesn't change the
+      // task outcome.
+      await sql`
+        INSERT INTO agent_events (agent_instance_id, task_id, event_type, message)
+        VALUES (${agentInstanceId}, ${task.id}, 'task_result_posted', 'posted to forum topic')
+      `.catch(() => {});
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ agentInstanceId, taskId: task.id, err: msg }, "standalone-llm task failed");

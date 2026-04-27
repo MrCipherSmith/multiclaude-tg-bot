@@ -1,5 +1,154 @@
 # Changelog
 
+## v1.39.0
+
+### feat: orchestrator agent_definitions (advisory pattern)
+
+Migration v35 seeds 4 orchestrator definitions distilled from
+goodai-base/skills/*-orchestrator. Each emits a structured JSON
+decomposition plan that mirrors `orchestrator.ts:DecompositionSchema`,
+so the same plan can be fed to `/task <id> decompose` later, or
+converted to `/task <id> sub <title>` calls by hand.
+
+- `review-orchestrator` — multi-dimensional code review fan-out + consolidation
+- `job-orchestrator` — full pipeline (analyze → plan → implement → verify → review)
+- `gproject-orchestrator` — greenfield planning (interview → patterns → spec → plan)
+- `autodoc-orchestrator` — documentation pipeline (scan → analyze → architect → write → assemble)
+
+All four carry the `orchestrate` capability tag, plus role-specific
+tags (`review`, `decompose`, `spec`, `document`). Prompts enumerate
+the actual helyx capability taxonomy so plans pick valid routing tags.
+
+**Pattern A (advisory)**: operator dispatches subtasks manually.
+Working today with no code changes.
+
+**Pattern B (auto-dispatch)**: deferred to v1.40 — worker detects
+JSON decomposition output from orchestrate-capable agents and creates
+subtasks via `orchestrator.createTask` automatically.
+
+**Pattern C (claude-code MCP)**: deferred until claude-code system
+prompt forwarding lands.
+
+`tests/unit/seed-skills.integration.test.ts` (+2 tests) — verifies
+all 4 orchestrator seeds present with the `orchestrate` capability
+and reference the strict JSON schema in their prompts (so Pattern B
+parser can rely on uniform output shape).
+
+### feat: skill-based agent_definitions seeded from goodai-base + /agents_catalog
+
+Closes the "no easy way to add agents to a project" gap. Previously
+operators had only 7 generic definitions (claude-code-default,
+codex-cli-default, etc.) and had to write SQL inserts to add specialized
+roles. v34 seeds 8 ready-made standalone-llm definitions distilled from
+goodai-base's skill catalog so adding a planner/reviewer/PRD-writer to
+a project is a one-liner:
+
+  /agent_create helyx:planner issue-analyzer helyx
+
+**Migration v34** — inserts (idempotent, ON CONFLICT DO NOTHING):
+- `issue-analyzer` — decompose issues into atomic tasks
+  (capabilities: plan, decompose, issue-management)
+- `brainstorm` — open-ended exploration with multiple perspectives
+  (plan, explore, design)
+- `prd-creator` — convert vague requests to formal PRDs
+  (plan, document, spec)
+- `interview` — surface unknowns before implementation
+  (plan, interview, requirements)
+- `feature-analyzer` — analyze code changes / branches
+  (analyze, review, code)
+- `review-logic` — code logic + edge case + contract review
+  (review, code, logic)
+- `changelog` — release notes from commits/diffs
+  (document, changelog)
+- `pr-issue-documenter` — PR descriptions and issue bodies
+  (document, pr-management)
+
+Each role's `system_prompt` is a focused 600-900 character distillation
+of the corresponding goodai-base SKILL.md — designed for standalone-llm
+runtime (no tool access required) so they work today without the
+claude-code `--append-system-prompt` plumbing (deferred).
+
+**`bot/commands/agents-catalog.ts`** (new): `/agents_catalog` Telegram
+command lists all available agent_definitions grouped by runtime_type
+with capabilities and descriptions. Bridges the discovery gap before
+operators can `/agent_create` something useful. Auto-chunks long
+catalogs across multiple messages to stay under the 4096-char Telegram
+cap.
+
+**Tests** (`tests/unit/seed-skills.integration.test.ts`) — 3 tests
+asserting all 8 seeds exist with non-trivial system prompts + at least
+one capability tag, that issue-analyzer has the `decompose` capability
+(orchestrator routing depends on this), and that re-running v34
+produces no duplicates.
+
+379/379 unit tests pass.
+
+### feat: per-instance system prompt + project context injection + topic routing
+
+Closes the four context gaps surfaced after v1.38.0 (per-instance prompts,
+topic binding, project context for standalone-llm, result routing).
+
+**Migration v33** — adds two columns to `agent_instances`:
+- `system_prompt_override TEXT` — when non-null, takes precedence over
+  the definition's `system_prompt`. Lets operators specialize a shared
+  role (e.g. one planner tuned for helyx, another for a different
+  project) without cloning the whole definition.
+- `forum_topic_id BIGINT` — Telegram forum topic this instance is bound
+  to. When set, task results are auto-posted there.
+
+**`agents/agent-manager.ts`**:
+- `AgentInstance` interface adds `systemPromptOverride` and `forumTopicId`.
+- `createInstance` accepts both as optional inputs.
+
+**`scripts/standalone-llm-worker.ts`** (Gap 1 + Gap 3 + Gap 4):
+- `resolveAgentContext` returns `system_prompt_override` when set,
+  falling back to `system_prompt` from the definition.
+- After resolving the agent context, the worker calls
+  `buildProjectContext` and appends the rendered block to the system
+  prompt. Falls back silently when the agent has no project_id or no
+  facts/messages exist.
+- After completing a task, the worker calls `routeTaskResultToTopic`
+  which posts to the bound forum topic via grammy. Failures are
+  logged, never raised — the result is already in `agent_tasks.result`.
+
+**`agents/context-injector.ts`** (new — Gap 3):
+- `buildProjectContext(agentInstanceId)` — fetches project facts
+  (`memories.type IN ('fact','decision')` filtered to `project_path`)
+  + last 20 messages. Returns null when no project bound or no
+  data exists.
+- `formatProjectContext(ctx)` — renders into a system-prompt block
+  with project header + facts + recent conversation. Honors a
+  4000-char budget; individual messages truncated to 500 chars.
+
+**`agents/result-router.ts`** (new — Gap 4):
+- `routeTaskResultToTopic({...})` — posts task result to the
+  agent's bound forum topic. Reads `bot_config.forum_chat_id` for the
+  global chat, agent's `forum_topic_id` for the thread. Uses a
+  cached grammy `Api` client built from `TELEGRAM_BOT_TOKEN`.
+- Truncates >3800 chars with a "see /task <id>" pointer.
+- Idempotent no-op when topic / chat / token is missing.
+
+**`bot/commands/agent-create.ts`**:
+- New flags: `--prompt "..."` (per-instance system override) and
+  `--topic <id>` (forum topic binding).
+- New tokenizer respects double-quoted segments so prompts can contain
+  spaces.
+- Reply now lists active overrides.
+- Strict flag validation: unknown `--flag`, `--topic` without numeric
+  id, `--prompt` without value all surface clear error messages.
+
+**Tests** (376 pass total, +18 new):
+- `tests/unit/context-injector.integration.test.ts` (7) —
+  `buildProjectContext` happy + null cases (no project / empty
+  project), filters note types, oldest-first ordering;
+  `formatProjectContext` budget enforcement and section structure.
+- `tests/unit/result-router.integration.test.ts` (5) —
+  `getForumTopicId` happy + null + non-existent paths;
+  `routeTaskResultToTopic` no-op semantics (no topic, no chat config).
+- `tests/unit/agent-create-delete.integration.test.ts` (+6) —
+  `--prompt` persists `system_prompt_override`, `--topic` persists
+  `forum_topic_id`, parse errors for malformed flags, multi-flag combo.
+
 ## v1.38.0
 
 ### feat: /agent_create + /agent_delete Telegram commands

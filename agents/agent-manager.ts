@@ -45,6 +45,24 @@ export interface AgentInstance {
   restartCount: number;
   lastRestartAt: Date | null;
   sessionId: number | null;
+  /**
+   * Optional per-instance override of the definition's `system_prompt`.
+   * When non-null, the standalone-llm worker uses this verbatim instead
+   * of falling back to `agent_definitions.system_prompt`. Lets operators
+   * specialize a shared role (e.g. one planner tuned for helyx
+   * conventions, another for a different project) without cloning the
+   * whole definition. Added in migration v33.
+   */
+  systemPromptOverride: string | null;
+  /**
+   * Optional Telegram forum topic id this instance is bound to. When
+   * set, the standalone-llm worker routes task results to this topic
+   * via the bot API after task completion. Use case: pin an
+   * orchestrator/planner agent to its project's discussion topic so
+   * results land where the team is already watching. Added in migration
+   * v33.
+   */
+  forumTopicId: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -64,6 +82,8 @@ function rowToInstance(r: any): AgentInstance {
     restartCount: r.restart_count,
     lastRestartAt: r.last_restart_at,
     sessionId: r.session_id,
+    systemPromptOverride: r.system_prompt_override ?? null,
+    forumTopicId: r.forum_topic_id != null ? Number(r.forum_topic_id) : null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -193,6 +213,10 @@ export class AgentManager {
     name: string;
     runtimeHandle?: Record<string, unknown>;
     desiredState?: DesiredState;
+    /** Optional per-instance system prompt override (v33+). */
+    systemPromptOverride?: string | null;
+    /** Optional Telegram forum topic to route results to (v33+). */
+    forumTopicId?: number | null;
   }): Promise<AgentInstance> {
     const handle = input.runtimeHandle ?? {};
     const desired = input.desiredState ?? "stopped";
@@ -202,14 +226,19 @@ export class AgentManager {
     // storing it as a JSONB scalar string (not a parsed object).
     // See v1.37.0 systemic fix.
     const [r] = await sql`
-      INSERT INTO agent_instances (definition_id, project_id, name, desired_state, actual_state, runtime_handle)
+      INSERT INTO agent_instances (
+        definition_id, project_id, name, desired_state, actual_state,
+        runtime_handle, system_prompt_override, forum_topic_id
+      )
       VALUES (
         ${input.definitionId},
         ${input.projectId},
         ${input.name},
         ${desired},
         'new',
-        ${sql.json(handle)}
+        ${sql.json(handle)},
+        ${input.systemPromptOverride ?? null},
+        ${input.forumTopicId ?? null}
       )
       RETURNING *
     ` as any[];

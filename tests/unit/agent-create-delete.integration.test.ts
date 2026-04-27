@@ -199,6 +199,77 @@ describe("/agent_create — happy path", () => {
   });
 });
 
+describe("/agent_create — v1.39.0 flags (--prompt, --topic)", () => {
+  test.skipIf(!HAS_DB)("--prompt sets system_prompt_override on the instance", async () => {
+    const { sql, cmd } = await getCtx();
+    const name = `create-prompt-${RUN_TAG}`;
+    const promptText = "Be concise. Always respond in JSON.";
+    const ctx = makeCtx(`/agent_create ${name} ${seed!.defName} --prompt "${promptText}"`);
+    await cmd.handleAgentCreate(ctx);
+
+    expect(ctx.replies[0].text).toContain("✅ Created");
+    expect(ctx.replies[0].text).toContain("prompt override");
+
+    const [row] = (await sql`
+      SELECT id, system_prompt_override FROM agent_instances WHERE name = ${name}
+    `) as any[];
+    expect(row.system_prompt_override).toBe(promptText);
+    seed!.cleanupInstanceIds.push(Number(row.id));
+  });
+
+  test.skipIf(!HAS_DB)("--topic sets forum_topic_id on the instance", async () => {
+    const { sql, cmd } = await getCtx();
+    const name = `create-topic-${RUN_TAG}`;
+    const ctx = makeCtx(`/agent_create ${name} ${seed!.defName} --topic 42`);
+    await cmd.handleAgentCreate(ctx);
+
+    expect(ctx.replies[0].text).toContain("✅ Created");
+    expect(ctx.replies[0].text).toContain("forum_topic_id=42");
+
+    const [row] = (await sql`
+      SELECT id, forum_topic_id FROM agent_instances WHERE name = ${name}
+    `) as any[];
+    expect(Number(row.forum_topic_id)).toBe(42);
+    seed!.cleanupInstanceIds.push(Number(row.id));
+  });
+
+  test.skipIf(!HAS_DB)("--topic without numeric value → parse error", async () => {
+    const { cmd } = await getCtx();
+    const ctx = makeCtx(`/agent_create x ${seed!.defName} --topic not-a-number`);
+    await cmd.handleAgentCreate(ctx);
+    expect(ctx.replies[0].text).toContain("--topic requires a numeric");
+  });
+
+  test.skipIf(!HAS_DB)("--prompt without value → parse error", async () => {
+    const { cmd } = await getCtx();
+    const ctx = makeCtx(`/agent_create x ${seed!.defName} --prompt`);
+    await cmd.handleAgentCreate(ctx);
+    expect(ctx.replies[0].text).toContain("--prompt requires a value");
+  });
+
+  test.skipIf(!HAS_DB)("unknown --flag → parse error", async () => {
+    const { cmd } = await getCtx();
+    const ctx = makeCtx(`/agent_create x ${seed!.defName} --whatever`);
+    await cmd.handleAgentCreate(ctx);
+    expect(ctx.replies[0].text).toContain("unknown flag");
+  });
+
+  test.skipIf(!HAS_DB)("--prompt + --topic + project name combine correctly", async () => {
+    const { sql, cmd } = await getCtx();
+    const name = `create-combo-${RUN_TAG}`;
+    const ctx = makeCtx(`/agent_create ${name} ${seed!.defName} --topic 99 --prompt "combined"`);
+    await cmd.handleAgentCreate(ctx);
+    expect(ctx.replies[0].text).toContain("✅ Created");
+
+    const [row] = (await sql`
+      SELECT id, system_prompt_override, forum_topic_id FROM agent_instances WHERE name = ${name}
+    `) as any[];
+    expect(row.system_prompt_override).toBe("combined");
+    expect(Number(row.forum_topic_id)).toBe(99);
+    seed!.cleanupInstanceIds.push(Number(row.id));
+  });
+});
+
 describe("/agent_delete — argument validation", () => {
   test.skipIf(!HAS_DB)("non-numeric id → usage", async () => {
     const { cmd } = await getCtx();

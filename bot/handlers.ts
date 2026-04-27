@@ -72,6 +72,7 @@ import { handleProviders } from "./commands/providers.ts";
 import { handleModels } from "./commands/models.ts";
 import { handleAgents, handleAgentCallback } from "./commands/agents.ts";
 import { handleAgentCreate, handleAgentDelete } from "./commands/agent-create.ts";
+import { handleAgentsCatalog } from "./commands/agents-catalog.ts";
 import { handleTasks } from "./commands/tasks.ts";
 import { handleOrchestrate } from "./commands/orchestrate.ts";
 import { handleTask } from "./commands/task.ts";
@@ -144,6 +145,7 @@ export function registerHandlers(b: Bot): void {
   b.command("agents", handleAgents);
   b.command("agent_create", handleAgentCreate);
   b.command("agent_delete", handleAgentDelete);
+  b.command("agents_catalog", handleAgentsCatalog);
   b.command("tasks", handleTasks);
   b.command("orchestrate", handleOrchestrate);
   b.command("task", handleTask);

@@ -40,10 +40,15 @@ import { projectService } from "../../services/project-service.ts";
 import { sql } from "../../memory/db.ts";
 
 const USAGE_CREATE =
-  "<b>Usage:</b> <code>/agent_create &lt;name&gt; &lt;definition&gt; [project] [--stopped]</code>\n\n" +
+  "<b>Usage:</b> <code>/agent_create &lt;name&gt; &lt;definition&gt; [project] [flags]</code>\n\n" +
+  "<b>Flags:</b>\n" +
+  "• <code>--stopped</code> — create with desired_state=stopped\n" +
+  "• <code>--topic &lt;id&gt;</code> — bind to Telegram forum topic for result routing\n" +
+  "• <code>--prompt &quot;...&quot;</code> — per-instance system prompt override\n\n" +
   "<b>Examples:</b>\n" +
   "<code>/agent_create helyx:planner planner-default helyx</code>\n" +
-  "<code>/agent_create my-bot orchestrator-default --stopped</code>\n\n" +
+  "<code>/agent_create my-bot orchestrator-default --stopped</code>\n" +
+  "<code>/agent_create helyx:reviewer reviewer-default helyx --prompt &quot;Be terse and focused on security.&quot;</code>\n\n" +
   "<b>Tips:</b>\n" +
   "• Use <code>/agents</code> to view existing instances\n" +
   "• Definitions: <code>planner-default</code>, <code>reviewer-default</code>, <code>orchestrator-default</code>, <code>claude-code-default</code>\n" +
@@ -51,22 +56,18 @@ const USAGE_CREATE =
 
 export async function handleAgentCreate(ctx: Context): Promise<void> {
   const text = ctx.message?.text ?? "";
-  const args = text.split(/\s+/).slice(1);
-
-  if (args.length < 2) {
+  // Parse: name, definition, optional project, optional flags. The
+  // --prompt flag's value can contain spaces and is quoted, so we
+  // parse the raw text instead of splitting eagerly.
+  const parsed = parseCreateArgs(text);
+  if (!parsed) {
     await ctx.reply(USAGE_CREATE, { parse_mode: "HTML" });
     return;
   }
-
-  const [instanceName, definitionName, ...rest] = args;
-  let projectName: string | null = null;
-  let desiredState: "running" | "stopped" = "running";
-  for (const r of rest) {
-    if (r === "--stopped") {
-      desiredState = "stopped";
-    } else if (!projectName && !r.startsWith("--")) {
-      projectName = r;
-    }
+  const { instanceName, definitionName, projectName, desiredState, systemPromptOverride, forumTopicId, parseError } = parsed;
+  if (parseError) {
+    await ctx.reply(`❌ ${parseError}\n\n${USAGE_CREATE}`, { parse_mode: "HTML" });
+    return;
   }
 
   const def = await agentManager.getDefinitionByName(definitionName!);
@@ -130,6 +131,8 @@ export async function handleAgentCreate(ctx: Context): Promise<void> {
       projectId,
       name: instanceName!,
       desiredState,
+      systemPromptOverride: systemPromptOverride ?? null,
+      forumTopicId: forumTopicId ?? null,
     });
     await agentManager.logEvent({
       agentInstanceId: inst.id,
@@ -140,6 +143,8 @@ export async function handleAgentCreate(ctx: Context): Promise<void> {
         definition_name: definitionName,
         project_name: projectName,
         desired_state: desiredState,
+        has_prompt_override: systemPromptOverride != null,
+        forum_topic_id: forumTopicId ?? null,
       },
     });
 
@@ -147,12 +152,19 @@ export async function handleAgentCreate(ctx: Context): Promise<void> {
     const stateNote = desiredState === "running"
       ? "\n\n<i>Reconciler will pick it up within ~5s and start the runtime.</i>"
       : "\n\n<i>Created stopped — start later from <code>/agents</code>.</i>";
+    const overrides: string[] = [];
+    if (systemPromptOverride) overrides.push(`prompt override (${systemPromptOverride.length} chars)`);
+    if (forumTopicId != null) overrides.push(`forum_topic_id=${forumTopicId}`);
+    const overrideLine = overrides.length > 0
+      ? `\n• overrides: <code>${escapeHtml(overrides.join(", "))}</code>`
+      : "";
     await ctx.reply(
       `✅ Created agent_instance <code>${escapeHtml(instanceName!)}</code>:\n\n` +
         `• id: <code>${inst.id}</code>\n` +
         `• definition: <code>${escapeHtml(definitionName!)}</code> (id=${def.id})\n` +
         `• project: <code>${escapeHtml(projDisplay)}</code>\n` +
         `• desired_state: <code>${desiredState}</code>` +
+        overrideLine +
         stateNote,
       { parse_mode: "HTML" },
     );
@@ -288,6 +300,127 @@ async function waitForState(
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   return false;
+}
+
+/**
+ * Parse `/agent_create` arguments out of raw command text.
+ *
+ * Two-stage parser because the `--prompt` flag's value may contain
+ * spaces (must be quoted) and arbitrary whitespace. A naive split on
+ * `\s+` would break the prompt into pieces. We:
+ *   1. Strip the leading `/agent_create` (with optional @bot suffix).
+ *   2. Walk character by character, treating quoted segments as
+ *      atomic tokens so prompts can contain spaces.
+ *
+ * Returns null if the command itself doesn't parse (no name+def);
+ * returns an error in `.parseError` when a flag is malformed (e.g.
+ * --topic without a numeric id) so the handler can show a precise
+ * complaint.
+ */
+function parseCreateArgs(text: string): {
+  instanceName: string;
+  definitionName: string;
+  projectName: string | null;
+  desiredState: "running" | "stopped";
+  systemPromptOverride: string | null;
+  forumTopicId: number | null;
+  parseError: string | null;
+} | null {
+  const stripped = text.replace(/^\/agent_create(@\S+)?\s*/, "").trim();
+  if (!stripped) return null;
+  const tokens = tokenize(stripped);
+  if (tokens.length < 2) return null;
+
+  const instanceName = tokens[0]!;
+  const definitionName = tokens[1]!;
+  let projectName: string | null = null;
+  let desiredState: "running" | "stopped" = "running";
+  let systemPromptOverride: string | null = null;
+  let forumTopicId: number | null = null;
+  let parseError: string | null = null;
+
+  let i = 2;
+  while (i < tokens.length) {
+    const tok = tokens[i]!;
+    if (tok === "--stopped") {
+      desiredState = "stopped";
+      i++;
+    } else if (tok === "--prompt") {
+      const next = tokens[i + 1];
+      if (next === undefined) {
+        parseError = "--prompt requires a value (use quotes if it contains spaces)";
+        break;
+      }
+      systemPromptOverride = next;
+      i += 2;
+    } else if (tok === "--topic") {
+      const next = tokens[i + 1];
+      if (next === undefined || !/^-?\d+$/.test(next)) {
+        parseError = "--topic requires a numeric forum topic id";
+        break;
+      }
+      forumTopicId = parseInt(next, 10);
+      i += 2;
+    } else if (tok.startsWith("--")) {
+      parseError = `unknown flag: ${tok}`;
+      break;
+    } else if (projectName == null) {
+      projectName = tok;
+      i++;
+    } else {
+      parseError = `unexpected positional arg: ${tok}`;
+      break;
+    }
+  }
+
+  return {
+    instanceName,
+    definitionName,
+    projectName,
+    desiredState,
+    systemPromptOverride,
+    forumTopicId,
+    parseError,
+  };
+}
+
+/**
+ * Split a command-args string into tokens, respecting double-quoted
+ * segments so values like `--prompt "be terse and focused"` parse as
+ * a single token. Backslash-escaped characters inside quotes are
+ * passed through (only `\"` and `\\` are recognized — anything else
+ * keeps the backslash). No shell-glob expansion.
+ */
+function tokenize(s: string): string[] {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i]!)) i++;
+    if (i >= s.length) break;
+    if (s[i] === '"') {
+      i++;
+      let buf = "";
+      while (i < s.length && s[i] !== '"') {
+        if (s[i] === "\\" && i + 1 < s.length && (s[i + 1] === '"' || s[i + 1] === "\\")) {
+          buf += s[i + 1];
+          i += 2;
+        } else {
+          buf += s[i];
+          i++;
+        }
+      }
+      i++; // closing quote
+      tokens.push(buf);
+    } else {
+      let buf = "";
+      while (i < s.length && !/\s/.test(s[i]!)) {
+        buf += s[i];
+        i++;
+      }
+      tokens.push(buf);
+    }
+  }
+  return tokens;
 }
 
 function escapeHtml(s: string): string {
