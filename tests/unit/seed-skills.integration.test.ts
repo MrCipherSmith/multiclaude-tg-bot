@@ -81,17 +81,18 @@ describe("seed skills (migration v34) — agent_definitions present", () => {
   });
 });
 
-// v36 — claude-code execution-capable definitions
+// v36 + v38 — claude-code execution-capable definitions
 const EXPECTED_CC_DEFS = [
   "task-implementer",
   "code-verifier",
   "tests-creator",
   "commit",
   "pr-create",
+  "code-reviewer",
 ] as const;
 
-describe("seed claude-code execution agents (migration v36) — definitions present", () => {
-  test.skipIf(!HAS_DB)("all 5 claude-code execution definitions exist", async () => {
+describe("seed claude-code execution agents (migration v36 + v38) — definitions present", () => {
+  test.skipIf(!HAS_DB)("all 6 claude-code execution definitions exist", async () => {
     const { sql } = await import("../../memory/db.ts");
     const rows = (await sql`
       SELECT name, enabled, runtime_type, capabilities,
@@ -131,6 +132,19 @@ describe("seed claude-code execution agents (migration v36) — definitions pres
       SELECT capabilities FROM agent_definitions WHERE name = 'code-verifier'
     `) as any[];
     expect(row.capabilities).toContain("verify");
+  });
+
+  test.skipIf(!HAS_DB)("code-reviewer (v38) carries the orchestrator's review-fanout capabilities", async () => {
+    const { sql } = await import("../../memory/db.ts");
+    const [row] = (await sql`
+      SELECT runtime_type, capabilities FROM agent_definitions WHERE name = 'code-reviewer'
+    `) as any[];
+    expect(row).toBeDefined();
+    expect(row.runtime_type).toBe("claude-code");
+    // Must contain review + analyze (orchestrator dispatches both).
+    expect(row.capabilities).toContain("review");
+    expect(row.capabilities).toContain("analyze");
+    expect(row.capabilities).toContain("logic");
   });
 });
 

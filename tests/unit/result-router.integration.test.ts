@@ -79,6 +79,98 @@ afterAll(async () => {
   await sql`DELETE FROM agent_definitions WHERE id = ${seed.defId}`;
 });
 
+describe("result-router — getEffectiveForumTopicId (v1.43.0 chain inheritance)", () => {
+  test.skipIf(!HAS_DB)("returns own forum_topic_id when set on direct agent", async () => {
+    const { sql, router } = await getCtx();
+    // Use the existing seed: agentWithTopic (id 12345 forum binding).
+    const [row] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentWithTopic}, ${`own-topic-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    try {
+      const topic = await router.getEffectiveForumTopicId(Number(row.id));
+      expect(topic).toBe(12345);
+    } finally {
+      await sql`DELETE FROM agent_events WHERE task_id = ${row.id}`;
+      await sql`DELETE FROM agent_tasks WHERE id = ${row.id}`;
+    }
+  });
+
+  test.skipIf(!HAS_DB)("inherits parent's forum_topic_id when own agent has none", async () => {
+    const { sql, router } = await getCtx();
+    // Build a 2-level chain: parent task on agentWithTopic (binding=12345),
+    // child on agentNoTopic (no binding). Child's effective topic must be
+    // the parent's.
+    const [parent] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentWithTopic}, ${`parent-${RUN_TAG}`}, ${"done"})
+      RETURNING id
+    `) as any[];
+    const [child] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, parent_task_id, title, status)
+      VALUES (${seed!.agentNoTopic}, ${parent.id}, ${`child-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    try {
+      const topic = await router.getEffectiveForumTopicId(Number(child.id));
+      expect(topic).toBe(12345);
+    } finally {
+      await sql`DELETE FROM agent_events WHERE task_id IN ${sql([parent.id, child.id])}`;
+      await sql`DELETE FROM agent_tasks WHERE id IN ${sql([parent.id, child.id])}`;
+    }
+  });
+
+  test.skipIf(!HAS_DB)("returns null when neither task nor any ancestor has a topic", async () => {
+    const { sql, router } = await getCtx();
+    const [t] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentNoTopic}, ${`orphan-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    try {
+      const topic = await router.getEffectiveForumTopicId(Number(t.id));
+      expect(topic).toBeNull();
+    } finally {
+      await sql`DELETE FROM agent_events WHERE task_id = ${t.id}`;
+      await sql`DELETE FROM agent_tasks WHERE id = ${t.id}`;
+    }
+  });
+
+  test.skipIf(!HAS_DB)("walks 3-hop chain to find topic on grandparent", async () => {
+    const { sql, router } = await getCtx();
+    const [gp] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentWithTopic}, ${`gp-${RUN_TAG}`}, ${"done"})
+      RETURNING id
+    `) as any[];
+    const [parent] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, parent_task_id, title, status)
+      VALUES (${seed!.agentNoTopic}, ${gp.id}, ${`p-${RUN_TAG}`}, ${"done"})
+      RETURNING id
+    `) as any[];
+    const [child] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, parent_task_id, title, status)
+      VALUES (${seed!.agentNoTopic}, ${parent.id}, ${`c-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    try {
+      const topic = await router.getEffectiveForumTopicId(Number(child.id));
+      expect(topic).toBe(12345);
+    } finally {
+      const ids = [gp.id, parent.id, child.id];
+      await sql`DELETE FROM agent_events WHERE task_id IN ${sql(ids)}`;
+      await sql`DELETE FROM agent_tasks WHERE id IN ${sql(ids)}`;
+    }
+  });
+
+  test.skipIf(!HAS_DB)("returns null for non-existent task id", async () => {
+    const { router } = await getCtx();
+    const topic = await router.getEffectiveForumTopicId(999_999_999);
+    expect(topic).toBeNull();
+  });
+});
+
 describe("result-router — getForumTopicId", () => {
   test.skipIf(!HAS_DB)("returns null when agent has no forum_topic_id", async () => {
     const { router } = await getCtx();

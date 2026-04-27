@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.43.0
+
+### feat: code-reviewer claude-code template + topic inheritance through parent chain
+
+Closes the two UX gaps surfaced during the v1.42.2 smoke retry:
+
+**Gap 1 — specialists need code access.** Pre-v1.43,
+review-orchestrator's plan dispatched to `feature-analyzer` and
+`review-logic` (both standalone-llm — no tool access). They answered
+"give me the code" because they couldn't see the diff.
+
+**Gap 2 — specialist results invisible to operator.** Auto-dispatched
+subtasks ran on instances without `forum_topic_id`, so the
+result-router skipped the topic post. Operator only saw the
+orchestrator's plan, not the specialist findings.
+
+**Migration v38** — seeds `code-reviewer` (claude-code, capabilities
+`["review","code","logic","analyze"]`). Single role absorbs both
+"Analyze..." and "Review logic..." subtasks. System prompt covers:
+scope detection (PR / branch / commit / explicit target), diff + file
+reads, structured findings (BLOCKER / MAJOR / MINOR / INFO with
+file:line), terse output, read-only verification.
+
+**`agents/result-router.ts` topic inheritance**:
+- `getEffectiveForumTopicId(taskId)` walks `parent_task_id` chain
+  upward (max 6 hops — orchestrator's recursion guard caps at 4 so
+  6 is safe headroom). Returns the first ancestor's `forum_topic_id`.
+- `routeTaskResultToTopic` swaps to chain-walk. Auto-dispatched
+  subtasks inherit the orchestrator's topic transparently — bind
+  `--topic` once on the orchestrator, every fan-out lands in the
+  same place.
+- `getForumTopicId` preserved for non-pipeline callers.
+
+**Tests** (+5, 410 total):
+- `result-router.integration.test.ts` (+5): own-topic happy path,
+  2-level inheritance, null when no ancestor binds, 3-hop walk to
+  grandparent, missing task returns null.
+- `seed-skills.integration.test.ts` (+1): `code-reviewer` exists
+  with review/analyze/logic capabilities.
+
+**Smoke flow under v1.43.0**:
+```
+operator types "review last commit" in topic 1157
+  ↓ Pattern A (v1.42.0): bot routes to bound orchestrator
+review-orchestrator emits 3-subtask plan
+  ↓ Pattern B (v1.40.0) + recursion guard (v1.42.2)
+auto-dispatcher:
+  ├ "Analyze..."   → selectAgent(..., exclude=[orch_id]) → code-reviewer
+  ├ "Review logic" → selectAgent(..., exclude=[orch_id]) → code-reviewer (queued)
+  └ "Consolidate"  → unassigned (no other orchestrator)
+  ↓
+code-reviewer reads diff via tools, emits structured findings
+  ↓ topic inheritance (v1.43.0)
+result-router walks parent chain → orchestrator's forum_topic_id=1157
+  → posts findings to topic
+  ↓
+operator sees full review thread (plan + analyze + review-logic)
+```
+
 ## v1.42.2
 
 ### fix: orchestrator recursion guard (post-smoke discovery)

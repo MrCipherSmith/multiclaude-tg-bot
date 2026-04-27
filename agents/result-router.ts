@@ -52,6 +52,45 @@ export async function getForumTopicId(agentInstanceId: number): Promise<number |
   return Number(v);
 }
 
+/**
+ * Resolve the effective forum topic for a task — own agent's binding
+ * if set, otherwise walk the `parent_task_id` chain upward and use the
+ * first ancestor's binding. Auto-dispatched subtasks (created by the
+ * orchestrator pipeline, v1.40.0 Pattern B) inherit the orchestrator's
+ * topic transparently this way: only the orchestrator instance needs
+ * `--topic <id>`, and every fan-out result lands in the same place.
+ *
+ * Walks at most MAX_TOPIC_LOOKUP_HOPS to bound DB load on pathological
+ * deep chains. The orchestrator's recursion guard caps depth at 4 so
+ * 6 hops is more than enough headroom.
+ *
+ * Returns null when no agent in the chain has a forum_topic_id. The
+ * caller treats null as "skip the topic post" (existing semantics).
+ */
+const MAX_TOPIC_LOOKUP_HOPS = 6;
+
+export async function getEffectiveForumTopicId(taskId: number): Promise<number | null> {
+  // Single SQL traversal would need a recursive CTE — overkill for the
+  // 1-6 row depth we expect. Plain loop with two LIMIT 1 reads per hop
+  // is small and easy to reason about.
+  let currentTaskId: number | null = taskId;
+  for (let hop = 0; hop < MAX_TOPIC_LOOKUP_HOPS && currentTaskId !== null; hop++) {
+    const rows = (await sql`
+      SELECT t.parent_task_id, ai.forum_topic_id
+      FROM agent_tasks t
+      LEFT JOIN agent_instances ai ON ai.id = t.agent_instance_id
+      WHERE t.id = ${currentTaskId}
+      LIMIT 1
+    `) as { parent_task_id: number | null; forum_topic_id: number | string | null }[];
+    if (rows.length === 0) return null;
+    const row = rows[0]!;
+    if (row.forum_topic_id != null) return Number(row.forum_topic_id);
+    if (row.parent_task_id == null) return null;
+    currentTaskId = Number(row.parent_task_id);
+  }
+  return null;
+}
+
 /** Look up the global forum chat id from bot_config. */
 async function getForumChatId(): Promise<string | null> {
   const rows = (await sql`
@@ -86,7 +125,12 @@ export async function routeTaskResultToTopic(args: {
   taskTitle: string;
   resultText: string;
 }): Promise<boolean> {
-  const topicId = await getForumTopicId(args.agentInstanceId);
+  // v1.43.0: prefer chain-walking lookup so auto-dispatched subtasks
+  // inherit the orchestrator's topic. Falls back to the per-instance
+  // form for tasks created outside the orchestrator pipeline (no
+  // parent chain to walk; getEffectiveForumTopicId returns the same
+  // result as getForumTopicId for those).
+  const topicId = await getEffectiveForumTopicId(args.taskId);
   if (topicId == null) return false;
 
   const chatId = await getForumChatId();
