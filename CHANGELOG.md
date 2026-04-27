@@ -1,5 +1,67 @@
 # Changelog
 
+## v1.40.0
+
+### feat: orchestrator auto-dispatch (Pattern B) — fan-out becomes automatic
+
+Closes the v1.39.0 follow-up: when an orchestrator agent completes a
+task and emits a valid `Decomposition` JSON, helyx now creates the
+subtasks itself via `orchestrator.createTask`. Each subtask routes to
+a candidate agent through `selectAgent(capabilities)` — no operator
+action needed.
+
+Pre-v1.40.0, the operator had to read the orchestrator's output and
+either run `/task <id> decompose` or create children manually with
+`/task <id> sub`. With Pattern B, the path becomes:
+
+```
+/agent_create helyx:job job-orchestrator helyx
+/orchestrate "Add /agent_definition_create command"
+  → job-orchestrator emits JSON plan
+  → worker auto-creates 5 subtasks (analyze/plan/implement/verify/review)
+  → each subtask's capabilities route to specialist agents
+  → fan-out happens by itself
+```
+
+**`agents/auto-dispatcher.ts`** (new):
+- `tryParseDecomposition(text)` — strips ```json fences, runs
+  `DecompositionSchema.safeParse`. Returns `{ok:true, value}` or
+  `{ok:false, reason: "unparseable_output" | "schema_invalid"}`.
+- `maybeDispatchOrchestration(parentTask, resultText)` — gates on
+  the parent agent's definition having the `orchestrate` capability,
+  parses the result, calls `orchestrator.createTask` per subtask
+  (with `parent_task_id`, `payload.source="auto-dispatch"`,
+  `payload.required_capabilities` for handleFailure fallback). Records
+  `orchestration_dispatched` audit event on the parent. Partial
+  dispatch is preserved when individual subtasks fail (better than
+  zero dispatch).
+
+**`agents/orchestrator.ts`**: `SubtaskSchema`, `DecompositionSchema`,
+`Subtask`, `Decomposition` are now exported (single source of truth
+shared between classical decomposeTask and the auto-dispatcher).
+
+**`scripts/standalone-llm-worker.ts`**: after `completeTask`, calls
+`maybeDispatchOrchestration`. Wrapped in try/catch — auto-dispatch
+failures never flip the parent task to `status='failed'`.
+
+**Pattern A fallback**: when output doesn't parse as Decomposition,
+auto-dispatch silently skips. The result is still in
+`agent_tasks.result` for the operator to read and act on manually.
+
+**Pattern C** (claude-code MCP-driven dispatch from the agent itself,
+giving full tool access during orchestration) — still deferred.
+
+**Tests** (`tests/unit/auto-dispatcher.integration.test.ts` — 10):
+- `tryParseDecomposition`: plain JSON, fenced JSON, malformed input,
+  schema violations (empty title, empty subtasks), all 5 paths.
+- `maybeDispatchOrchestration`: skip without `orchestrate` capability,
+  skip on unparseable / schema-invalid output, full success path with
+  3 subtasks creating proper FK linkage and payload, single-subtask
+  audit event with metadata jsonb_typeof = 'object' (regression guard
+  for v1.37.0 systemic fix).
+
+391/391 unit tests pass.
+
 ## v1.39.0
 
 ### feat: orchestrator agent_definitions (advisory pattern)

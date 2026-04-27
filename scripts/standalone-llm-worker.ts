@@ -29,6 +29,7 @@ import { resolveProfile, resolveSessionProvider } from "../llm/profile-resolver.
 import { resolveTierOverride } from "../llm/tier-resolver.ts";
 import { buildProjectContext, formatProjectContext } from "../agents/context-injector.ts";
 import { routeTaskResultToTopic } from "../agents/result-router.ts";
+import { maybeDispatchOrchestration } from "../agents/auto-dispatcher.ts";
 import { logger } from "../logger.ts";
 
 const POLL_INTERVAL_MS = Number(process.env.STANDALONE_LLM_POLL_MS ?? "3000");
@@ -297,6 +298,35 @@ async function processOneTask(task: { id: number; title: string; description: st
     const result = await generateResponse(messages, system, ctx);
     await completeTask(task.id, result);
     logger.info({ agentInstanceId, taskId: task.id, defName, len: result.length }, "standalone-llm task completed");
+
+    // v1.40.0 Pattern B: if the agent's definition has the 'orchestrate'
+    // capability AND the result parses as a Decomposition JSON, fan out
+    // subtasks via orchestrator.createTask. Each subtask routes through
+    // selectAgent(capabilities). Skips silently for non-orchestrator
+    // agents or unparseable output (Pattern A fallback covers those).
+    try {
+      const fullTask = await sql`SELECT * FROM agent_tasks WHERE id = ${task.id} LIMIT 1` as any[];
+      if (fullTask[0]) {
+        const taskRow = fullTask[0];
+        await maybeDispatchOrchestration({
+          id: Number(taskRow.id),
+          agentInstanceId: taskRow.agent_instance_id,
+          parentTaskId: taskRow.parent_task_id,
+          title: taskRow.title,
+          description: taskRow.description,
+          status: taskRow.status,
+          payload: taskRow.payload ?? {},
+          result: taskRow.result,
+          priority: taskRow.priority,
+          createdAt: taskRow.created_at,
+          startedAt: taskRow.started_at,
+          completedAt: taskRow.completed_at,
+          updatedAt: taskRow.updated_at,
+        }, result);
+      }
+    } catch (err) {
+      logger.warn({ taskId: task.id, err: String(err) }, "auto-dispatcher invocation failed; result still persisted");
+    }
 
     // v1.39.0 Gap 4: route result to forum topic if the agent_instance
     // has forum_topic_id set. routeTaskResultToTopic is a no-op when

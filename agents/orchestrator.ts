@@ -119,16 +119,23 @@ export interface DecomposeResult {
   attempts: number;
 }
 
-const SubtaskSchema = z.object({
+// Exported so the auto-dispatcher (v1.40.0) can validate orchestrator
+// output against the same shape decomposeTask expects. Single source of
+// truth for the LLM contract — if the schema changes, both the
+// classical decomposer AND the auto-dispatch path stay in sync.
+export const SubtaskSchema = z.object({
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
   capabilities: z.array(z.string()).default([]),
   priority: z.number().int().min(0).max(10).default(0),
 });
 
-const DecompositionSchema = z.object({
+export const DecompositionSchema = z.object({
   subtasks: z.array(SubtaskSchema).min(1).max(20),
 });
+
+export type Subtask = z.infer<typeof SubtaskSchema>;
+export type Decomposition = z.infer<typeof DecompositionSchema>;
 
 export class Orchestrator {
   private static readonly DEFAULT_SYSTEM_PROMPT = `You are a task decomposition assistant. Given a high-level task description, break it down into concrete actionable subtasks.
