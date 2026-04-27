@@ -1,5 +1,58 @@
 # Changelog
 
+## v1.42.2
+
+### fix: orchestrator recursion guard (post-smoke discovery)
+
+Live smoke of v1.42.0 + v1.42.1 surfaced a critical Pattern B bug:
+when `review-orchestrator` emits a "Consolidate findings" subtask
+with capabilities `["orchestrate","plan"]`, the auto-dispatcher's
+`selectAgent` call routes that subtask back to the same orchestrator
+agent that just produced it. Worker processes the subtask, emits
+ANOTHER plan, dispatcher recurses, and the chain runs forever (DB
+load + LLM tokens) until manually stopped.
+
+Smoke produced a chain of 9 self-routed tasks (226 → 229 → 230 → 233
+→ ... → 247) before the operator killed the instance.
+
+**Root cause**: `Orchestrator.selectAgent(capabilities)` had no way to
+exclude specific candidates. Auto-dispatcher had no awareness of the
+parent_task_id chain.
+
+**Fix** (two layers, defense-in-depth):
+
+1. `selectAgent(required, excludeAgentIds)` — new optional param. SQL
+   query adds `AND ai.id NOT IN ${excludeAgentIds}` (rendered as no-op
+   when the array is empty, since postgres renders `NOT IN ()` as
+   syntax error).
+2. `CreateTaskInput.excludeAgentIds` — propagated through createTaskTx
+   to selectAgent.
+3. `auto-dispatcher.maybeDispatchOrchestration`:
+   - Walks `parent_task_id` chain upward via new `collectAncestorContext`
+     helper. Collects every ancestor's `agent_instance_id` into a set.
+   - Passes the set as `excludeAgentIds` to each subtask's createTask.
+   - Tracks depth; refuses dispatch when depth >= MAX_DISPATCH_DEPTH
+     (4) with `skipReason: "depth_limit_reached"`. Belt-and-suspenders
+     in case a future schema change adds a second orchestrator with
+     overlapping capabilities and the exclusion alone isn't enough.
+4. `dispatch_depth` stamped into the subtask payload for traceability.
+
+**Tests** (3 new, 404 total):
+- "subtask whose capabilities match parent's agent does NOT route back"
+  — emits a recursive plan against a single-agent seed; subtask lands
+  agent_instance_id=NULL (no candidate after exclusion).
+- "ancestor chain walked correctly (excludes 2-hop ancestor)" —
+  3-hop chain: dispatcher excludes BOTH the immediate parent and the
+  grandparent; subtask payload carries dispatch_depth=3.
+- "depth limit blocks dispatch beyond MAX_DISPATCH_DEPTH" — chain of
+  5 tasks; dispatching off the tail returns dispatched=false,
+  skipReason="depth_limit_reached"; no rows created.
+
+**Pattern B is now safe to use**. Live smoke result: instance 550
+created chain 226→...→247 (9 tasks); with v1.42.2 the chain would
+have stopped after the first dispatch (subtask 229 unassigned;
+orchestrator never called again on the chain).
+
 ## v1.42.1
 
 ### fix: review follow-ups for v1.42.0 (perf index + defensive guards)
