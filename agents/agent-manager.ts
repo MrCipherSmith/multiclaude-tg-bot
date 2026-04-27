@@ -206,6 +206,41 @@ export class AgentManager {
     return r ? rowToInstance(r) : null;
   }
 
+  /**
+   * Find a running agent_instance bound to a Telegram forum topic via
+   * `forum_topic_id`. Used by `bot/text-handler.ts` to route plain-text
+   * messages in a topic into agent_tasks for the bound agent (Pattern A
+   * v1.42.0).
+   *
+   * Returns null when:
+   *  - no instance binds to this topic, OR
+   *  - the instance exists but `desired_state='stopped'` (operator
+   *    has disabled it; messages should not pile up as queued tasks).
+   *
+   * If multiple instances claim the same topic, returns the one with
+   * the highest priority for routing (running > others, lowest id as
+   * tiebreaker for determinism). The UI / migration ideally prevents
+   * multi-binding, but the handler must be deterministic regardless.
+   */
+  async getInstanceByForumTopic(topicId: number): Promise<AgentInstance | null> {
+    const rows = (await sql`
+      SELECT * FROM agent_instances
+      WHERE forum_topic_id = ${topicId}
+        AND desired_state != 'stopped'
+      ORDER BY
+        CASE actual_state
+          WHEN 'running' THEN 0
+          WHEN 'idle' THEN 0
+          WHEN 'busy' THEN 1
+          WHEN 'starting' THEN 2
+          ELSE 3
+        END,
+        id
+      LIMIT 1
+    `) as any[];
+    return rows.length > 0 ? rowToInstance(rows[0]) : null;
+  }
+
   /** Create a new agent_instance. Returns the inserted row. */
   async createInstance(input: {
     definitionId: number;

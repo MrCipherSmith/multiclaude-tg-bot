@@ -8,6 +8,8 @@ import { touchIdleTimer, checkOverflow } from "../memory/summarizer.ts";
 import { sql } from "../memory/db.ts";
 import { appendLog } from "../utils/stats.ts";
 import { pendingInput, clearPendingInput, pendingToolInput, clearPendingTool, getBotRef } from "./handlers.ts";
+import { agentManager } from "../agents/agent-manager.ts";
+import { orchestrator } from "../agents/orchestrator.ts";
 import { getSwitchContext, clearSwitchContext } from "./switch-cache.ts";
 import { replyInThread, escapeHtml } from "./format.ts";
 import { getForumChatId } from "./forum-cache.ts";
@@ -70,6 +72,51 @@ export async function handleText(ctx: Context): Promise<void> {
   if (isForumMessage && (!forumTopicId || forumTopicId === 1)) {
     await replyInThread(ctx, "💡 General — только команды.\nОткрой топик проекта чтобы работать с сессией.");
     return;
+  }
+
+  // v1.42.0 Pattern A — topic-bound agent routing.
+  // Before falling through to the session-based flow, check if any
+  // agent_instance is bound to this forum topic via `forum_topic_id`.
+  // If so, the message becomes an agent_task for that instance instead
+  // of a chat turn for the project's claude-code session. The standalone-
+  // llm worker picks it up within ~3s; result auto-posts back to the
+  // topic via the result-router (already wired in v1.39.0).
+  //
+  // Skipped when the topic has no bound agent — falls through to the
+  // existing session/claude-code path below.
+  if (isForumMessage && forumTopicId) {
+    try {
+      const boundAgent = await agentManager.getInstanceByForumTopic(forumTopicId);
+      if (boundAgent) {
+        const task = await orchestrator.createTask({
+          title: text.length > 200 ? text.slice(0, 197) + "…" : text,
+          description: text.length > 200 ? text : undefined,
+          agentInstanceId: boundAgent.id,
+          payload: {
+            source: "telegram-topic-routed",
+            forum_topic_id: forumTopicId,
+            telegram_chat_id: chatId,
+            telegram_message_id: ctx.message?.message_id ?? null,
+            from: ctx.from?.username ?? ctx.from?.first_name ?? null,
+          },
+        });
+        await replyInThread(
+          ctx,
+          `🤖 Task <code>#${task.id}</code> queued for <b>${escapeHtml(boundAgent.name)}</b>.\n` +
+            `<i>Result will appear in this topic when complete.</i>`,
+          { parse_mode: "HTML" },
+        );
+        return;
+      }
+    } catch (err) {
+      // Don't block the message on a routing-layer hiccup — fall
+      // through to the existing path so the user still gets a response
+      // from claude-code if a session exists.
+      logger.warn(
+        { forumTopicId, err: String(err) },
+        "topic-bound agent lookup failed; falling back to session routing",
+      );
+    }
   }
 
   // Fire typing indicator immediately — user sees feedback before routeMessage DB query

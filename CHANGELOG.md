@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.42.0
+
+### feat: topic-bound text routing (Pattern A)
+
+Closes the UX gap surfaced after v1.41.0: plain-text messages in a
+Telegram forum topic are now routed to the bound agent_instance as
+agent_tasks (instead of always going to the project's claude-code
+session). Lets operators dedicate a topic to a specialized agent and
+get auto-handled work without typing `/orchestrate`.
+
+**Behavior**:
+
+```
+operator types "проведи ревью" in topic 42
+  ↓
+text-handler checks: any agent_instance with forum_topic_id = 42
+                    AND desired_state != 'stopped'?
+  ├─ yes → orchestrator.createTask({
+  │           title: "проведи ревью",
+  │           agentInstanceId: <agent>,
+  │           payload: { source: "telegram-topic-routed",
+  │                      forum_topic_id, telegram_message_id, from }
+  │        })
+  │        bot replies: "🤖 Task #N queued for <agent>"
+  │        worker picks up within ~3s
+  │        result auto-posts back to topic via result-router (v1.39.0)
+  │
+  └─ no  → falls through to existing session/claude-code path (unchanged)
+```
+
+**Decision priority** when a topic has both a session and an agent
+binding: agent binding wins. Operators who want a topic to remain
+under claude-code control simply don't bind an agent there.
+
+**Code surface**:
+
+- `agents/agent-manager.ts`: new `getInstanceByForumTopic(topicId)` —
+  excludes `desired_state='stopped'`, prefers running > idle/busy >
+  starting > others, lowest id as tiebreaker for determinism if
+  multiple instances claim the same topic.
+- `bot/text-handler.ts`: pre-routeMessage check; if a bound agent is
+  found, creates the task and acks. Errors fall through to session
+  path (defensive — a routing-layer hiccup must not eat the user's
+  message).
+
+**Telegram metadata** carried into `payload`:
+- `source: "telegram-topic-routed"` — distinguishes from
+  `telegram /orchestrate`, `auto-dispatch`, etc.
+- `forum_topic_id`, `telegram_chat_id`, `telegram_message_id`, `from` —
+  full origin trail for audit / replies.
+
+**Title truncation**: messages > 200 chars truncate the title to
+197 chars + `…` and stash the full text in `description`.
+
+**Tests** (`tests/unit/topic-bound-routing.integration.test.ts`, 5):
+- `getInstanceByForumTopic` returns the running agent, ignores stopped
+  agents on same topic, returns null for unbound topics.
+- Stopping the running agent leaves no candidate (proves the filter).
+- Telegram metadata persists in `agent_tasks.payload` as JSONB object
+  (regression guard for v1.37.0 systemic fix).
+- Long-text truncation: title ≤ 200 chars + `…`, full text in
+  description.
+
+401/401 unit tests pass.
+
 ## v1.41.0
 
 ### feat: Claude Code system prompt forwarding (Pattern C) + 5 execution-capable templates
