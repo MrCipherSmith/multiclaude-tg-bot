@@ -1,5 +1,78 @@
 # Changelog
 
+## v1.44.0
+
+### feat: MCP-driven task pull/complete for claude-code agents (Pattern C)
+
+Closes the architectural gap surfaced by v1.43.0 smoke: orchestrator
+plans dispatched subtasks to claude-code agents (instance 740), but
+claude-code has no DB-poll loop the way standalone-llm-worker does —
+the tasks sat in `pending` forever with no consumer.
+
+Pattern C bridges claude-code into the orchestrator pipeline via three
+new MCP tools exposed by `helyx-channel`:
+
+- **`take_next_task`** — claims the next pending task assigned to this
+  agent_instance. Atomic FOR UPDATE SKIP LOCKED so concurrent claude
+  sessions on the same instance can't double-claim. Marks `in_progress`
+  + records audit event. Falls back to `AGENT_INSTANCE_ID` env var
+  when arg is omitted (set by the runtime layer per v1.35.0).
+- **`complete_task`** — marks `done` with the produced result.
+  Refuses non-`in_progress` states (prevents "completing" tasks never
+  claimed AND double-completion races). Auto-fires
+  `routeTaskResultToTopic` (v1.43.0 chain walk) so subtasks of a
+  topic-bound orchestrator post results to the inherited topic.
+- **`fail_task`** — marks `failed` with reason. Idempotent on
+  already-terminal status (records `fail_task_noop` event but doesn't
+  flip done → failed).
+
+**`agents/task-mcp-bridge.ts`** (new) — extracts the SQL logic from the
+MCP handler into testable functions: `claimNextPendingTask`,
+`completeTask`, `failTask`. The MCP dispatcher in `channel/tools.ts`
+becomes a thin shim. Each function accepts an optional sql override
+for transaction tests.
+
+**`channel/tools.ts`** — registers the 3 new tools in
+`ListToolsRequestSchema` and dispatches via the bridge module.
+
+**Integration tests** (+12 in `task-mcp-bridge.integration.test.ts`):
+- `claimNextPendingTask`: null when no pending; claims oldest with
+  priority ordering; respects priority ASC then id ASC; flips status
+  + emits audit event.
+- `completeTask`: happy path persists result as JSONB object (v1.37.0
+  guard); refuses pending/done/failed/cancelled; refuses missing task;
+  refuses empty result; caps oversized text.
+- `failTask`: in_progress → failed; idempotent on already-terminal
+  (records `fail_task_noop`); requires reason.
+- E2E: claim → complete chain; subsequent claim returns null.
+
+422/422 unit tests pass.
+
+**Operator workflow under v1.44.0**:
+
+```
+operator types "review last commit" in topic 1157
+  → Pattern A: bot routes to orchestrator instance 550
+  → orchestrator emits 3-subtask plan
+  → auto-dispatcher (with recursion guard):
+      "Analyze..." → code-reviewer instance (claude-code)
+      "Review logic" → code-reviewer (queued behind first)
+      "Consolidate" → unassigned (excluded by guard)
+
+In the code-reviewer's claude session, operator (or autonomous loop) types:
+  "use take_next_task to pull pending work and run it"
+  → claude calls take_next_task via MCP
+  → gets task, reads diff via Read/Bash, emits findings
+  → calls complete_task with the review
+  → result-router walks parent chain → posts findings to topic 1157
+  → repeat until take_next_task returns null
+```
+
+Pattern B (auto-dispatch) + Pattern A (topic routing) + Pattern C
+(MCP pull) compose into the full pipeline. Each piece is independent
+so operators can mix-and-match (e.g. use Pattern A alone with no
+orchestrator for simple direct-to-agent flows).
+
 ## v1.43.0
 
 ### feat: code-reviewer claude-code template + topic inheritance through parent chain

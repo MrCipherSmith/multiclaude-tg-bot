@@ -13,6 +13,9 @@ import { maybeAttachVoiceRaw, shouldSendVoice } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { CONFIG } from "../config.ts";
+import { agentManager } from "../agents/agent-manager.ts";
+import { routeTaskResultToTopic } from "../agents/result-router.ts";
+import { claimNextPendingTask, completeTask, failTask } from "../agents/task-mcp-bridge.ts";
 import {
   runTtsBenchmark,
   appendBenchmarkLog,
@@ -224,6 +227,43 @@ export function registerTools(
             text: { type: "string", description: "New message text" },
           },
           required: ["chat_id", "message_id", "text"],
+        },
+      },
+      {
+        name: "take_next_task",
+        description: "Claim the next pending agent_task assigned to this agent_instance. Returns the task and atomically marks it as in_progress so concurrent calls cannot double-claim. Used by claude-code agents to participate in the orchestrator pipeline (Pattern B auto-dispatch). Returns null if no pending tasks exist for this instance.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            agent_instance_id: {
+              type: "number",
+              description: "Optional. When omitted, falls back to AGENT_INSTANCE_ID env var. Required either way — error if neither is set.",
+            },
+          },
+        },
+      },
+      {
+        name: "complete_task",
+        description: "Mark an agent_task as 'done' with the produced result. Triggers result-routing — if the task (or any ancestor in the parent chain) is bound to a Telegram forum topic, the result is auto-posted there. Use after finishing the work for a task claimed via take_next_task.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            task_id: { type: "number", description: "Task id from take_next_task." },
+            result: { type: "string", description: "The full result text. Markdown OK; long results are truncated for the topic post but persisted in full to agent_tasks.result." },
+          },
+          required: ["task_id", "result"],
+        },
+      },
+      {
+        name: "fail_task",
+        description: "Mark an agent_task as 'failed' with an error reason. Use when work cannot be completed (e.g. the target file doesn't exist, lint setup is missing). Does NOT post to topic.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            task_id: { type: "number", description: "Task id." },
+            reason: { type: "string", description: "Short failure reason (under 1000 chars)." },
+          },
+          required: ["task_id", "reason"],
         },
       },
       {
@@ -602,6 +642,65 @@ export function registerTools(
         const forceRescan = Boolean(args!.force_rescan ?? false);
         const count = await scanProjectKnowledge(resolvedScanPath, forceRescan);
         return text(`Scanned ${resolvedScanPath}: ${count} knowledge facts saved`);
+      }
+
+      case "take_next_task": {
+        // Claude-code's bridge into the orchestrator pipeline (v1.44.0).
+        // Logic lives in agents/task-mcp-bridge.ts so it's unit-testable
+        // without standing up the MCP transport.
+        const argInstanceId = args?.agent_instance_id != null
+          ? Number(args.agent_instance_id)
+          : null;
+        const envInstanceId = process.env.AGENT_INSTANCE_ID
+          ? Number(process.env.AGENT_INSTANCE_ID)
+          : null;
+        const agentInstanceId = argInstanceId ?? envInstanceId;
+        if (!agentInstanceId || !Number.isFinite(agentInstanceId)) {
+          return text("take_next_task: agent_instance_id required (pass via arg or set AGENT_INSTANCE_ID env)");
+        }
+        const claimed = await claimNextPendingTask(agentInstanceId, ctx.sql);
+        return text(JSON.stringify(
+          claimed === null
+            ? { task: null, message: "No pending tasks." }
+            : {
+              task: {
+                id: claimed.id,
+                title: claimed.title,
+                description: claimed.description,
+                payload: claimed.payload,
+                parent_task_id: claimed.parentTaskId,
+                priority: claimed.priority,
+              },
+            },
+          null,
+          2,
+        ));
+      }
+
+      case "complete_task": {
+        try {
+          const taskId = Number(args!.task_id);
+          const result = String(args!.result ?? "");
+          const out = await completeTask(taskId, result, ctx.sql);
+          return text(JSON.stringify({
+            ok: out.ok,
+            task_id: out.taskId,
+            posted_to_topic: out.postedToTopic,
+          }));
+        } catch (err) {
+          return text(`complete_task error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      case "fail_task": {
+        try {
+          const taskId = Number(args!.task_id);
+          const reason = String(args!.reason ?? "");
+          const out = await failTask(taskId, reason, ctx.sql);
+          return text(JSON.stringify(out));
+        } catch (err) {
+          return text(`fail_task error: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
 
       default:
