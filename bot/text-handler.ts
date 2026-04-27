@@ -88,9 +88,20 @@ export async function handleText(ctx: Context): Promise<void> {
     try {
       const boundAgent = await agentManager.getInstanceByForumTopic(forumTopicId);
       if (boundAgent) {
+        // Cap description at 10000 chars before persisting. Telegram
+        // single messages can be up to 4096 chars; concatenated
+        // forwards / pasted blocks can be larger. createTaskTx writes
+        // to TEXT (postgres limit ~1GB), but we don't want operators
+        // to land multi-MB blobs in agent_tasks.description. The LLM
+        // contract caps at 2000 (zod) but that path is decomposeTask,
+        // not direct task creation — guard at the entry point.
+        const DESC_CAP = 10_000;
+        const cappedDescription = text.length > DESC_CAP
+          ? text.slice(0, DESC_CAP - 1) + "…"
+          : text;
         const task = await orchestrator.createTask({
           title: text.length > 200 ? text.slice(0, 197) + "…" : text,
-          description: text.length > 200 ? text : undefined,
+          description: text.length > 200 ? cappedDescription : undefined,
           agentInstanceId: boundAgent.id,
           payload: {
             source: "telegram-topic-routed",

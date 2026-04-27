@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.42.1
+
+### fix: review follow-ups for v1.42.0 (perf index + defensive guards)
+
+Addresses findings from the post-merge review of the topic-bound routing
+PR (review-orchestrator-style critique on commit a7f01188).
+
+**Migration v37 — `idx_agent_instances_forum_topic` (perf, important)**:
+Partial index on `agent_instances(forum_topic_id) WHERE forum_topic_id IS
+NOT NULL`. The lookup runs on EVERY plain-text message in any forum
+topic via `bot/text-handler.ts → agentManager.getInstanceByForumTopic`.
+Without an index, query degrades to a sequential scan as the
+`agent_instances` table grows. Mirrors the existing partial index pattern
+on `projects.forum_topic_id` (see migration v6).
+
+**`agents/agent-manager.ts:getInstanceByForumTopic`**:
+Filter changed to `desired_state IS NULL OR desired_state != 'stopped'`.
+The schema declares `desired_state` as `NOT NULL` so this is currently a
+no-op, but it survives any future migration that drops the constraint —
+SQL three-valued logic would otherwise silently exclude NULL rows from
+`!= 'stopped'`. Defense-in-depth, comment documents the rationale.
+
+**`bot/text-handler.ts`**:
+Cap routed-task `description` at 10,000 chars before persisting. Single
+Telegram messages cap at 4,096 chars but concatenated forwards / pasted
+blocks can be larger, and the underlying `agent_tasks.description` is
+TEXT (no postgres-side limit). Title cap unchanged (200 chars + ellipsis).
+
+**Not changed** (review noted but out of scope):
+- empty/whitespace text guard — Telegram filters empty texts before
+  webhook delivery; not a real-world condition.
+- escape on ack already in place since v1.42.0 (`escapeHtml(boundAgent.name)`).
+- tiebreak ordering already documented and indexed by id.
+
+401/401 unit tests pass (no new test cases — index is a perf concern
+not a behavioral one; defensive `IS NULL OR` is no-op against the
+current schema).
+
 ## v1.42.0
 
 ### feat: topic-bound text routing (Pattern A)

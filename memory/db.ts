@@ -1658,6 +1658,29 @@ Constraints:
       }
     },
   },
+  {
+    version: 37,
+    name: "v1.42.1: index agent_instances.forum_topic_id for topic-bound routing",
+    up: async (tx) => {
+      // Hot-path optimization for v1.42.0 Pattern A.
+      // bot/text-handler.ts → agentManager.getInstanceByForumTopic
+      // runs on every plain-text message in a forum topic — the lookup
+      // must be O(log n) on agent_instance count, not O(n).
+      //
+      // Partial index (WHERE forum_topic_id IS NOT NULL): the column is
+      // sparse (only operator-bound instances populate it), so a partial
+      // index is dramatically smaller and faster than a full one. Same
+      // pattern as projects.forum_topic_id (db.ts:362, see migration v6).
+      //
+      // CREATE INDEX IF NOT EXISTS — idempotent, safe to re-run; no
+      // CONCURRENTLY because we're inside sql.begin (postgres restriction).
+      await tx`
+        CREATE INDEX IF NOT EXISTS idx_agent_instances_forum_topic
+        ON agent_instances(forum_topic_id)
+        WHERE forum_topic_id IS NOT NULL
+      `;
+    },
+  },
 ];
 
 // --- Public API ---

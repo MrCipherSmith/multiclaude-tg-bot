@@ -223,10 +223,16 @@ export class AgentManager {
    * multi-binding, but the handler must be deterministic regardless.
    */
   async getInstanceByForumTopic(topicId: number): Promise<AgentInstance | null> {
+    // `desired_state` is NOT NULL per schema (CHECK constraint, default
+    // 'stopped' — see migration v6). The `IS NULL OR` clause below is
+    // defense-in-depth: if a future migration ever drops the NOT NULL,
+    // SQL three-valued logic would silently exclude NULL rows from
+    // `!= 'stopped'` and they'd never route. Explicit form survives
+    // schema drift without changing behavior today.
     const rows = (await sql`
       SELECT * FROM agent_instances
       WHERE forum_topic_id = ${topicId}
-        AND desired_state != 'stopped'
+        AND (desired_state IS NULL OR desired_state != 'stopped')
       ORDER BY
         CASE actual_state
           WHEN 'running' THEN 0
