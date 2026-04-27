@@ -25,13 +25,32 @@ import { orchestrator, DecompositionSchema, type AgentTask } from "./orchestrato
 
 const ORCHESTRATE_CAPABILITY = "orchestrate";
 
+/**
+ * Maximum depth of the parent_task_id chain that auto-dispatch will
+ * traverse. Beyond this, dispatch is refused — protects against
+ * runaway recursion if the exclusion guard somehow misses (e.g. a
+ * second orchestrator with overlapping capabilities exists, and the
+ * specialist for the consolidate step happens to be orchestrator-
+ * capable).
+ *
+ * 4 covers any realistic pipeline:
+ *   user → orchestrator → analyzer → reviewer → consolidator
+ */
+const MAX_DISPATCH_DEPTH = 4;
+
 export interface AutoDispatchResult {
   /** True iff at least one subtask was created. */
   dispatched: boolean;
   /** Subtask ids actually created (empty when not dispatched). */
   subtaskIds: number[];
   /** Reason for skipping when dispatched=false; null on success. */
-  skipReason: "no_orchestrate_capability" | "unparseable_output" | "schema_invalid" | "create_failed" | null;
+  skipReason:
+    | "no_orchestrate_capability"
+    | "unparseable_output"
+    | "schema_invalid"
+    | "create_failed"
+    | "depth_limit_reached"
+    | null;
 }
 
 /**
@@ -44,6 +63,43 @@ export interface AutoDispatchResult {
  *   2. A generic agent might output JSON-like text that happens to
  *      match the shape but isn't an intentional plan.
  */
+/**
+ * Walk the `parent_task_id` chain upward from a task, collecting:
+ *  - `ancestorAgentIds` — the set of agent_instance_ids that produced
+ *    each ancestor task (used as `excludeAgentIds` to break recursion)
+ *  - `depth` — how many ancestors we walked (caller compares to
+ *    `MAX_DISPATCH_DEPTH`)
+ *
+ * Includes the task itself in the count and the agent set: a subtask
+ * created from this task must NOT route back to the task's own agent.
+ * Walks at most MAX_DISPATCH_DEPTH + 1 hops to bound DB load.
+ */
+async function collectAncestorContext(
+  taskId: number,
+): Promise<{ ancestorAgentIds: number[]; depth: number }> {
+  const agentIds = new Set<number>();
+  let currentId: number | null = taskId;
+  let depth = 0;
+  // +1 to read self + ancestors up to the cap (depth uses the count of
+  // ancestors NOT including self, so reading depth=4 ancestors is OK
+  // and the dispatch is refused only when depth >= MAX_DISPATCH_DEPTH).
+  while (currentId !== null && depth <= MAX_DISPATCH_DEPTH + 1) {
+    const rows = (await sql`
+      SELECT agent_instance_id, parent_task_id
+      FROM agent_tasks
+      WHERE id = ${currentId}
+      LIMIT 1
+    `) as { agent_instance_id: number | null; parent_task_id: number | null }[];
+    if (rows.length === 0) break;
+    const row = rows[0]!;
+    if (row.agent_instance_id != null) agentIds.add(Number(row.agent_instance_id));
+    if (row.parent_task_id == null) break;
+    currentId = Number(row.parent_task_id);
+    depth++;
+  }
+  return { ancestorAgentIds: Array.from(agentIds), depth };
+}
+
 async function definitionHasOrchestrateCapability(agentInstanceId: number): Promise<boolean> {
   const rows = (await sql`
     SELECT ad.capabilities
@@ -123,6 +179,20 @@ export async function maybeDispatchOrchestration(
     return { dispatched: false, subtaskIds: [], skipReason: "no_orchestrate_capability" };
   }
 
+  // v1.42.2 recursion guard: walk the parent_task_id chain to collect
+  // ancestor agent_instance_ids. Pass them as `excludeAgentIds` to
+  // selectAgent so a subtask whose capabilities match its own ancestor's
+  // orchestrator never routes back to it. Cap depth at MAX_DISPATCH_DEPTH
+  // so a runaway chain is broken even if the exclusion misses.
+  const { ancestorAgentIds, depth } = await collectAncestorContext(parentTask.id);
+  if (depth >= MAX_DISPATCH_DEPTH) {
+    logger.warn(
+      { taskId: parentTask.id, depth },
+      "auto-dispatcher: depth limit reached, refusing further dispatch",
+    );
+    return { dispatched: false, subtaskIds: [], skipReason: "depth_limit_reached" };
+  }
+
   const parsed = tryParseDecomposition(resultText);
   if (!parsed.ok) {
     // Pattern A fallback — orchestrator may have intentionally produced
@@ -151,8 +221,11 @@ export async function maybeDispatchOrchestration(
           source: "auto-dispatch",
           parent_orchestrator_task_id: parentTask.id,
           required_capabilities: sub.capabilities,
+          dispatch_depth: depth + 1,
         },
         requiredCapabilities: sub.capabilities.length > 0 ? sub.capabilities : undefined,
+        // Recursion guard: never route back to any ancestor agent.
+        excludeAgentIds: ancestorAgentIds,
       });
       subtaskIds.push(created.id);
     } catch (err) {

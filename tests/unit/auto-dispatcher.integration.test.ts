@@ -262,6 +262,120 @@ describe("auto-dispatcher — maybeDispatchOrchestration", () => {
     expect(children[2]!.title).toBe("step 3: review");
   });
 
+  test.skipIf(!HAS_DB)("recursion guard: subtask whose capabilities match parent's agent does NOT route back", async () => {
+    const { sql, dispatcher, orch } = await getCtx();
+    // The orchestrator's own definition has orchestrate+plan capabilities
+    // (see beforeAll seed). If the orchestrator emits a subtask with
+    // capabilities ['orchestrate'] or ['plan'], pre-v1.42.2 the
+    // auto-dispatcher would route the subtask back to the same agent —
+    // recursion. The exclusion guard must prevent this.
+    const parentTask = await orch.orchestrator.createTask({
+      title: `recursion-parent-${RUN_TAG}`,
+      agentInstanceId: seed!.orchAgentId,
+    });
+    seed!.cleanupTaskIds.push(parentTask.id);
+
+    const recursivePlan = JSON.stringify({
+      subtasks: [
+        // Match the orch agent's own caps — would recurse pre-fix.
+        { title: "consolidate findings", capabilities: ["orchestrate", "plan"], priority: 0 },
+        // Non-matching — stays unassigned (no specialist seeded), still legal.
+        { title: "feature analyze", capabilities: ["analyze", "review", "code"], priority: 1 },
+      ],
+    });
+    const result = await dispatcher.maybeDispatchOrchestration(parentTask, recursivePlan);
+    expect(result.dispatched).toBe(true);
+    expect(result.subtaskIds.length).toBe(2);
+    seed!.cleanupTaskIds.push(...result.subtaskIds);
+
+    // First subtask must NOT have agent_instance_id = orchAgentId
+    // (excluded). With no other orchestrate-capable agent in this
+    // test seed, it lands NULL (no_match) — which is correct.
+    const [firstSub] = (await sql`
+      SELECT id, agent_instance_id
+      FROM agent_tasks WHERE id = ${result.subtaskIds[0]}
+    `) as any[];
+    expect(firstSub.agent_instance_id).toBeNull();
+  });
+
+  test.skipIf(!HAS_DB)("recursion guard: ancestor chain walked correctly (excludes 2-hop ancestor)", async () => {
+    const { sql, dispatcher, orch } = await getCtx();
+    // Build a chain: root → child(plain) → grandchild_dispatch.
+    // When auto-dispatching off grandchild_dispatch, the exclusion
+    // set must include orchAgentId (root's agent) AND the plain
+    // child's agent (plainAgentId). selectAgent must skip both.
+    const root = await orch.orchestrator.createTask({
+      title: `recursion-root-${RUN_TAG}`,
+      agentInstanceId: seed!.orchAgentId,
+    });
+    seed!.cleanupTaskIds.push(root.id);
+
+    const child = await orch.orchestrator.createTask({
+      title: `recursion-child-${RUN_TAG}`,
+      parentTaskId: root.id,
+      agentInstanceId: seed!.plainAgentId,
+    });
+    seed!.cleanupTaskIds.push(child.id);
+
+    // Now if orchAgent runs on a grandchild and dispatches, BOTH
+    // ancestors should be excluded.
+    const grandchild = await orch.orchestrator.createTask({
+      title: `recursion-grand-${RUN_TAG}`,
+      parentTaskId: child.id,
+      agentInstanceId: seed!.orchAgentId,
+    });
+    seed!.cleanupTaskIds.push(grandchild.id);
+
+    const result = await dispatcher.maybeDispatchOrchestration(grandchild, JSON.stringify({
+      subtasks: [{ title: "leaf", capabilities: ["orchestrate"], priority: 0 }],
+    }));
+    expect(result.dispatched).toBe(true);
+    seed!.cleanupTaskIds.push(...result.subtaskIds);
+
+    const [leaf] = (await sql`
+      SELECT agent_instance_id, payload FROM agent_tasks WHERE id = ${result.subtaskIds[0]}
+    `) as any[];
+    // Both ancestors excluded → no candidate → unassigned.
+    expect(leaf.agent_instance_id).toBeNull();
+    // Audit metadata records dispatch_depth = 3 (root=0, child=1, grand=2, leaf=3).
+    expect(leaf.payload.dispatch_depth).toBe(3);
+  });
+
+  test.skipIf(!HAS_DB)("depth limit blocks dispatch beyond MAX_DISPATCH_DEPTH", async () => {
+    const { sql, dispatcher, orch } = await getCtx();
+    // Construct a chain of 5 tasks (depth 4 from root) — this is at
+    // the cap. One more level should refuse dispatch with skipReason
+    // = "depth_limit_reached".
+    const ids: number[] = [];
+    let parentId: number | undefined = undefined;
+    for (let i = 0; i < 5; i++) {
+      const t: any = await orch.orchestrator.createTask({
+        title: `chain-${i}-${RUN_TAG}`,
+        agentInstanceId: seed!.orchAgentId,
+        parentTaskId: parentId,
+      });
+      ids.push(t.id);
+      parentId = t.id;
+    }
+    seed!.cleanupTaskIds.push(...ids);
+
+    // Last task in the chain — depth = 4 (4 ancestors). Dispatching
+    // off it would create depth 5 children, exceeding cap.
+    const tail = await orch.orchestrator.getTask(ids[ids.length - 1]!);
+    const result = await dispatcher.maybeDispatchOrchestration(
+      tail!,
+      JSON.stringify({
+        subtasks: [{ title: "should-be-blocked", capabilities: ["orchestrate"], priority: 0 }],
+      }),
+    );
+    expect(result.dispatched).toBe(false);
+    expect(result.skipReason).toBe("depth_limit_reached");
+
+    // Confirm no extra rows created for the blocked dispatch.
+    const blocked = (await sql`SELECT id FROM agent_tasks WHERE parent_task_id = ${tail!.id}`) as any[];
+    expect(blocked.length).toBe(0);
+  });
+
   test.skipIf(!HAS_DB)("records orchestration_dispatched audit event with subtask metadata", async () => {
     const { sql, dispatcher, orch } = await getCtx();
     const task = await orch.orchestrator.createTask({

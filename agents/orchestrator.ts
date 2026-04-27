@@ -57,6 +57,14 @@ export interface CreateTaskInput {
   priority?: number;
   /** When provided AND agentInstanceId is omitted, selectAgent uses these to filter. */
   requiredCapabilities?: string[];
+  /**
+   * Agent ids to exclude from `selectAgent` candidate pool (v1.42.2).
+   * Used by the auto-dispatcher to break orchestrator-recursion: when
+   * an orchestrator emits a subtask whose capabilities also match the
+   * orchestrator's own definition, selectAgent would otherwise route
+   * the subtask back to the same agent that just produced it.
+   */
+  excludeAgentIds?: number[];
 }
 
 export interface TaskNode extends AgentTask {
@@ -174,7 +182,7 @@ Rules:
     let agentInstanceId = input.agentInstanceId ?? null;
 
     if (agentInstanceId === null && input.requiredCapabilities && input.requiredCapabilities.length > 0) {
-      const selected = await this.selectAgent(input.requiredCapabilities);
+      const selected = await this.selectAgent(input.requiredCapabilities, input.excludeAgentIds ?? []);
       if (selected) agentInstanceId = selected.id;
     }
 
@@ -562,8 +570,16 @@ Rules:
    * Select an agent_instance whose definition.capabilities is a superset of `required`.
    * Prefers running agents over stopped, then highest-priority match.
    * Returns null if no agent matches.
+   *
+   * `excludeAgentIds` (v1.42.2): when set, those instances are not
+   * considered. Used by the auto-dispatcher to break the orchestrator
+   * → consolidate-subtask → orchestrator recursion when the same
+   * agent's definition matches the subtask capabilities.
    */
-  async selectAgent(required: string[]): Promise<AgentInstance | null> {
+  async selectAgent(
+    required: string[],
+    excludeAgentIds: number[] = [],
+  ): Promise<AgentInstance | null> {
     if (required.length === 0) return null;
 
     // Find agent_instances whose definition has ALL required capabilities.
@@ -574,6 +590,12 @@ Rules:
     // protocol level. This was discovered end-to-end during the v1.34.0
     // smoke test — capability routing had been silently broken since the
     // orchestrator MVP shipped.
+    //
+    // The exclusion clause uses `NOT IN ${sql(arr)}` only when the array
+    // is non-empty; postgres.js renders `NOT IN ()` as a syntax error.
+    const exclusionClause = excludeAgentIds.length > 0
+      ? sql`AND ai.id NOT IN ${sql(excludeAgentIds)}`
+      : sql``;
     const rows = await sql`
       SELECT ai.*, ad.capabilities, ad.runtime_type, ai.actual_state
       FROM agent_instances ai
@@ -581,6 +603,7 @@ Rules:
       WHERE ad.enabled = true
         AND ai.desired_state != 'stopped'
         AND ad.capabilities @> ${sql.json(required)}
+        ${exclusionClause}
       ORDER BY
         CASE ai.actual_state
           WHEN 'running' THEN 0
