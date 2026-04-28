@@ -146,7 +146,7 @@ export async function handleMonitorCallback(ctx: Context): Promise<void> {
   if (action === "docker_restart") {
     const container = parts.slice(2).join(":");
     if (!container) { await ctx.answerCallbackQuery({ text: "Missing container" }); return; }
-    await sql`INSERT INTO admin_commands (command, payload) VALUES ('docker_restart', ${JSON.stringify({ container })}::jsonb)`;
+    await sql`INSERT INTO admin_commands (command, payload) VALUES ('docker_restart', ${sql.json({ container })})`;
     await ctx.answerCallbackQuery({ text: `⏳ Restarting ${container}...` });
     await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard().text("🔄 Refresh", "mon:refresh") });
     return;

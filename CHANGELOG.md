@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.32.1
+
+### fix: postgres.js v3 jsonb cast bug — silent scalar-string storage
+
+Eight call sites in v1.32.0 used the broken `${JSON.stringify(x)}::jsonb`
+pattern. postgres.js v3 silently strips trailing `::jsonb` casts on
+parameter placeholders → values bound as TEXT → JSONB columns received
+the string-literal form (`'"{\"k\":\"v\"}"'`) rather than the parsed
+object. `jsonb_typeof()` reports `'string'` instead of `'object'`.
+
+**Real symptom in production**: `services/project-service.ts` idempotency
+check `(payload->>'project_id')::int = ${id}` returned NULL on the
+scalar-string rows, so the check never found duplicates and the same
+`proj_start` admin command could be enqueued multiple times for one
+project. App-side reads were defended by `normalizeCLIConfig()` and
+admin-daemon's `typeof === "string" ? JSON.parse : raw` so the bug
+hid behind the JS layer.
+
+**Sites fixed** (`${JSON.stringify(x)}::jsonb` → `${sql.json(x)}`):
+- `sessions/manager.ts` — register `metadata`, `cli_config`;
+  `updateCliConfig`
+- `bot/commands/tmux-actions.ts` — admin_commands payload
+- `bot/commands/interrupt.ts` — admin_commands payload
+- `bot/commands/monitor.ts` — admin_commands docker_restart payload
+- `mcp/dashboard-api.ts` — admin_commands docker_restart payload
+- `services/project-service.ts` — admin_commands proj_start/stop payload
+
+**Migration v22**: idempotent parse-back for `sessions.metadata`,
+`sessions.cli_config`, `admin_commands.payload`. Updates rows where
+`jsonb_typeof = 'string'` AND text starts with `"{` or `"[` (size
+bounded 4 B – 1 MB). Re-running finds zero rows.
+
+**Live DB application** (this install had legacy data from before the
+fix): 66 `admin_commands.payload` rows reverted from scalar-string to
+proper JSONB object via direct SQL since the runtime DB schema_versions
+already exceeded v22 from prior agent-runtime work that has since been
+archived.
+
+**Test** (`tests/unit/jsonb-cast-v1.32.test.ts`, 3 cases):
+- session register persists `metadata` + `cli_config` as JSONB objects
+- `admin_commands.payload` lands as object with extractable `->>'key'`
+- the project-service idempotency `(payload->>'project_id')::int = N`
+  predicate matches a row inserted with the new code path
+
+146/146 unit tests pass.
+
 ## v1.31.0
 
 ### fix: security hardening + concurrency correctness (full project review)

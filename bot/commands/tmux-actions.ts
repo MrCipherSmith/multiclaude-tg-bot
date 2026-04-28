@@ -37,7 +37,7 @@ export async function handleTmuxActionCallback(ctx: Context): Promise<void> {
 
   await sql`
     INSERT INTO admin_commands (command, payload)
-    VALUES ('tmux_send_keys', ${JSON.stringify({ project, action })}::jsonb)
+    VALUES ('tmux_send_keys', ${sql.json({ project, action })})
   `;
 
   await ctx.answerCallbackQuery({ text: label[action] });

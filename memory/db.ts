@@ -518,6 +518,56 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 22,
+    name: "v1.32.1: parse-back JSONB columns corrupted by stripped ::jsonb cast",
+    up: async (tx) => {
+      // postgres.js v3 silently strips trailing `::jsonb` casts on parameter
+      // placeholders, so writes via `${JSON.stringify(x)}::jsonb` bind the
+      // value as TEXT — postgres then stores it as a JSONB **scalar string**
+      // containing the stringified JSON, instead of parsing it as a JSONB
+      // object. Eight call sites in v1.32.0 were affected (sessions.metadata,
+      // sessions.cli_config, and admin_commands.payload across multiple
+      // command emitters).
+      //
+      // Symptoms in DB pre-fix:
+      //   jsonb_typeof(payload) = 'string'    -- wrong, should be 'object'
+      //   payload::text = '"{\"foo\":\"bar\"}"'  -- doubly-quoted scalar
+      //
+      // Read paths were defended at the JS layer (`normalizeCLIConfig`,
+      // `typeof === "string" ? JSON.parse : raw` in admin-daemon), so the
+      // app didn't crash. But SQL-level filters using `payload->>'key'`
+      // returned NULL on these rows, causing silent bugs:
+      // `services/project-service.ts` idempotency check
+      // `(payload->>'project_id')::int = ${id}` never matched, so duplicate
+      // proj_start commands could pile up unnoticed.
+      //
+      // This migration is idempotent: re-running finds no rows whose
+      // `jsonb_typeof` is still 'string' for these columns. The 1MB
+      // upper bound prevents accidental processing of pathologically
+      // bloated rows (none expected in v1.32.0 schema, but cheap defense).
+      const tables: Array<{ table: string; column: string; hasUpdatedAt: boolean }> = [
+        { table: "sessions",        column: "metadata",   hasUpdatedAt: false },
+        { table: "sessions",        column: "cli_config", hasUpdatedAt: false },
+        { table: "admin_commands",  column: "payload",    hasUpdatedAt: true  },
+      ];
+      for (const { table, column, hasUpdatedAt } of tables) {
+        const setClause = hasUpdatedAt
+          ? `${column} = (${column}#>>'{}')::jsonb, updated_at = now()`
+          : `${column} = (${column}#>>'{}')::jsonb`;
+        await tx.unsafe(`
+          UPDATE ${table}
+          SET ${setClause}
+          WHERE jsonb_typeof(${column}) = 'string'
+            AND length(${column}::text) BETWEEN 4 AND 1048576
+            AND (
+              ${column}::text LIKE '"{%'
+              OR ${column}::text LIKE '"[%'
+            )
+        `);
+      }
+    },
+  },
 ];
 
 // --- Public API ---
