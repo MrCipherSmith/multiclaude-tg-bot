@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.32.2
+
+### chore(migrations): validate registry on startup — reject dupes / non-monotonic / non-positive-int
+
+Migration framework's `pending = filter(version > current)` logic
+silently breaks if two migrations share a version (only one gets
+recorded in `schema_versions`; the other is forgotten) or if versions
+don't ascend monotonically.
+
+`validateMigrationRegistry()` runs at the top of `migrate()`:
+- duplicate version → throw with `[db] duplicate migration version: vN`
+- non-strictly-ascending order → throw with `[db] non-monotonic migration order at index i: vX follows vY`
+- non-integer or `< 1` → throw
+
+`tests/unit/migration-registry.test.ts` (4 cases) re-derives versions
+from `memory/db.ts` source via regex and asserts the same invariants
+plus 3 synthetic-bad-input cases.
+
+150/150 unit tests pass. Verified live: planting a duplicate v5 makes
+`bun memory/db.ts` throw the expected error.
+
 ## v1.32.1
 
 ### fix: postgres.js v3 jsonb cast bug — silent scalar-string storage
