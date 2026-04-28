@@ -101,12 +101,12 @@ export class ProjectService {
     `;
     if (existing) return { ok: true };
 
-    await sql`INSERT INTO admin_commands (command, payload) VALUES (${command}, ${JSON.stringify({
+    await sql`INSERT INTO admin_commands (command, payload) VALUES (${command}, ${sql.json({
       project_id: id,
       path: project.path,
       name: project.name,
       tmux_session_name: project.tmux_session_name,
-    })}::jsonb)`;
+    })})`;
     return { ok: true };
   }
 }

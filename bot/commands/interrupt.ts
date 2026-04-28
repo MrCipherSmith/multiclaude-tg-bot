@@ -27,7 +27,7 @@ export async function handleInterrupt(ctx: Context): Promise<void> {
     const project = s.project ?? s.name;
     await sql`
       INSERT INTO admin_commands (command, payload)
-      VALUES ('tmux_send_keys', ${JSON.stringify({ project, action: "esc" })}::jsonb)
+      VALUES ('tmux_send_keys', ${sql.json({ project, action: "esc" })})
     `;
     await ctx.reply(`⚡ Interrupt sent to <b>${project}</b>.`, { parse_mode: "HTML" });
     return;

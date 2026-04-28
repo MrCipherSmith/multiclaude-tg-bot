@@ -357,7 +357,7 @@ async function handleProcessAction(req: IncomingMessage, res: ServerResponse, ac
   if (action === "restart-docker") {
     const { container } = await parseBody(req);
     if (!container || typeof container !== "string") { sendError(res, "container required"); return; }
-    await sql`INSERT INTO admin_commands (command, payload) VALUES ('docker_restart', ${JSON.stringify({ container })}::jsonb)`;
+    await sql`INSERT INTO admin_commands (command, payload) VALUES ('docker_restart', ${sql.json({ container })})`;
     sendJson(res, { ok: true });
     return;
   }
