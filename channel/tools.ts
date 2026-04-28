@@ -15,7 +15,7 @@ import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { CONFIG } from "../config.ts";
 import { agentManager } from "../agents/agent-manager.ts";
 import { routeTaskResultToTopic } from "../agents/result-router.ts";
-import { claimNextPendingTask, completeTask, failTask } from "../agents/task-mcp-bridge.ts";
+import { claimNextPendingTask, completeTask, failTask, getTaskResult } from "../agents/task-mcp-bridge.ts";
 import {
   runTtsBenchmark,
   appendBenchmarkLog,
@@ -252,6 +252,17 @@ export function registerTools(
             result: { type: "string", description: "The full result text. Markdown OK; long results are truncated for the topic post but persisted in full to agent_tasks.result." },
           },
           required: ["task_id", "result"],
+        },
+      },
+      {
+        name: "get_task_result",
+        description: "Fetch a previously-completed agent_task by id, including its result, metadata, and the names of the agent + definition that produced it. Use to follow up on prior work — e.g. when applying fixes from a review you reference by id, call this to read the review findings before editing code. Returns null when the task does not exist.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            task_id: { type: "number", description: "Task id to fetch." },
+          },
+          required: ["task_id"],
         },
       },
       {
@@ -689,6 +700,16 @@ export function registerTools(
           }));
         } catch (err) {
           return text(`complete_task error: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      case "get_task_result": {
+        try {
+          const taskId = Number(args!.task_id);
+          const view = await getTaskResult(taskId, ctx.sql);
+          return text(JSON.stringify(view, null, 2));
+        } catch (err) {
+          return text(`get_task_result error: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 

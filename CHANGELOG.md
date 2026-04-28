@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.45.0
+
+### feat: get_task_result MCP tool — claude-code can read prior work
+
+Closes the v1.44.0 follow-up: orchestrator pipelines could now
+auto-dispatch and claude-code could pull tasks via Pattern C, but
+referencing PRIOR work (e.g. "apply fixes from review #443")
+required inlining the full review text into the new task description.
+Free-text messages couldn't drive cross-task pipelines.
+
+`get_task_result(task_id)` lets a claude-code agent fetch any
+agent_task by id — including its result, status, parent linkage, and
+the agent + definition names that produced it. The natural use case:
+
+```
+operator types in topic: "Apply BLOCKER+MAJOR fixes from review #443"
+  → job-orchestrator emits plan with implement+verify subtasks
+  → task-implementer claims via take_next_task
+  → calls get_task_result(443) to fetch the review findings
+  → reads diff, applies fixes
+  → calls complete_task → result-router posts to topic
+```
+
+**`agents/task-mcp-bridge.ts`** — new `getTaskResult` function +
+`TaskResultView` type. Joins `agent_instances` and `agent_definitions`
+so the consumer sees role context, not just opaque ids. Single-row
+read; caller walks the parent chain by re-calling with
+`parent_task_id` if needed.
+
+**`channel/tools.ts`** — wires the MCP tool. No auth check (helyx
+is single-tenant; any agent in the system already sees every
+agent_event regardless).
+
+**Tests** (+5 in `task-mcp-bridge.integration.test.ts`):
+- happy path: full row + joined agent + definition names
+- null for non-existent task id
+- works for NULL result (pending tasks)
+- rejects non-numeric task_id
+- returns parent_task_id for nested tasks
+
+427/427 unit tests pass.
+
 ## v1.44.0
 
 ### feat: MCP-driven task pull/complete for claude-code agents (Pattern C)

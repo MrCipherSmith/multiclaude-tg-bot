@@ -34,6 +34,69 @@ export interface CompleteResult {
   postedToTopic: boolean;
 }
 
+export interface TaskResultView {
+  id: number;
+  title: string;
+  description: string | null;
+  status: string;
+  agent_instance_id: number | null;
+  parent_task_id: number | null;
+  agent_name: string | null;
+  definition_name: string | null;
+  result: Record<string, unknown> | null;
+  payload: Record<string, unknown>;
+  created_at: string;
+  completed_at: string | null;
+}
+
+/**
+ * Read a task by id with joined agent/definition metadata. Used by
+ * claude-code agents (via MCP `get_task_result`) to follow up on
+ * earlier work — e.g. "implement fixes from review #443" needs the
+ * implementer to read 443's findings before applying them.
+ *
+ * Returns the row and the joined names. Returns null when the task
+ * is missing. Does NOT walk the parent chain (separate concern —
+ * caller can pull `parent_task_id` and call again).
+ *
+ * No auth check: helyx is single-tenant and any agent in the system
+ * can already see any agent_event for any task. Limiting result
+ * reads would be inconsistent.
+ */
+export async function getTaskResult(
+  taskId: number,
+  sql: any = defaultSql,
+): Promise<TaskResultView | null> {
+  if (!Number.isFinite(taskId)) throw new Error("task_id required (number)");
+  const rows = (await sql`
+    SELECT t.id, t.title, t.description, t.status, t.agent_instance_id,
+           t.parent_task_id, t.result, t.payload, t.created_at, t.completed_at,
+           ai.name AS agent_name,
+           ad.name AS definition_name
+    FROM agent_tasks t
+    LEFT JOIN agent_instances ai ON ai.id = t.agent_instance_id
+    LEFT JOIN agent_definitions ad ON ad.id = ai.definition_id
+    WHERE t.id = ${taskId}
+    LIMIT 1
+  `) as any[];
+  if (rows.length === 0) return null;
+  const r = rows[0]!;
+  return {
+    id: Number(r.id),
+    title: r.title,
+    description: r.description,
+    status: r.status,
+    agent_instance_id: r.agent_instance_id != null ? Number(r.agent_instance_id) : null,
+    parent_task_id: r.parent_task_id != null ? Number(r.parent_task_id) : null,
+    agent_name: r.agent_name ?? null,
+    definition_name: r.definition_name ?? null,
+    result: r.result ?? null,
+    payload: r.payload ?? {},
+    created_at: (r.created_at as Date).toISOString(),
+    completed_at: r.completed_at ? (r.completed_at as Date).toISOString() : null,
+  };
+}
+
 /**
  * Atomically claim the next pending task for an agent_instance.
  * Returns null when no pending task exists.

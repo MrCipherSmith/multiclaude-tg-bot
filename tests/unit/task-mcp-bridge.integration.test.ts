@@ -237,6 +237,83 @@ describe("failTask", () => {
   });
 });
 
+describe("getTaskResult (v1.45.0)", () => {
+  test.skipIf(!HAS_DB)("returns full row + joined agent/definition names for done task", async () => {
+    const { sql, bridge } = await getCtx();
+    const [task] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, description, status, payload, result)
+      VALUES (
+        ${seed!.agentId},
+        ${`get-result-${RUN_TAG}`},
+        ${"the description"},
+        ${"done"},
+        ${sql.json({ source: "test" })},
+        ${sql.json({ output: "review verdict: APPROVE" })}
+      )
+      RETURNING id
+    `) as any[];
+    seed!.cleanupTaskIds.push(Number(task.id));
+
+    const view = await bridge.getTaskResult(Number(task.id));
+    expect(view).not.toBeNull();
+    expect(view!.id).toBe(Number(task.id));
+    expect(view!.title).toBe(`get-result-${RUN_TAG}`);
+    expect(view!.description).toBe("the description");
+    expect(view!.status).toBe("done");
+    expect(view!.agent_instance_id).toBe(seed!.agentId);
+    expect(view!.agent_name).toBe(`mcp-agent-${RUN_TAG}`);
+    expect(view!.definition_name).toBe(`mcp-def-${RUN_TAG}`);
+    expect((view!.result as any).output).toBe("review verdict: APPROVE");
+    expect((view!.payload as any).source).toBe("test");
+    expect(view!.completed_at).toBeNull(); // we didn't set completed_at
+    expect(typeof view!.created_at).toBe("string");
+  });
+
+  test.skipIf(!HAS_DB)("returns null for non-existent task id", async () => {
+    const { bridge } = await getCtx();
+    const view = await bridge.getTaskResult(999_999_999);
+    expect(view).toBeNull();
+  });
+
+  test.skipIf(!HAS_DB)("works for tasks with NULL result (still pending or no-op done)", async () => {
+    const { sql, bridge } = await getCtx();
+    const [task] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentId}, ${`null-result-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    seed!.cleanupTaskIds.push(Number(task.id));
+
+    const view = await bridge.getTaskResult(Number(task.id));
+    expect(view).not.toBeNull();
+    expect(view!.result).toBeNull();
+    expect(view!.status).toBe("pending");
+  });
+
+  test.skipIf(!HAS_DB)("rejects non-numeric task_id", async () => {
+    const { bridge } = await getCtx();
+    await expect(bridge.getTaskResult(NaN as any)).rejects.toThrow(/task_id required/);
+  });
+
+  test.skipIf(!HAS_DB)("returns parent_task_id for nested tasks", async () => {
+    const { sql, bridge } = await getCtx();
+    const [parent] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, title, status)
+      VALUES (${seed!.agentId}, ${`parent-${RUN_TAG}`}, ${"done"})
+      RETURNING id
+    `) as any[];
+    const [child] = (await sql`
+      INSERT INTO agent_tasks (agent_instance_id, parent_task_id, title, status)
+      VALUES (${seed!.agentId}, ${parent.id}, ${`child-${RUN_TAG}`}, ${"pending"})
+      RETURNING id
+    `) as any[];
+    seed!.cleanupTaskIds.push(Number(parent.id), Number(child.id));
+
+    const view = await bridge.getTaskResult(Number(child.id));
+    expect(view!.parent_task_id).toBe(Number(parent.id));
+  });
+});
+
 describe("end-to-end: claim → complete chain", () => {
   test.skipIf(!HAS_DB)("a freshly-pending task can be claimed and then completed", async () => {
     const { sql, bridge } = await getCtx();
