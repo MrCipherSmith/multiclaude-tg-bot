@@ -1,6 +1,6 @@
 {
   "name": "helyx",
-  "version": "1.32.2",
+  "version": "1.32.3",
   "description": "Telegram bot that turns your phone into a Claude Code control panel — approve terminal commands, monitor multiple projects in forum topics, talk hands-free via voice",
   "keywords": ["telegram", "claude", "claude-code", "ai", "bot", "mcp", "voice", "typescript", "bun"],
   "repository": {

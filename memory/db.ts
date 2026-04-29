@@ -546,26 +546,39 @@ const migrations: Migration[] = [
       // `jsonb_typeof` is still 'string' for these columns. The 1MB
       // upper bound prevents accidental processing of pathologically
       // bloated rows (none expected in v1.32.0 schema, but cheap defense).
-      const tables: Array<{ table: string; column: string; hasUpdatedAt: boolean }> = [
-        { table: "sessions",        column: "metadata",   hasUpdatedAt: false },
-        { table: "sessions",        column: "cli_config", hasUpdatedAt: false },
-        { table: "admin_commands",  column: "payload",    hasUpdatedAt: true  },
-      ];
-      for (const { table, column, hasUpdatedAt } of tables) {
-        const setClause = hasUpdatedAt
-          ? `${column} = (${column}#>>'{}')::jsonb, updated_at = now()`
-          : `${column} = (${column}#>>'{}')::jsonb`;
-        await tx.unsafe(`
-          UPDATE ${table}
-          SET ${setClause}
-          WHERE jsonb_typeof(${column}) = 'string'
-            AND length(${column}::text) BETWEEN 4 AND 1048576
-            AND (
-              ${column}::text LIKE '"{%'
-              OR ${column}::text LIKE '"[%'
-            )
-        `);
-      }
+      //
+      // The three UPDATEs are written explicitly (not generated via a
+      // loop with string interpolation) for two reasons:
+      //   1. Avoid the `tx.unsafe()` + identifier-interpolation pattern
+      //      — even with a constant table list it normalizes a footgun
+      //      that future contributors may copy into untrusted contexts.
+      //   2. The v1.32.0 `admin_commands` table (created in migration
+      //      v5) does NOT have an `updated_at` column. A loop-driven
+      //      version would either need a per-table flag (and the wrong
+      //      flag value would silently hit a missing column) or assume
+      //      a uniform schema across all three tables. Hardcoded SQL
+      //      makes the schema-per-table contract obvious.
+      await tx`
+        UPDATE sessions
+        SET metadata = (metadata#>>'{}')::jsonb
+        WHERE jsonb_typeof(metadata) = 'string'
+          AND length(metadata::text) BETWEEN 4 AND 1048576
+          AND (metadata::text LIKE '"{%' OR metadata::text LIKE '"[%')
+      `;
+      await tx`
+        UPDATE sessions
+        SET cli_config = (cli_config#>>'{}')::jsonb
+        WHERE jsonb_typeof(cli_config) = 'string'
+          AND length(cli_config::text) BETWEEN 4 AND 1048576
+          AND (cli_config::text LIKE '"{%' OR cli_config::text LIKE '"[%')
+      `;
+      await tx`
+        UPDATE admin_commands
+        SET payload = (payload#>>'{}')::jsonb
+        WHERE jsonb_typeof(payload) = 'string'
+          AND length(payload::text) BETWEEN 4 AND 1048576
+          AND (payload::text LIKE '"{%' OR payload::text LIKE '"[%')
+      `;
     },
   },
 ];
@@ -587,8 +600,21 @@ const migrations: Migration[] = [
  *
  * Cheap: O(N) scan over a 22-element array, runs once per process start.
  */
-function validateMigrationRegistry(): void {
-  const versions = migrations.map((m) => m.version);
+// Exported for unit tests so the synthetic-bad-input cases call the real
+// implementation rather than a re-implementation that can drift from it.
+// Default-arg form preserves the production call site `validateMigrationRegistry()`.
+export function validateMigrationRegistry(input: ReadonlyArray<{ version: number }> = migrations): void {
+  const versions = input.map((m) => m.version);
+  // Sanity FIRST: integer + positive. The dedup and monotonicity checks
+  // below assume integer inputs (Set.has uses SameValueZero, which is
+  // fine for NaN, but the `<=` comparison in the monotonicity loop
+  // silently mis-orders fractional / non-finite values). Catching
+  // type validity up front means later checks only see well-formed input.
+  for (const v of versions) {
+    if (!Number.isInteger(v) || v < 1) {
+      throw new Error(`[db] invalid migration version: v${v}. Must be a positive integer.`);
+    }
+  }
   // Duplicate detection
   const seen = new Set<number>();
   for (const v of versions) {
@@ -604,13 +630,6 @@ function validateMigrationRegistry(): void {
         `[db] non-monotonic migration order at index ${i}: v${versions[i]} follows v${versions[i - 1]}. ` +
           `Migrations must be ordered strictly ascending by version.`,
       );
-    }
-  }
-  // Sanity: integer versions only — fractional versions break the
-  // `version > current` filter when MAX(schema_versions.version) is INT.
-  for (const v of versions) {
-    if (!Number.isInteger(v) || v < 1) {
-      throw new Error(`[db] invalid migration version: v${v}. Must be a positive integer.`);
     }
   }
 }

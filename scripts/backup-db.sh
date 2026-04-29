@@ -29,13 +29,16 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${PG_CONTAINER}$"; then
 fi
 
 OUT="$BACKUP_DIR/${DB_NAME}_${TIMESTAMP}.sql.gz"
-docker exec "$PG_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" --no-owner --no-acl \
+# Merge stderr into the pipe so cron / log collectors see pg_dump warnings
+# (e.g. "WARNING: schema permission denied for ...") that would otherwise
+# only land on the controlling terminal. `pipefail` then catches non-zero
+# exits from either pg_dump OR gzip.
+docker exec "$PG_CONTAINER" pg_dump -U "$DB_USER" -d "$DB_NAME" --no-owner --no-acl 2>&1 \
   | gzip -c > "$OUT"
 RC=$?
 
-# `pipefail` makes this catch failures from either pg_dump or gzip.
 if [ $RC -ne 0 ]; then
-  echo "[backup] FAILED — pg_dump returned $RC"
+  echo "[backup] FAILED — pipeline returned $RC"
   rm -f "$OUT"
   exit 1
 fi
@@ -49,11 +52,24 @@ if [ "$SIZE_BYTES" -lt 1024 ]; then
   exit 1
 fi
 
+# gzip integrity test catches the partial-write case: a disk-full or
+# IO error mid-stream produces a > 1 KB but corrupt archive that the
+# size check alone would let pass. `gzip -t` does a full-archive
+# verification by re-decompressing it; failure prints the error and
+# returns non-zero.
+if ! gzip -t "$OUT" 2>&1; then
+  echo "[backup] FAILED — gzip integrity check failed"
+  rm -f "$OUT"
+  exit 1
+fi
+
 SIZE=$(du -h "$OUT" | cut -f1)
 echo "[backup] OK: ${DB_NAME}_${TIMESTAMP}.sql.gz ($SIZE)"
 
-# Rotate: keep last N backups
-ls -t "$BACKUP_DIR"/${DB_NAME}_*.sql.gz 2>/dev/null | tail -n +$((KEEP_DAYS + 1)) | xargs rm -f 2>/dev/null
+# Rotate: keep last N backups. Quote the full path (not just $BACKUP_DIR)
+# so spaces in $BACKUP_DIR or $DB_NAME — both env-var-overridable —
+# don't cause word-splitting on the glob.
+ls -t "${BACKUP_DIR}/${DB_NAME}"_*.sql.gz 2>/dev/null | tail -n +$((KEEP_DAYS + 1)) | xargs -r rm -f
 
-REMAINING=$(ls "$BACKUP_DIR"/${DB_NAME}_*.sql.gz 2>/dev/null | wc -l)
+REMAINING=$(ls "${BACKUP_DIR}/${DB_NAME}"_*.sql.gz 2>/dev/null | wc -l)
 echo "[backup] Done. $REMAINING backups retained."

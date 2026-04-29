@@ -52,42 +52,33 @@ describe("migration registry invariants", () => {
     }
   });
 
-  test("validateMigrationRegistry rejects a duplicate-version registry (synthetic)", () => {
-    // We can't easily mutate the real `migrations` const, so re-implement
-    // the check inline against a synthetic bad list to confirm the
-    // expected error shape is what we want.
+  test("validateMigrationRegistry rejects a duplicate-version registry", async () => {
+    // Calls the REAL validator with a synthetic input — guards against the
+    // function's logic / error format drifting away from what tests assume.
+    const { validateMigrationRegistry } = await import("../../memory/db.ts");
     const bad = [{ version: 1 }, { version: 2 }, { version: 2 }];
-    function check(arr: { version: number }[]) {
-      const seen = new Set<number>();
-      for (const x of arr) {
-        if (seen.has(x.version)) throw new Error(`[db] duplicate migration version: v${x.version}`);
-        seen.add(x.version);
-      }
-    }
-    expect(() => check(bad)).toThrow(/duplicate migration version: v2/);
+    expect(() => validateMigrationRegistry(bad)).toThrow(/duplicate migration version: v2/);
   });
 
-  test("validateMigrationRegistry rejects a non-monotonic registry (synthetic)", () => {
+  test("validateMigrationRegistry rejects a non-monotonic registry", async () => {
+    const { validateMigrationRegistry } = await import("../../memory/db.ts");
     const bad = [{ version: 1 }, { version: 5 }, { version: 3 }];
-    function check(arr: { version: number }[]) {
-      for (let i = 1; i < arr.length; i++) {
-        if (arr[i]!.version <= arr[i - 1]!.version) {
-          throw new Error(`[db] non-monotonic migration order at index ${i}: v${arr[i]!.version} follows v${arr[i - 1]!.version}`);
-        }
-      }
-    }
-    expect(() => check(bad)).toThrow(/non-monotonic.*v3 follows v5/);
+    expect(() => validateMigrationRegistry(bad)).toThrow(/non-monotonic.*v3 follows v5/);
   });
 
-  test("validateMigrationRegistry rejects a fractional or zero version (synthetic)", () => {
-    const bad = [{ version: 1.5 }, { version: 0 }];
-    function check(arr: { version: number }[]) {
-      for (const x of arr) {
-        if (!Number.isInteger(x.version) || x.version < 1) {
-          throw new Error(`[db] invalid migration version: v${x.version}`);
-        }
-      }
-    }
-    expect(() => check(bad)).toThrow(/invalid migration version: v1\.5/);
+  test("validateMigrationRegistry rejects a fractional or zero version", async () => {
+    const { validateMigrationRegistry } = await import("../../memory/db.ts");
+    expect(() => validateMigrationRegistry([{ version: 1.5 }])).toThrow(/invalid migration version: v1\.5/);
+    expect(() => validateMigrationRegistry([{ version: 0 }])).toThrow(/invalid migration version: v0/);
+    expect(() => validateMigrationRegistry([{ version: -1 }])).toThrow(/invalid migration version: v-1/);
+  });
+
+  test("validateMigrationRegistry: integer check runs first (so monotonicity sees only well-formed inputs)", async () => {
+    const { validateMigrationRegistry } = await import("../../memory/db.ts");
+    // [1.5, 1] — fractional first; if integer check ran AFTER monotonicity,
+    // monotonicity would throw at "v1 follows v1.5". With integer-first
+    // ordering (the v1.32.3 fix) we get the cleaner "invalid migration
+    // version: v1.5" error.
+    expect(() => validateMigrationRegistry([{ version: 1.5 }, { version: 1 }])).toThrow(/invalid migration version: v1\.5/);
   });
 });

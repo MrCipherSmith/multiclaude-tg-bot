@@ -1,5 +1,59 @@
 # Changelog
 
+## v1.32.3
+
+### fix: review follow-ups (1 blocker + 1 major + 5 minor)
+
+Closes 7 findings from the v1.32.2 review pass.
+
+**[F-001] BLOCKER — migration v22 referenced `admin_commands.updated_at`** which
+is not part of the v1.32.0 schema (added only in archived agent-runtime
+migrations). On the live install the column happens to exist, but a fresh
+clone of v1.32.x would have failed to migrate with `column "updated_at"
+does not exist`. Migration v22 rewritten as three explicit `tx`-tagged
+SQL blocks (one per table); `admin_commands` no longer touches a
+non-existent column. Eliminates the table-list loop entirely.
+
+**[F-002] MAJOR — `tx.unsafe()` with interpolated identifiers**: replaced by
+three hardcoded `tx\`...\`` calls. No more pattern of "interpolate a
+table name into unsafe SQL" that future contributors might copy into
+untrusted contexts.
+
+**[F-003] MINOR — `validateMigrationRegistry` check ordering**: integer +
+positive check now runs FIRST. Previous order (dedup → monotonicity →
+integer) silently let fractional values pass earlier loops because the
+`<=` comparison in monotonicity is permissive on non-integers.
+
+**[F-004] MINOR — backup-db.sh pg_dump stderr swallowed**: added `2>&1`
+before the pipe so warnings land in the cron log file, not just on the
+controlling terminal.
+
+**[F-005] MINOR — backup-db.sh gzip integrity not verified**: added
+`gzip -t` after the size check. Catches the partial-write case (disk
+full mid-stream produces > 1 KB but corrupt archive that the size
+check alone would let pass).
+
+**[F-006] MINOR — backup-db.sh rotation glob unquoted**: quoted the full
+path `"${BACKUP_DIR}/${DB_NAME}"_*.sql.gz`. Defends against env-var
+overrides containing spaces.
+
+**[F-007] MINOR — migration-registry tests re-implemented the validator**:
+exported `validateMigrationRegistry(input?)` with default-arg
+preservation of the production call site. Synthetic-bad-input tests
+now call the real function via the new param. Drift between test
+expectations and implementation is no longer possible.
+
+### Tests
+
+`tests/unit/migration-registry.test.ts`: synthetic-bad-input cases
+now invoke the real validator; added a 4th case proving the
+integer-first ordering produces the cleaner error path. 151/151
+unit tests pass.
+
+### Live verification
+
+Backup script smoke: 212 KB dump, gzip-integrity OK, rotation honored.
+
 ## v1.32.2
 
 ### chore(migrations): validate registry on startup — reject dupes / non-monotonic / non-positive-int
