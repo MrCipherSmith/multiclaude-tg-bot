@@ -294,11 +294,14 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Synthesize via kesha-engine local TTS (Kokoro EN / Piper RU, auto-routed). Returns WAV buffer. */
+/** Synthesize via kesha-engine local TTS (Kokoro EN / Vosk-TTS RU, auto-routed). Returns WAV buffer.
+ *  Voice IDs configurable via KESHA_VOICE_RU / KESHA_VOICE_EN (defaults: ru-vosk-m02 / en-af_heart).
+ *  Kesha-voice-kit v1.5+ replaced Piper-RU with Vosk-TTS — pre-v1.5 ids (ru-denis, ru-irina, ...)
+ *  no longer resolve and the engine will exit non-zero. */
 export async function synthesizeKesha(text: string, isRussian: boolean): Promise<Buffer | null> {
   if (!CONFIG.KESHA_TTS_ENABLED || !CONFIG.KESHA_ENABLED) return null;
 
-  const voice = isRussian ? "ru-denis" : "en-af_heart";
+  const voice = isRussian ? CONFIG.KESHA_VOICE_RU : CONFIG.KESHA_VOICE_EN;
   const tmpFile = `/tmp/kesha-tts-${Date.now()}.wav`;
   try {
     const proc = Bun.spawn(
@@ -472,8 +475,12 @@ export async function synthesize(text: string): Promise<{ buf: Buffer; fmt: "mp3
 
   // auto (Russian): Yandex → Piper → Kesha → Groq
   // Yandex is first because it handles mixed Russian/English text correctly.
-  // Piper Russian (irina) is preferred over Kesha ru-denis (EN model quality).
-  // Kesha is last offline fallback before cloud Groq.
+  // Piper-RU (irina) was historically preferred over Kesha because pre-v1.5
+  // Kesha used Piper-RU under the hood with English-trained tail prosody.
+  // Kesha v1.5 swapped to Vosk-TTS (multi-speaker BERT prosody) — quality
+  // is now competitive with standalone Piper. Order is preserved for now to
+  // avoid changing observed behavior; flip Piper / Kesha later if Vosk-TTS
+  // is consistently better in practice.
   // auto (English): Piper(EN) → Kokoro → Kesha → Groq
   if (isRussian) {
     if (YANDEX_API_KEY && YANDEX_FOLDER_ID) {

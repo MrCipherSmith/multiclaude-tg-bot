@@ -1,5 +1,50 @@
 # Changelog
 
+## v1.32.4
+
+### feat: kesha-voice-kit v1.5 compatibility (Vosk-TTS for Russian)
+
+Kesha v1.5.0 (2026-04-29) replaced Piper-RU with Vosk-TTS — multi-speaker,
+BERT prosody, dictionary G2P. Pre-v1.5 voice IDs (`ru-denis`, `ru-irina`)
+no longer resolve. The Russian quality user complaint from v1.32.0 is
+the explicit motivation for the upstream change.
+
+**Changes**:
+- `config.ts`: new `KESHA_VOICE_RU` (default `ru-vosk-m02`) and
+  `KESHA_VOICE_EN` (default `en-af_heart`). Operators who need a
+  different speaker can override via env without code change.
+  Available RU voices: `ru-vosk-{m01,m02,f01,f02,f03}`. macOS users
+  can also use `macos-com.apple.voice.compact.ru-RU.Milena` for the
+  zero-install AVSpeech path.
+- `utils/tts.ts:synthesizeKesha`: voice ID now read from config
+  (was hardcoded `"ru-denis"` / `"en-af_heart"`).
+- `utils/tts.ts` (auto-routing comment): updated to reflect that
+  Kesha's Russian quality is now competitive with Piper-RU under
+  Vosk-TTS. Order preserved (Yandex → Piper → Kesha → Groq) for
+  observable-behavior continuity; can flip Piper / Kesha later if
+  Vosk-TTS proves consistently better in practice.
+- `.env.example`: documented the new envs + the pre-v1.5 ID
+  deprecation. Comment also points at `kesha install --tts` (~990 MB
+  download for new models) and the `~/.cache/kesha/models/{g2p,piper-ru}`
+  cleanup that operators upgrading from v1.4.x can run to reclaim
+  ~700 MB.
+
+**Operational steps for upgrade** (operator-side, not code):
+```bash
+bun add -g @drakulavich/kesha-voice-kit@latest
+kesha install --tts                          # ~990 MB
+rm -rf ~/.cache/kesha/models/{g2p,piper-ru}  # reclaim ~700 MB
+```
+
+Existing installs that don't upgrade kesha-engine will keep working —
+helyx defaults `KESHA_VOICE_RU=ru-vosk-m02` which the pre-v1.5 engine
+will reject as "unknown voice", logging a warning. The fallback chain
+(Yandex → Piper → Groq) still produces audio, just without Kesha's
+contribution. Operators can also pin the old engine + override
+`KESHA_VOICE_RU=ru-denis` to keep current behavior.
+
+151/151 unit tests pass.
+
 ## v1.32.3
 
 ### fix: review follow-ups (1 blocker + 1 major + 5 minor)

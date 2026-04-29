@@ -85,6 +85,13 @@ const EnvSchema = z.object({
   KESHA_ENABLED: z.string().default("false").transform((s) => s === "true"),
   KESHA_TTS_ENABLED: z.string().default("false").transform((s) => s === "true"),
   KESHA_BIN: z.string().default("kesha-engine"),
+  // Voice IDs (kesha-voice-kit v1.5+).
+  // RU: Vosk-TTS multi-speaker. Options: ru-vosk-{m01,m02,f01,f02,f03}.
+  //     macOS users can also use macos-com.apple.voice.compact.ru-RU.Milena.
+  // EN: Kokoro pipeline. af_heart is the default brand voice.
+  // Pre-v1.5 ids (ru-denis, ru-irina, ...) no longer resolve.
+  KESHA_VOICE_RU: z.string().default("ru-vosk-m02"),
+  KESHA_VOICE_EN: z.string().default("en-af_heart"),
   // Benchmark mode: run current + kesha pipelines in parallel and report stats
   KESHA_BENCHMARK: z.string().default("false").transform((s) => s === "true"),
 
@@ -205,6 +212,8 @@ export const CONFIG = {
   KESHA_ENABLED: env.KESHA_ENABLED,
   KESHA_TTS_ENABLED: env.KESHA_TTS_ENABLED,
   KESHA_BIN: env.KESHA_BIN,
+  KESHA_VOICE_RU: env.KESHA_VOICE_RU,
+  KESHA_VOICE_EN: env.KESHA_VOICE_EN,
   KESHA_BENCHMARK: env.KESHA_BENCHMARK,
 
   // Security / paths
