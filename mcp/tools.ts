@@ -10,6 +10,7 @@ import { maybeAttachVoice } from "../utils/tts.ts";
 import { handleSkillView } from "../utils/skill-handlers.ts";
 import { distillSkill, listAgentSkills, approveSkill, rejectSkill, validateSkillInput } from "../utils/skill-distiller.ts";
 import { sendSkillApprovalMessage } from "../utils/skill-approval.ts";
+import { runCurator, getCuratorRuns } from "../utils/curator.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -238,6 +239,24 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: "object" as const,
       properties: {},
+    },
+  },
+  {
+    name: "curator_run",
+    description: "Manually trigger a curator run to review agent-created skills",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "curator_status",
+    description: "Get curator run history",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        limit: { type: "number", description: "Number of runs to return (default 10)", default: 10 },
+      },
     },
   },
 ];
@@ -573,6 +592,24 @@ export async function executeTool(
       const rows = await listAgentSkills();
       const formatted = rows.map((r) => `${r.name}: ${r.description} (${r.status})`).join("\n");
       return text(formatted || "No active skills");
+    }
+
+    case "curator_run": {
+      const result = await runCurator();
+      return text(JSON.stringify({
+        status: result.status,
+        summary: result.summary,
+        skillsExamined: result.skillsExamined,
+        skillsPinned: result.skillsPinned,
+        skillsArchived: result.skillsArchived,
+      }));
+    }
+
+    case "curator_status": {
+      const limit = Number(args.limit ?? 10);
+      const rows = await getCuratorRuns(limit);
+      const formatted = rows.map((r) => `#${r.id} [${r.status}] ${r.started_at}: ${r.skills_examined} examined, ${r.skills_pinned} pinned, ${r.skills_archived} archived`).join("\n");
+      return text(formatted || "No curator runs");
     }
 
     default:
