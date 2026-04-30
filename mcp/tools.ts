@@ -7,6 +7,7 @@ import { chunkText } from "../utils/chunk.ts";
 import { tryAutoLink } from "./pending-expects.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { maybeAttachVoice } from "../utils/tts.ts";
+import { handleSkillView } from "../utils/skill-handlers.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -190,6 +191,17 @@ export const TOOL_DEFINITIONS = [
         },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "skill_view",
+    description: "Load a skill and return its content with inline shell tokens expanded. Use this when you need to read a Hermes-style skill file that contains dynamic context via !`cmd` syntax.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Skill name (kebab-case, e.g. 'git-state')" },
+      },
+      required: ["name"],
     },
   },
 ];
@@ -451,6 +463,10 @@ export async function executeTool(
               })),
             }, null, 2),
       );
+    }
+
+    case "skill_view": {
+      return text(await handleSkillView(args.name, { sql }));
     }
 
     default:
