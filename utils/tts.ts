@@ -294,16 +294,158 @@ async function synthesizeOpenAI(text: string): Promise<Buffer | null> {
   return Buffer.from(await res.arrayBuffer());
 }
 
+type KeshaResp =
+  | { ok: true; sample_rate: number; samples: number; wav_bytes: number }
+  | { ok: false; error: string };
+
+/**
+ * Long-lived `kesha-engine serve` process. The daemon protocol (see
+ * docs/tts.md in kesha-voice-kit) is line-delimited JSON on stdin/stdout —
+ * one request per line, one response per line, processed sequentially.
+ * Holding the daemon open avoids re-loading the ~890 MB Vosk-RU model and
+ * ~150 MB BERT prosody encoder on every synthesis call.
+ *
+ * Phase 1 of the daemon supports Vosk-RU only; Kokoro / AVSpeech requests
+ * return `{ok:false}` with an explanatory error and the caller should fall
+ * back to the one-shot `say` path.
+ */
+class KeshaDaemon {
+  private proc: ReturnType<typeof Bun.spawn> | null = null;
+  private stdinWriter: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  private buffer = "";
+  private pending: Array<{ resolve: (r: KeshaResp) => void; reject: (e: Error) => void }> = [];
+  private writeLock: Promise<void> = Promise.resolve();
+  private startPromise: Promise<void> | null = null;
+
+  private async start(): Promise<void> {
+    if (this.proc) return;
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.doStart();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async doStart(): Promise<void> {
+    channelLogger.info({ bin: CONFIG.KESHA_BIN }, "tts: starting kesha-engine serve daemon");
+    const proc = Bun.spawn([CONFIG.KESHA_BIN, "serve"], {
+      stdin: "pipe",
+      stdout: "pipe",
+      stderr: "inherit",
+    });
+    this.proc = proc;
+    this.stdinWriter = (proc.stdin as WritableStream<Uint8Array>).getWriter();
+    void this.readLoop(proc.stdout as ReadableStream<Uint8Array>);
+    void proc.exited.then((code) => {
+      channelLogger.warn({ code }, "tts: kesha daemon exited");
+      this.cleanup();
+    });
+  }
+
+  private async readLoop(stdout: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = stdout.getReader();
+    const decoder = new TextDecoder();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        this.buffer += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = this.buffer.indexOf("\n")) >= 0) {
+          const line = this.buffer.slice(0, nl).trim();
+          this.buffer = this.buffer.slice(nl + 1);
+          if (!line) continue;
+          const handler = this.pending.shift();
+          if (!handler) {
+            channelLogger.warn({ line: line.slice(0, 200) }, "tts: kesha daemon line with no pending handler");
+            continue;
+          }
+          try {
+            handler.resolve(JSON.parse(line) as KeshaResp);
+          } catch (e) {
+            handler.reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        }
+      }
+    } catch (err) {
+      channelLogger.error({ err }, "tts: kesha daemon read loop crashed");
+    } finally {
+      this.cleanup();
+    }
+  }
+
+  private cleanup(): void {
+    this.proc = null;
+    this.stdinWriter = null;
+    this.buffer = "";
+    while (this.pending.length) {
+      this.pending.shift()!.reject(new Error("kesha daemon died"));
+    }
+  }
+
+  async say(req: { text: string; voice: string; out: string; rate?: number }): Promise<KeshaResp> {
+    await this.start();
+    const writer = this.stdinWriter;
+    if (!writer) throw new Error("kesha daemon not running");
+
+    // Lock the push-resolver + write pair so concurrent callers don't
+    // interleave: pending[] order must match the order requests arrive at
+    // the daemon, otherwise responses dispatch to the wrong promise.
+    const prev = this.writeLock;
+    let release!: () => void;
+    this.writeLock = new Promise<void>((r) => {
+      release = r;
+    });
+    try {
+      await prev;
+      const promise = new Promise<KeshaResp>((resolve, reject) => {
+        this.pending.push({ resolve, reject });
+      });
+      await writer.write(new TextEncoder().encode(JSON.stringify(req) + "\n"));
+      return promise;
+    } finally {
+      release();
+    }
+  }
+}
+
+let _keshaDaemon: KeshaDaemon | null = null;
+function getKeshaDaemon(): KeshaDaemon {
+  if (!_keshaDaemon) _keshaDaemon = new KeshaDaemon();
+  return _keshaDaemon;
+}
+
 /** Synthesize via kesha-engine local TTS (Kokoro EN / Vosk-TTS RU, auto-routed). Returns WAV buffer.
  *  Voice IDs configurable via KESHA_VOICE_RU / KESHA_VOICE_EN (defaults: ru-vosk-m02 / en-af_heart).
  *  Kesha-voice-kit v1.5+ replaced Piper-RU with Vosk-TTS — pre-v1.5 ids (ru-denis, ru-irina, ...)
- *  no longer resolve and the engine will exit non-zero. */
+ *  no longer resolve and the engine will exit non-zero.
+ *  Russian routes through the long-lived `kesha-engine serve` daemon to skip the
+ *  ~890 MB Vosk model reload on each call; English keeps the one-shot `say` path
+ *  until the daemon's phase-2 wires Kokoro in. */
 export async function synthesizeKesha(text: string, isRussian: boolean): Promise<Buffer | null> {
   if (!CONFIG.KESHA_TTS_ENABLED || !CONFIG.KESHA_ENABLED) return null;
 
   const voice = isRussian ? CONFIG.KESHA_VOICE_RU : CONFIG.KESHA_VOICE_EN;
-  const tmpFile = `/tmp/kesha-tts-${Date.now()}.wav`;
+  const tmpFile = `/tmp/kesha-tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.wav`;
+  const useDaemon = voice.startsWith("ru-vosk-");
+  const t0 = Date.now();
   try {
+    if (useDaemon) {
+      const resp = await getKeshaDaemon().say({
+        text: text.slice(0, 5000),
+        voice,
+        out: tmpFile,
+      });
+      if (!resp.ok) {
+        channelLogger.warn({ error: resp.error, voice }, "tts: kesha daemon say returned ok:false");
+        return null;
+      }
+      const buf = await Bun.file(tmpFile).arrayBuffer();
+      channelLogger.info({ elapsedMs: Date.now() - t0, wavBytes: resp.wav_bytes }, "tts: kesha daemon ok");
+      return Buffer.from(buf);
+    }
     const proc = Bun.spawn(
       [CONFIG.KESHA_BIN, "say", "--voice", voice, "--out", tmpFile, text.slice(0, 5000)],
       { stdout: "ignore", stderr: "ignore" },
@@ -314,9 +456,10 @@ export async function synthesizeKesha(text: string, isRussian: boolean): Promise
       return null;
     }
     const buf = await Bun.file(tmpFile).arrayBuffer();
+    channelLogger.info({ elapsedMs: Date.now() - t0 }, "tts: kesha say ok (one-shot)");
     return Buffer.from(buf);
   } catch (err) {
-    channelLogger.error({ err }, "tts: kesha say error");
+    channelLogger.error({ err }, "tts: kesha synthesis error");
     return null;
   } finally {
     unlink(tmpFile, () => {});

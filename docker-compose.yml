@@ -1,6 +1,14 @@
 services:
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        # Bake kesha TTS models (~990 MB: Kokoro EN + Vosk-RU multi-speaker)
+        # into the image so the long-lived `kesha-engine serve` daemon can
+        # resolve `ru-vosk-*` voice ids without a runtime download. Without
+        # this the install layer skips --tts and Russian synthesis fails with
+        # "voice not installed". See Dockerfile ARG KESHA_INSTALL_TTS.
+        KESHA_INSTALL_TTS: "true"
     restart: unless-stopped
     ports:
       - "127.0.0.1:${PORT:-3847}:${PORT:-3847}"

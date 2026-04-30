@@ -30,9 +30,12 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install kesha-engine binary (linux-x64 only — darwin handled at runtime).
-# v1.5.0: Vosk-TTS for Russian (replaces Piper-RU), misaki-rs G2P for English.
+# v1.6.0-helyx.1: helyx-targeted build with `serve` subcommand (long-lived
+# TTS daemon, Vosk-RU phase 1). Drops the ~890 MB Vosk model reload on every
+# Russian synthesis call; helyx's utils/tts.ts spawns the daemon once and
+# pipes line-delimited JSON. Releases live on the MrCipherSmith fork.
 RUN curl -fsSL -o /usr/local/bin/kesha-engine \
-      "https://github.com/drakulavich/kesha-voice-kit/releases/download/v1.5.0/kesha-engine-linux-x64" && \
+      "https://github.com/MrCipherSmith/kesha-voice-kit/releases/download/v1.6.0-helyx.1/kesha-engine-linux-x64" && \
     chmod +x /usr/local/bin/kesha-engine
 
 # Bake kesha models BEFORE source copy so this layer is cached across code changes.
