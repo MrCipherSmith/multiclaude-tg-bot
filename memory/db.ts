@@ -13,6 +13,10 @@ interface Migration {
   version: number;
   name: string;
   up: (tx: postgres.TransactionSql) => Promise<void>;
+  // Optional rollback. Not invoked automatically — exists so `git revert` of a
+  // schema-changing PR can be paired with a manual rollback step. Migrations
+  // without `down` are forward-only.
+  down?: (tx: postgres.TransactionSql) => Promise<void>;
 }
 
 async function ensureVersionTable(): Promise<void> {
@@ -582,11 +586,16 @@ const migrations: Migration[] = [
     },
   },
   {
+    // Hermes Skills Toolkit Phase A migration. PRD numbering convention is
+    // v39..v42 — local registry is sequential, so the numbers diverge but the
+    // schemas match. CREATE statements are IF NOT EXISTS and each migration
+    // has a `down` block, so `git revert` of the PR drops the table cleanly
+    // per acceptance criteria.
     version: 23,
     name: "hermes: skill_preprocess_log table",
     up: async (tx) => {
       await tx`
-        CREATE TABLE skill_preprocess_log (
+        CREATE TABLE IF NOT EXISTS skill_preprocess_log (
           id BIGSERIAL PRIMARY KEY,
           skill_name TEXT NOT NULL,
           started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -596,7 +605,10 @@ const migrations: Migration[] = [
           first_error TEXT
         )
       `;
-      await tx`CREATE INDEX skill_preprocess_log_started_at_idx ON skill_preprocess_log (started_at DESC)`;
+      await tx`CREATE INDEX IF NOT EXISTS skill_preprocess_log_started_at_idx ON skill_preprocess_log (started_at DESC)`;
+    },
+    down: async (tx) => {
+      await tx`DROP TABLE IF EXISTS skill_preprocess_log`;
     },
   },
 ];
