@@ -24,6 +24,7 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     data.startsWith("skill:reject:") ||
     data.startsWith("skill:editname:")
   ) return handleSkillApprovalCallback(ctx);
+  if (data.startsWith("cur:approve:") || data.startsWith("cur:skip:")) return handleCuratorApprovalCallback(ctx);
   if (data.startsWith("skill:") || data.startsWith("cmd:")) return handleToolCallback(ctx);
   if (data.startsWith("set_model:")) {
     const { handleSetModelCallback } = await import("./commands/model.ts");
@@ -126,6 +127,47 @@ async function handleSkillApprovalCallback(ctx: Context): Promise<void> {
   } else {
     await ctx.answerCallbackQuery({ text: "Unknown action" });
   }
+}
+
+// FR-B-6: handle [Approve] / [Skip] inline buttons on curator pending actions.
+async function handleCuratorApprovalCallback(ctx: Context): Promise<void> {
+  const data = ctx.callbackQuery?.data ?? "";
+  const parts = data.split(":");
+  const action = parts[1]; // 'approve' | 'skip'
+  const actionId = Number(parts[2]);
+  if (!Number.isFinite(actionId) || actionId <= 0) {
+    await ctx.answerCallbackQuery({ text: "Invalid action id" });
+    return;
+  }
+
+  const rows = await sql`SELECT skill_name, action, status, created_at FROM curator_pending_actions WHERE id = ${actionId}`;
+  if (rows.length === 0) {
+    await ctx.answerCallbackQuery({ text: "Action not found" });
+    return;
+  }
+  const pending = rows[0] as { skill_name: string; action: string; status: string; created_at: Date };
+  if (pending.status !== "pending") {
+    await ctx.answerCallbackQuery({ text: `Already ${pending.status}` });
+    return;
+  }
+  if (Date.now() - new Date(pending.created_at).getTime() > 24 * 60 * 60 * 1000) {
+    await sql`UPDATE curator_pending_actions SET status = 'expired', decided_at = now() WHERE id = ${actionId}`;
+    await ctx.answerCallbackQuery({ text: "Expired" });
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
+    return;
+  }
+
+  const newStatus = action === "approve" ? "approved" : "skipped";
+  await sql`UPDATE curator_pending_actions SET status = ${newStatus}, decided_at = now() WHERE id = ${actionId}`;
+  await ctx.answerCallbackQuery({ text: newStatus });
+  await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
+  await ctx.reply(
+    `${newStatus === "approved" ? "✅" : "⏭"} Curator action <code>${pending.action}</code> on <code>${pending.skill_name}</code> ${newStatus}.`,
+    { parse_mode: "HTML" },
+  );
+  // Note: actually applying 'approve' (running consolidate/patch) is a follow-up.
+  // The user decision is recorded; the application step needs the diff/target-skill
+  // body fetch which is not yet wired through the aux-LLM.
 }
 
 async function handleToolCallback(ctx: Context): Promise<void> {

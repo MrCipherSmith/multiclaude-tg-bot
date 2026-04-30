@@ -675,7 +675,7 @@ const migrations: Migration[] = [
     name: "hermes: curator_runs table",
     up: async (tx) => {
       await tx`
-        CREATE TABLE curator_runs (
+        CREATE TABLE IF NOT EXISTS curator_runs (
           id BIGSERIAL PRIMARY KEY,
           started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
           finished_at TIMESTAMPTZ,
@@ -691,7 +691,37 @@ const migrations: Migration[] = [
           summary TEXT
         )
       `;
-      await tx`CREATE INDEX curator_runs_started_at_idx ON curator_runs (started_at DESC)`;
+      await tx`CREATE INDEX IF NOT EXISTS curator_runs_started_at_idx ON curator_runs (started_at DESC)`;
+    },
+    down: async (tx) => {
+      await tx`DROP TABLE IF EXISTS curator_runs`;
+    },
+  },
+  {
+    version: 27,
+    name: "hermes: curator_pending_actions table — human-approval queue (FR-B-6)",
+    up: async (tx) => {
+      // Phase B's risky actions (consolidate, patch) are queued here pending
+      // user [Approve]/[Skip] in Telegram. Rows expire 24h after creation —
+      // see `getPendingCuratorActions` in utils/curator.ts.
+      await tx`
+        CREATE TABLE IF NOT EXISTS curator_pending_actions (
+          id BIGSERIAL PRIMARY KEY,
+          run_id BIGINT NOT NULL REFERENCES curator_runs(id) ON DELETE CASCADE,
+          skill_name TEXT NOT NULL,
+          action TEXT NOT NULL,
+          reason TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          telegram_chat_id TEXT,
+          telegram_message_id BIGINT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          decided_at TIMESTAMPTZ
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS curator_pending_actions_status_idx ON curator_pending_actions (status, created_at DESC)`;
+    },
+    down: async (tx) => {
+      await tx`DROP TABLE IF EXISTS curator_pending_actions`;
     },
   },
 ];

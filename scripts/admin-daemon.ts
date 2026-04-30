@@ -13,7 +13,8 @@
 import { resolve } from "path";
 import { startTmuxWatchdog } from "./tmux-watchdog.ts";
 import { startSupervisor } from "./supervisor.ts";
-import { runCurator } from "../utils/curator.ts";
+import { runCurator, getLastCuratorRun } from "../utils/curator.ts";
+import { sendCuratorSummary } from "../utils/skill-approval.ts";
 
 const BOT_DIR = resolve(import.meta.dir, "..");
 const CLI = resolve(BOT_DIR, "cli.ts");
@@ -40,33 +41,83 @@ const sql = postgres(process.env.DATABASE_URL, { max: 3 });
 
 console.log("[admin-daemon] started, polling for commands...");
 
-// Curator cron — run weekly on Sundays at 03:00 UTC
+// Curator cron — default: Sundays at 03:00 UTC. Supports DOW + H + M fields
+// (day-of-month and month positions are ignored by design — see PRD Phase B).
 const CURATOR_CRON = process.env.HELYX_CURATOR_CRON ?? "0 3 * * 0";
 const [curatorMin, curatorHour, , , curatorDow] = CURATOR_CRON.split(" ");
-let lastCuratorRun = 0;
+const CURATOR_RUN_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24h between runs
+const CURATOR_CHECK_INTERVAL_MS = 5 * 60 * 1000; // poll every 5 min — narrows the firing window
+
+// Persisted across restarts via curator_runs.MAX(started_at) so a crash
+// in the firing window does NOT cause double-runs after restart.
+let lastCuratorRunMs = 0;
+
+async function loadLastCuratorRun(): Promise<void> {
+  try {
+    const row = await getLastCuratorRun();
+    if (row) lastCuratorRunMs = new Date(row.started_at).getTime();
+  } catch (err) {
+    console.warn("[admin-daemon] failed to load last curator run:", err);
+  }
+}
+
+function isCronMatch(now: Date): boolean {
+  const dow = String(now.getUTCDay());
+  const hour = now.getUTCHours();
+  const min = now.getUTCMinutes();
+
+  const dowOk = curatorDow === "*"
+    || curatorDow === dow
+    || (curatorDow.includes(",") && curatorDow.split(",").includes(dow));
+  const hourOk = curatorHour === "*" || hour === parseInt(curatorHour, 10);
+  // Window of CURATOR_CHECK_INTERVAL_MS / 60_000 minutes from the scheduled minute.
+  const targetMin = curatorMin === "*" ? -1 : parseInt(curatorMin, 10);
+  const minOk = curatorMin === "*"
+    || (min >= targetMin && min < targetMin + Math.ceil(CURATOR_CHECK_INTERVAL_MS / 60_000));
+
+  return dowOk && hourOk && minOk;
+}
 
 async function maybeRunCurator() {
   if (process.env.HELYX_CURATOR_PAUSED === "true") return;
   const now = new Date();
-  const dow = now.getUTCDay();
-  const hour = now.getUTCHours();
-  const min = now.getUTCMinutes();
+  if (!isCronMatch(now)) return;
+  if (Date.now() - lastCuratorRunMs <= CURATOR_RUN_INTERVAL_MS) return;
 
-  const shouldRun = 
-    (curatorDow === "*" || (curatorDow === String(dow) || (curatorDow.includes(",") && curatorDow.split(",").includes(String(dow))))) &&
-    (curatorHour === "*" || hour === parseInt(curatorHour)) &&
-    (curatorMin === "*" || min < 5);
-
-  if (shouldRun && Date.now() - lastCuratorRun > 24 * 60 * 60 * 1000) {
-    console.log("[admin-daemon] running curator...");
-    lastCuratorRun = Date.now();
-    runCurator().then((r) => console.log("[admin-daemon] curator:", r.status, r.summary)).catch(console.error);
+  console.log("[admin-daemon] running curator...");
+  lastCuratorRunMs = Date.now();
+  try {
+    const r = await runCurator();
+    console.log("[admin-daemon] curator:", r.status, r.summary);
+    const supervisorChat = process.env.SUPERVISOR_CHAT_ID;
+    const supervisorTopic = process.env.SUPERVISOR_TOPIC_ID
+      ? parseInt(process.env.SUPERVISOR_TOPIC_ID, 10) || undefined
+      : undefined;
+    if (supervisorChat) {
+      await sendCuratorSummary(
+        {
+          examined: r.skillsExamined,
+          pinned: r.skillsPinned,
+          archived: r.skillsArchived,
+          proposedConsolidate: r.skillsProposedConsolidate,
+          proposedPatch: r.skillsProposedPatch,
+          costUsd: r.auxLlmCostUsd,
+          status: r.status,
+          error: r.errorMessage,
+        },
+        supervisorChat,
+        supervisorTopic,
+      );
+    }
+  } catch (err) {
+    console.error("[admin-daemon] curator error:", err);
   }
 }
 
-// Run curator check every hour
-setInterval(maybeRunCurator, 60 * 60 * 1000);
-maybeRunCurator();
+await loadLastCuratorRun();
+setInterval(maybeRunCurator, CURATOR_CHECK_INTERVAL_MS);
+// Don't fire on startup — wait for the first interval tick. Otherwise a
+// daemon restart inside the firing window double-runs even with the 24h gate.
 
 // Recover stuck commands from previous crash
 await sql`UPDATE admin_commands SET status = 'pending', updated_at = now()
