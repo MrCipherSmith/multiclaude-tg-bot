@@ -13,6 +13,7 @@
 import { resolve } from "path";
 import { startTmuxWatchdog } from "./tmux-watchdog.ts";
 import { startSupervisor } from "./supervisor.ts";
+import { runCurator } from "../utils/curator.ts";
 
 const BOT_DIR = resolve(import.meta.dir, "..");
 const CLI = resolve(BOT_DIR, "cli.ts");
@@ -38,6 +39,34 @@ const postgres = (await import("postgres")).default;
 const sql = postgres(process.env.DATABASE_URL, { max: 3 });
 
 console.log("[admin-daemon] started, polling for commands...");
+
+// Curator cron — run weekly on Sundays at 03:00 UTC
+const CURATOR_CRON = process.env.HELYX_CURATOR_CRON ?? "0 3 * * 0";
+const [curatorMin, curatorHour, , , curatorDow] = CURATOR_CRON.split(" ");
+let lastCuratorRun = 0;
+
+async function maybeRunCurator() {
+  if (process.env.HELYX_CURATOR_PAUSED === "true") return;
+  const now = new Date();
+  const dow = now.getUTCDay();
+  const hour = now.getUTCHours();
+  const min = now.getUTCMinutes();
+
+  const shouldRun = 
+    (curatorDow === "*" || (curatorDow === String(dow) || (curatorDow.includes(",") && curatorDow.split(",").includes(String(dow))))) &&
+    (curatorHour === "*" || hour === parseInt(curatorHour)) &&
+    (curatorMin === "*" || min < 5);
+
+  if (shouldRun && Date.now() - lastCuratorRun > 24 * 60 * 60 * 1000) {
+    console.log("[admin-daemon] running curator...");
+    lastCuratorRun = Date.now();
+    runCurator().then((r) => console.log("[admin-daemon] curator:", r.status, r.summary)).catch(console.error);
+  }
+}
+
+// Run curator check every hour
+setInterval(maybeRunCurator, 60 * 60 * 1000);
+maybeRunCurator();
 
 // Recover stuck commands from previous crash
 await sql`UPDATE admin_commands SET status = 'pending', updated_at = now()

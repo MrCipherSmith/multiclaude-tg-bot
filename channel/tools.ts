@@ -15,6 +15,7 @@ import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { CONFIG } from "../config.ts";
 import { expandInlineShell, parseFrontmatter, hasInlineShellTokens } from "../utils/skill-preprocessor.ts";
 import { distillSkill, listAgentSkills, approveSkill, rejectSkill, validateSkillInput } from "../utils/skill-distiller.ts";
+import { runCurator, getCuratorRuns } from "../utils/curator.ts";
 
 export interface ToolContext {
   sql: postgres.Sql;
@@ -241,6 +242,19 @@ export function registerTools(
         name: "list_agent_skills",
         description: "List all active agent-created skills",
         inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "curator_run",
+        description: "Manually trigger a curator run",
+        inputSchema: { type: "object", properties: {} },
+      },
+      {
+        name: "curator_status",
+        description: "Get curator run history",
+        inputSchema: {
+          type: "object",
+          properties: { limit: { type: "number", description: "Number of runs (default 10)" } },
+        },
       },
     ],
   }));
@@ -691,6 +705,24 @@ export function registerTools(
         const rows = await listAgentSkills();
         const formatted = rows.map((r) => `${r.name}: ${r.description} (${r.status})`).join("\n");
         return text(formatted || "No active skills");
+      }
+
+      case "curator_run": {
+        const result = await runCurator();
+        return text(JSON.stringify({
+          status: result.status,
+          summary: result.summary,
+          skillsExamined: result.skillsExamined,
+          skillsPinned: result.skillsPinned,
+          skillsArchived: result.skillsArchived,
+        }));
+      }
+
+      case "curator_status": {
+        const limit = Number(args!.limit ?? 10);
+        const rows = await getCuratorRuns(limit);
+        const formatted = rows.map((r) => `#${r.id} [${r.status}] ${r.started_at}: ${r.skills_examined} examined, ${r.skills_pinned} pinned, ${r.skills_archived} archived`).join("\n");
+        return text(formatted || "No curator runs");
       }
 
       default:

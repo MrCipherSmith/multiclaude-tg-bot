@@ -208,6 +208,20 @@ function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => s
     {},
     async (args) => exec("list_agent_skills", args),
   );
+
+  server.tool(
+    "curator_run",
+    "Manually trigger a curator run to review agent-created skills",
+    {},
+    async (args) => exec("curator_run", args),
+  );
+
+  server.tool(
+    "curator_status",
+    "Get curator run history",
+    { limit: z.number().optional().describe("Number of runs to return (default 10)") },
+    async (args) => exec("curator_status", args),
+  );
 }
 
 function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined): McpServer {
