@@ -670,6 +670,30 @@ const migrations: Migration[] = [
       await tx`DROP TABLE IF EXISTS aux_llm_invocations`;
     },
   },
+  {
+    version: 26,
+    name: "hermes: curator_runs table",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE curator_runs (
+          id BIGSERIAL PRIMARY KEY,
+          started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          finished_at TIMESTAMPTZ,
+          duration_ms INTEGER,
+          status TEXT NOT NULL,
+          skills_examined INTEGER NOT NULL DEFAULT 0,
+          skills_pinned INTEGER NOT NULL DEFAULT 0,
+          skills_archived INTEGER NOT NULL DEFAULT 0,
+          skills_proposed_consolidate INTEGER NOT NULL DEFAULT 0,
+          skills_proposed_patch INTEGER NOT NULL DEFAULT 0,
+          aux_llm_cost_usd NUMERIC(10, 6),
+          error_message TEXT,
+          summary TEXT
+        )
+      `;
+      await tx`CREATE INDEX curator_runs_started_at_idx ON curator_runs (started_at DESC)`;
+    },
+  },
 ];
 
 // --- Public API ---
