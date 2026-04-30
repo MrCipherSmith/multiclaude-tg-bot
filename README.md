@@ -132,6 +132,12 @@ This bot is a full **[Model Context Protocol](https://modelcontextprotocol.io) s
 - **File Forwarding** — photos, documents, and videos forwarded to Claude via MCP with base64 (≤5 MB images) or file path; if sent without caption, bot asks what to do before forwarding
 - **Auto-Summarization** — idle conversations are summarized to long-term memory after 15 min
 
+### Skills Toolkit (Hermes-inspired) — `v1.35.0`
+- **Inline Shell Expansion** — SKILL.md bodies can embed `` !`cmd` `` tokens that resolve to shell output at load time, eliminating one tool-call round-trip per dynamic dependency. Sandboxed: explicit env allowlist (no `process.env` inheritance — `` !`echo $DEEPSEEK_API_KEY` `` cannot leak secrets), 5 s timeout with SIGTERM → 500 ms grace → SIGKILL fallback, 4096-char output cap, concurrent pipe drain. Demo: `skills/git-state/SKILL.md`.
+- **Autonomous Skill Creator** — after a multi-step success, the agent can distill the workflow into a reusable SKILL.md via aux-LLM (DeepSeek default; Ollama / OpenRouter fallback). The proposed skill arrives in Telegram with a `[Save] / [Reject] / [Edit name…]` keyboard; on approval it's persisted to `agent_created_skills` in postgres and atomically materialized to `~/.claude/skills/agent-created/<name>/SKILL.md` for Claude Code's native loader.
+- **Skill Curator** — weekly cron (Sundays 03:00 UTC, configurable) reviews `agent_created_skills`: auto-pins frequently-used (use_count > 10, last 14 days), auto-archives stale (>90 days idle), queues consolidate/patch proposals for human approval (`[Approve] / [Skip]`, 24 h expiry). Aux-LLM is fully isolated — Anthropic prompt cache for the main session is never touched. Cost is logged per run in `aux_llm_invocations`.
+- **Observability** — every preprocessor invocation, distillation, and curator run is logged to postgres (`skill_preprocess_log`, `aux_llm_invocations`, `curator_runs`, `curator_pending_actions`).
+
 ### Session Lifecycle
 - **Persistent Projects** — `projects` table as single source of truth; added via `/project_add` (bot) or `helyx add` (CLI) — both write to the same DB; `helyx up` reads from DB directly
 - **Remote Sessions** — one persistent session per project (`source=remote`), started/stopped from bot or terminal; status: 🟢 active / ⚪ inactive

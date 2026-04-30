@@ -1,18 +1,77 @@
 # Changelog
 
+## v1.35.0
+
+### feat: Hermes Skills Toolkit — Phase B / Skill Curator (#33)
+
+Weekly cron job that reviews `agent_created_skills` and applies lifecycle
+transitions: auto-pin frequently-used, auto-archive stale, queue
+consolidate/patch for human approval. Uses an aux-LLM separate from the
+main session so the Anthropic prompt cache stays untouched.
+
+- New module: `utils/curator.ts` — selection, prompt building, action
+  dispatch with markdown-fence-tolerant JSON parsing.
+- New table: `curator_runs` (v26) — per-run timing, counts, cost.
+- New table: `curator_pending_actions` (v27) — human-approval queue
+  with 24 h expiry.
+- `scripts/admin-daemon.ts` — cron registration + post-run Telegram
+  summary; `lastCuratorRun` persisted via `MAX(curator_runs.started_at)`
+  so a daemon restart inside the firing window does not double-fire.
+- Telegram inline buttons `[Approve] / [Skip]` for consolidate/patch
+  proposals (`bot/callbacks.ts`); auto-applied: pin, archive.
+- New env: `HELYX_CURATOR_CRON`, `HELYX_CURATOR_PAUSED`,
+  `HELYX_CURATOR_ARCHIVE_DAYS`, `HELYX_CURATOR_PIN_USE_COUNT`,
+  `SUPERVISOR_CHAT_ID`, `SUPERVISOR_TOPIC_ID`.
+- New prompt: `prompts/skill-curation.md` (was a TS constant).
+
+## v1.34.0
+
+### feat: Hermes Skills Toolkit — Phase C / Autonomous Skill Creator (#32)
+
+After a multi-step success, the agent can distill the workflow into a
+reusable SKILL.md via aux-LLM (DeepSeek default; Ollama / OpenRouter
+fallback) and persist it to `agent_created_skills` in postgres. A
+Telegram approval message gates the transition from `proposed` to
+`active`; on `[Save]` the skill is materialized atomically to
+`~/.claude/skills/agent-created/<name>/SKILL.md` so Claude Code's
+native loader can find it.
+
+- New modules: `utils/skill-distiller.ts`, `utils/aux-llm-client.ts`,
+  `utils/skill-approval.ts`.
+- New MCP tools: `propose_skill`, `save_skill`, `list_agent_skills`.
+- New tables: `agent_created_skills` (v24), `aux_llm_invocations` (v25).
+- Validator returns non-blocking warnings when the LLM-generated body
+  contains `!\`cmd\`` tokens; warnings surface in the approval message.
+- Telegram inline buttons `[Save] / [Reject] / [Edit name…]`
+  (`bot/callbacks.ts`); rename uses the existing pending-input flow.
+- New env: `HELYX_AUX_LLM_PROVIDER`, `HELYX_AUX_LLM_MODEL`,
+  `DEEPSEEK_API_KEY`, `CUSTOM_OPENAI_BASE_URL`, `HELYX_OLLAMA_URL`.
+- New prompt: `prompts/skill-distillation.md` (was a TS constant).
+
 ## v1.33.0
 
-### feat: Hermes Phase A — inline shell expansion in skill preprocessor (#27)
+### feat: Hermes Skills Toolkit — Phase A / Inline Shell Expansion (#29)
 
-Skills can now embed `!`cmd`` tokens that resolve to shell output at load time,
-eliminating one tool-call round-trip per dynamic dependency. A new `skill_view`
-MCP tool loads Hermes-style skills with inline shell expansion, falling back to
-the native loader for skills without tokens.
+Skills can now embed `!\`cmd\`` tokens that resolve to shell output at
+load time, eliminating one tool-call round-trip per dynamic dependency.
+A new `skill_view` MCP tool loads Hermes-style skills with inline shell
+expansion, falling back to the native loader for skills without tokens.
 
-- New module: `utils/skill-preprocessor.ts` — regex match + spawn + replace
-- New MCP tool: `skill_view` — registered in channel, mcp, and SDK server
-- New migration: `skill_preprocess_log` table (v23) for observability
-- 10 unit tests covering token detection, expansion, error, timeout, frontmatter
+- New module: `utils/skill-preprocessor.ts` — regex match + spawn +
+  index-spliced replacement (handles duplicate identical tokens
+  correctly) with explicit env allowlist (PATH/HOME/LANG only — no
+  inheritance of `DEEPSEEK_API_KEY` / `DATABASE_URL` etc.).
+- Sandbox: 5 s per-command timeout with SIGTERM → 500 ms grace →
+  SIGKILL fallback; concurrent stdout/stderr drain so >64 KB outputs
+  don't deadlock the pipe; 4096-char output cap.
+- New module: `utils/skill-handlers.ts` — shared `skill_view` handler
+  for both `channel/tools.ts` (host) and `mcp/tools.ts` (Docker), with
+  skill-name validation guard against path traversal.
+- New table: `skill_preprocess_log` (v23).
+- New env: `HELYX_SHELL_TIMEOUT_MS`, `HELYX_SHELL_OUTPUT_CAP`.
+- Demo skill: `skills/git-state/SKILL.md`.
+- 19 new unit tests covering stateless detection, duplicate-token
+  expansion, name validation, fast-path log policy.
 
 ## v1.32.6
 
