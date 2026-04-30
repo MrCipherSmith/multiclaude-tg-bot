@@ -611,6 +611,59 @@ const migrations: Migration[] = [
       await tx`DROP TABLE IF EXISTS skill_preprocess_log`;
     },
   },
+  {
+    version: 24,
+    name: "hermes: agent_created_skills table",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE agent_created_skills (
+          id BIGSERIAL PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          description TEXT NOT NULL,
+          body TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'proposed',
+          source_session_id BIGINT,
+          source_chat_id TEXT,
+          tags TEXT[] DEFAULT ARRAY[]::TEXT[],
+          related_skills TEXT[] DEFAULT ARRAY[]::TEXT[],
+          use_count INTEGER NOT NULL DEFAULT 0,
+          last_used_at TIMESTAMPTZ,
+          pinned BOOLEAN NOT NULL DEFAULT false,
+          proposed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          approved_at TIMESTAMPTZ,
+          rejected_at TIMESTAMPTZ,
+          archived_at TIMESTAMPTZ
+        )
+      `;
+      await tx`CREATE INDEX agent_created_skills_name_idx ON agent_created_skills (name)`;
+      await tx`CREATE INDEX agent_created_skills_status_last_used_idx ON agent_created_skills (status, last_used_at DESC)`;
+      await tx`CREATE INDEX agent_created_skills_session_idx ON agent_created_skills (source_session_id)`;
+    },
+  },
+  {
+    version: 25,
+    name: "hermes: aux_llm_invocations table",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE aux_llm_invocations (
+          id BIGSERIAL PRIMARY KEY,
+          purpose TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          tokens_in INTEGER NOT NULL,
+          tokens_out INTEGER NOT NULL,
+          cost_usd NUMERIC(10, 6),
+          duration_ms INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          error_message TEXT,
+          related_id BIGINT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await tx`CREATE INDEX aux_llm_invocations_created_at_idx ON aux_llm_invocations (created_at DESC)`;
+      await tx`CREATE INDEX aux_llm_invocations_purpose_idx ON aux_llm_invocations (purpose)`;
+    },
+  },
 ];
 
 // --- Public API ---
