@@ -178,6 +178,36 @@ function registerTools(server: McpServer, bot: Bot | null, getClientId?: () => s
     },
     async (args) => exec("skill_view", args),
   );
+
+  server.tool(
+    "propose_skill",
+    "Propose a new agent-created skill from session transcript. Distills the workflow into a SKILL.md and sends a Telegram approval message.",
+    {
+      name: z.string().optional().describe("Suggested skill name (kebab-case)"),
+      description: z.string().optional().describe("One-line description starting with 'Use when'"),
+      body: z.string().optional().describe("SKILL.md body"),
+      transcript: z.string().describe("Session transcript for distillation"),
+      chat_id: z.string().optional().describe("Telegram chat ID for approval message"),
+    },
+    async (args) => exec("propose_skill", args),
+  );
+
+  server.tool(
+    "save_skill",
+    "Approve or reject a proposed skill",
+    {
+      skill_id: z.number().describe("Skill ID from propose_skill response"),
+      approved: z.boolean().describe("Approve (true) or reject (false)"),
+    },
+    async (args) => exec("save_skill", args),
+  );
+
+  server.tool(
+    "list_agent_skills",
+    "List all active agent-created skills",
+    {},
+    async (args) => exec("list_agent_skills", args),
+  );
 }
 
 function createMcpServer(bot: Bot | null, getClientId?: () => string | undefined): McpServer {
