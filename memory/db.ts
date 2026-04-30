@@ -581,6 +581,24 @@ const migrations: Migration[] = [
       `;
     },
   },
+  {
+    version: 23,
+    name: "hermes: skill_preprocess_log table",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE skill_preprocess_log (
+          id BIGSERIAL PRIMARY KEY,
+          skill_name TEXT NOT NULL,
+          started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          duration_ms INTEGER NOT NULL,
+          shell_count INTEGER NOT NULL DEFAULT 0,
+          errors_count INTEGER NOT NULL DEFAULT 0,
+          first_error TEXT
+        )
+      `;
+      await tx`CREATE INDEX skill_preprocess_log_started_at_idx ON skill_preprocess_log (started_at DESC)`;
+    },
+  },
 ];
 
 // --- Public API ---

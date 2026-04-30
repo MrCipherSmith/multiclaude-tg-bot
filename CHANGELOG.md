@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.33.0
+
+### feat: Hermes Phase A — inline shell expansion in skill preprocessor (#27)
+
+Skills can now embed `!`cmd`` tokens that resolve to shell output at load time,
+eliminating one tool-call round-trip per dynamic dependency. A new `skill_view`
+MCP tool loads Hermes-style skills with inline shell expansion, falling back to
+the native loader for skills without tokens.
+
+- New module: `utils/skill-preprocessor.ts` — regex match + spawn + replace
+- New MCP tool: `skill_view` — registered in channel, mcp, and SDK server
+- New migration: `skill_preprocess_log` table (v23) for observability
+- 10 unit tests covering token detection, expansion, error, timeout, frontmatter
+
 ## v1.32.6
 
 ### chore: remove kesha-voice-kit, simplify TTS/ASR chains

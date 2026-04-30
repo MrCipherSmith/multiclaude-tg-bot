@@ -7,6 +7,7 @@ import { chunkText } from "../utils/chunk.ts";
 import { tryAutoLink } from "./pending-expects.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
 import { maybeAttachVoice } from "../utils/tts.ts";
+import { expandInlineShell, parseFrontmatter, hasInlineShellTokens } from "../utils/skill-preprocessor.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -190,6 +191,17 @@ export const TOOL_DEFINITIONS = [
         },
       },
       required: ["query"],
+    },
+  },
+  {
+    name: "skill_view",
+    description: "Load a skill and return its content with inline shell tokens expanded. Use this when you need to read a Hermes-style skill file that contains dynamic context via !`cmd` syntax.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        name: { type: "string", description: "Skill name (kebab-case, e.g. 'git-state')" },
+      },
+      required: ["name"],
     },
   },
 ];
@@ -451,6 +463,48 @@ export async function executeTool(
               })),
             }, null, 2),
       );
+    }
+
+    case "skill_view": {
+      const skillName = String(args.name);
+      const skillsDir = process.env.CLAUDE_SKILLS_DIR ?? `${process.env.HOME}/.claude/skills`;
+      const startTime = Date.now();
+
+      // Check agent-created skills in postgres first
+      const pgSkills = await sql`
+        SELECT name, description, body FROM agent_created_skills
+        WHERE name = ${skillName} AND status = 'active'
+        LIMIT 1
+      `;
+
+      if (pgSkills.length > 0) {
+        const row = pgSkills[0] as { name: string; description: string; body: string };
+        sql`UPDATE agent_created_skills SET use_count = use_count + 1, last_used_at = now() WHERE name = ${skillName}`.catch(() => {});
+        const { body } = await expandInlineShell(row.body);
+        const durationMs = Date.now() - startTime;
+        sql`INSERT INTO skill_preprocess_log (skill_name, duration_ms, shell_count, errors_count) VALUES (${skillName}, ${durationMs}, 0, 0)`.catch(() => {});
+        return text(JSON.stringify({ name: row.name, description: row.description, body, frontmatter: {} }));
+      }
+
+      // Filesystem skills
+      const skillPath = `${skillsDir}/${skillName}/SKILL.md`;
+      const file = Bun.file(skillPath);
+      if (!(await file.exists())) {
+        return text(JSON.stringify({ error: "skill not found", name: skillName }));
+      }
+
+      const raw = await file.text();
+      if (!hasInlineShellTokens(raw)) {
+        const { frontmatter, body } = parseFrontmatter(raw);
+        return text(JSON.stringify({ name: skillName, description: frontmatter.description ?? "", body, frontmatter }));
+      }
+
+      const { body, shellCount, errorsCount, firstError } = await expandInlineShell(raw);
+      const { frontmatter } = parseFrontmatter(raw);
+      const durationMs = Date.now() - startTime;
+      sql`INSERT INTO skill_preprocess_log (skill_name, duration_ms, shell_count, errors_count, first_error) VALUES (${skillName}, ${durationMs}, ${shellCount}, ${errorsCount}, ${firstError ?? null})`.catch(() => {});
+
+      return text(JSON.stringify({ name: skillName, description: frontmatter.description ?? "", body, frontmatter }));
     }
 
     default:
