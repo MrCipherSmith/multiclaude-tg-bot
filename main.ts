@@ -66,6 +66,20 @@ async function main() {
     }
     await bot.init();
     console.log(`[main] bot @${bot.botInfo.username} is running (webhook)`);
+    await bot.api.setMyCommands([
+      { command: "menu",      description: "All commands grouped by category" },
+      { command: "sessions",  description: "List sessions" },
+      { command: "switch",    description: "Switch session" },
+      { command: "session",   description: "Current session info" },
+      { command: "resume",    description: "Resume with context briefing" },
+      { command: "model",     description: "Switch Claude model" },
+      { command: "remember",  description: "Save to memory" },
+      { command: "recall",    description: "Search memory" },
+      { command: "pending",   description: "Pending CLI permissions" },
+      { command: "interrupt", description: "Interrupt running Claude session" },
+      { command: "system",    description: "System control (start/stop/bounce/restart)" },
+      { command: "help",      description: "Help" },
+    ]).catch((err) => console.error("[main] failed to set bot commands:", err));
   } else {
     console.log("[main] starting Telegram polling...");
     bot.start({

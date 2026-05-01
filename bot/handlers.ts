@@ -78,6 +78,7 @@ import { handleMemoryExport, handleMemoryImport } from "./commands/memory-export
 import { handleForumSetup, handleForumSync, handleForumClean, handleTopicRename, handleTopicClose, handleTopicReopen, handleForumHub } from "./commands/forum.ts";
 import { handleQuickstart } from "./commands/quickstart.ts";
 import { handleSystem } from "./commands/system.ts";
+import { handleMenu } from "./commands/menu.ts";
 import { handleResume } from "./commands/resume.ts";
 import { handleCodexSetup, handleCodexStatus, handleCodexReview } from "./commands/codex.ts";
 import { handleVoice, handlePhoto, handleDocument, handleVideo, handleVideoNote, handleSticker } from "./media.ts";
@@ -141,6 +142,7 @@ export function registerHandlers(b: Bot): void {
 
   // System control
   b.command("system", handleSystem);
+  b.command("menu", handleMenu);
 
   // Remote control & project management
   b.command("interrupt", handleInterrupt);

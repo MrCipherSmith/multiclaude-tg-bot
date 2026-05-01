@@ -59,6 +59,10 @@ export async function handleCallbackQuery(ctx: Context): Promise<void> {
     const { handleSystemCallback } = await import("./commands/system.ts");
     return handleSystemCallback(ctx);
   }
+  if (data.startsWith("menu:")) {
+    const { handleMenuCallback } = await import("./commands/menu.ts");
+    return handleMenuCallback(ctx);
+  }
   if (data.startsWith("sup:")) {
     const { handleSupervisorCallback } = await import("./commands/supervisor-actions.ts");
     return handleSupervisorCallback(ctx);

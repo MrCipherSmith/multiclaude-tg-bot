@@ -500,9 +500,11 @@ Connect:
 
 | Command | Description |
 |---------|-------------|
-| **Sessions** | |
-| `/start` | Welcome message and quick help |
+| **Navigation** | |
+| `/menu` | All commands grouped by category — two-level inline panel (group → commands → tap to run) |
 | `/help` | Show available commands |
+| `/start` | Welcome message and quick help |
+| **Sessions** | |
 | `/sessions` | List all sessions (🟢 active / ⚪ inactive / 💀 terminated) |
 | `/switch [id]` | Switch session — shows project context briefing + last messages |
 | `/session` | Current session info |

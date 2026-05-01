@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.36.0
+
+### feat: /menu — grouped command navigator + /system control panel
+
+**`/menu` — two-level inline command navigator**
+
+Replaces the flat 40-item Telegram command list with a grouped inline panel:
+- Level 1: 8 category buttons (Session, Memory, Projects, System, Stats, Tools, Codex, Forum)
+- Level 2: commands within the category as buttons — tap to run immediately
+- Commands that require arguments (remember, recall, forget…) auto-prompt via existing handler logic
+- ◀️ Back button returns to categories
+
+Telegram command autocomplete (`/`) trimmed to 12 most-used commands; everything else accessible via `/menu`.
+
+**`/system` — system control panel**
+
+Inline panel for full system management from Telegram:
+- ▶️ Start / 🛑 Stop tmux sessions
+- 🔄 Bounce — full session restart (helyx bounce via admin-daemon, spawned detached so the daemon survives kill-session)
+- 🐳 Restart bot — restarts the helyx-bot Docker container
+- ⚡ Kill channels — kills all channel.ts MCP subprocesses so they respawn with updated code
+- Admin-only (TELEGRAM_CHAT_ID guard)
+
+**admin-daemon: new commands**
+- `bounce` — runs `helyx bounce` detached
+- `channel_kill` — `pkill -f "bun.*helyx/channel.ts"`
+
+**fix: setMyCommands reliability**
+
+Moved `setMyCommands` from `createBot()` to `main.ts` after `bot.init()` — previously it ran before auth was confirmed and silently failed on startup.
+
 ## v1.35.0
 
 ### feat: Skills Toolkit — Phase B / Skill Curator (#33)
