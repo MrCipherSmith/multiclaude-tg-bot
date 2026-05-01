@@ -2,18 +2,23 @@ import type { Context } from "grammy";
 import { InlineKeyboard } from "grammy";
 import { sessionManager } from "../../sessions/manager.ts";
 import { routeMessage } from "../../sessions/router.ts";
+import { CONFIG } from "../../config.ts";
 
-const CLAUDE_MODELS = [
-  "claude-opus-4-6",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "claude-opus-4-20250514",
-  "claude-sonnet-4-20250514",
-];
+async function fetchAvailableModels(): Promise<{ id: string; display_name: string }[]> {
+  const res = await fetch("https://api.anthropic.com/v1/models", {
+    headers: {
+      "x-api-key": CONFIG.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  const json = await res.json() as { data: { id: string; display_name: string }[] };
+  return json.data;
+}
 
 /**
  * /model — select Claude model for the current active session.
- * Stores selection in cli_config.model.
+ * Fetches available models from the Anthropic API and stores selection in cli_config.model.
  */
 export async function handleModel(ctx: Context): Promise<void> {
   const chatId = String(ctx.chat!.id);
@@ -31,14 +36,28 @@ export async function handleModel(ctx: Context): Promise<void> {
 
   const currentModel = (route.cliConfig as any).model ?? "default";
 
+  let models: { id: string; display_name: string }[];
+  try {
+    models = await fetchAvailableModels();
+  } catch {
+    await ctx.reply("Failed to fetch model list from Anthropic API.");
+    return;
+  }
+
+  if (models.length === 0) {
+    await ctx.reply("No models returned from Anthropic API.");
+    return;
+  }
+
   const keyboard = new InlineKeyboard();
-  for (const model of CLAUDE_MODELS) {
-    const label = model === currentModel ? `✓ ${model}` : model;
-    keyboard.text(label, `set_model:${model}`).row();
+  for (const m of models) {
+    const active = m.id === currentModel;
+    const label = active ? `✅ ${m.display_name}` : m.display_name;
+    keyboard.text(label, `set_model:${m.id}`).row();
   }
 
   await ctx.reply(
-    `Current model: <code>${currentModel}</code>\nSelect a Claude model:`,
+    `Current model: <code>${currentModel}</code>\n\nSelect a Claude model:`,
     { parse_mode: "HTML", reply_markup: keyboard },
   );
 }

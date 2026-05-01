@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.46.0
+
+### feat: /model fetches live model list from Anthropic API
+
+`/model` now calls `GET /v1/models` on the Anthropic API and shows the actual
+available models as inline buttons instead of a hardcoded list. Display names
+come from the API (`display_name` field). Current model is marked with ✅.
+
+### fix: /menu Back button — ignore "message is not modified" error
+
+Telegram rejects `editMessageText` when the content hasn't changed (e.g. on
+double-tap or duplicate webhook delivery). Added `ignoreNotModified` helper
+so Back and group-nav taps are idempotent and never surface a GrammyError.
+
 ## v1.36.0
 
 ### feat: /menu — grouped command navigator + /system control panel

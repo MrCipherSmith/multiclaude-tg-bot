@@ -66,20 +66,33 @@ async function main() {
     }
     await bot.init();
     console.log(`[main] bot @${bot.botInfo.username} is running (webhook)`);
+    // Private chats: session navigation + top tools
     await bot.api.setMyCommands([
       { command: "menu",      description: "All commands grouped by category" },
+      { command: "projects",  description: "List projects (Start/Stop)" },
       { command: "sessions",  description: "List sessions" },
       { command: "switch",    description: "Switch session" },
-      { command: "session",   description: "Current session info" },
       { command: "resume",    description: "Resume with context briefing" },
       { command: "model",     description: "Switch Claude model" },
       { command: "remember",  description: "Save to memory" },
       { command: "recall",    description: "Search memory" },
       { command: "pending",   description: "Pending CLI permissions" },
-      { command: "interrupt", description: "Interrupt running Claude session" },
+      { command: "interrupt", description: "Interrupt current Claude session" },
       { command: "system",    description: "System control (start/stop/bounce/restart)" },
       { command: "help",      description: "Help" },
-    ]).catch((err) => console.error("[main] failed to set bot commands:", err));
+    ], { scope: { type: "all_private_chats" } }).catch((err) => console.error("[main] failed to set private commands:", err));
+    // Group chats / forum topics: topic-scoped commands only, no session switching
+    await bot.api.setMyCommands([
+      { command: "menu",         description: "All commands" },
+      { command: "interrupt",    description: "Interrupt current Claude session" },
+      { command: "project_facts",description: "Show project knowledge facts" },
+      { command: "project_scan", description: "Scan project for knowledge" },
+      { command: "remember",     description: "Save to memory" },
+      { command: "recall",       description: "Search memory" },
+      { command: "system",       description: "System control" },
+      { command: "status",       description: "Bot health" },
+      { command: "help",         description: "Help" },
+    ], { scope: { type: "all_group_chats" } }).catch((err) => console.error("[main] failed to set group commands:", err));
   } else {
     console.log("[main] starting Telegram polling...");
     bot.start({
