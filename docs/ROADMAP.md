@@ -14,7 +14,100 @@
 
 ## ✅ Implemented
 
-### v1.23.0 (Latest)
+### v1.47.0 (Latest) — Public Release
+
+- **Public release** — repository open-sourced; personal references scrubbed from code, changelog, and UI strings; `/quickstart` translated to English
+- **`recall()` graceful Ollama degradation** — `embedSafe()` returns null instead of throwing; recall falls back to recency sort when Ollama is unreachable; `remember()` proceeds without embedding (no data loss)
+- **`isAdmin()` fail-closed** — `/system` and admin callbacks deny access when `TELEGRAM_CHAT_ID` is not configured (was fail-open)
+- **`admin-daemon` sequential command processing** — LIMIT 1 with `FOR UPDATE SKIP LOCKED` instead of concurrent `setImmediate` dispatch; eliminates out-of-order execution
+- **`setMyCommands` in both webhook and polling modes** — previously only registered bot commands in webhook path
+- **Menu dispatch errors surfaced** — try/catch in `dispatch()` sends `⚠️ /cmd failed: reason` instead of silent drop
+- **Bounce path uses portable bun binary** — `Bun.which("bun") ?? process.execPath` replaces hardcoded `/home/user/.bun/bin/bun`
+- **Generated developer docs** (`docs/dev/`) — onboarding, architecture, modules, API reference, data models via autodoc pipeline
+- **Release materials** (`docs/release/v1.47.0/`) — press releases, developer and user descriptions, platform posts (EN + RU)
+
+### v1.46.0
+
+- **`/model` — live model list from Anthropic API** — fetches `GET /v1/models` and shows actual available models as inline buttons; current model marked ✅; graceful fallback to curated list when API key missing
+
+### v1.36.0
+
+#### `/menu` — Two-Level Inline Command Navigator
+- Replaces flat 40-item command list with grouped inline panel: 8 category buttons (Session, Memory, Projects, System, Stats, Tools, Codex, Forum) → commands within category → tap to run
+- Admin-only groups hidden from non-admin users; topic-only and DM-only commands scoped correctly
+- Telegram autocomplete trimmed to 12 most-used commands; everything else via `/menu`
+
+#### `/system` — Admin Control Panel
+- Inline panel: ▶️ Start / 🛑 Stop tmux sessions, 🔄 Bounce (full restart), 🐳 Restart bot container, ⚡ Kill channels
+- Admin-only (`TELEGRAM_CHAT_ID` guard — fail-closed)
+- `admin-daemon` new commands: `bounce` (runs `helyx bounce` detached), `channel_kill` (`pkill -f "bun.*channel.ts"`)
+
+### v1.33.0 – v1.35.0 — Skills Toolkit (3 Phases)
+
+#### Phase A — Inline Shell Expansion (v1.33.0)
+- `!\`cmd\`` tokens in SKILL.md bodies resolve to shell output at load time via `utils/skill-preprocessor.ts`
+- Sandbox: explicit env allowlist (PATH/HOME/LANG only — no secret leakage), 5 s timeout, SIGTERM → SIGKILL, 4096-char cap
+- New MCP tool: `skill_view` — loads skill with expansion (both transports)
+- New table: `skill_preprocess_log` (v23); new env: `HELYX_SHELL_TIMEOUT_MS`, `HELYX_SHELL_OUTPUT_CAP`
+
+#### Phase C — Autonomous Skill Creator (v1.34.0)
+- After multi-step success, agent distills workflow to SKILL.md via aux-LLM (DeepSeek / Ollama / OpenRouter)
+- Telegram approval gate: `[Save] / [Reject] / [Edit name…]` inline buttons; on Save → materialized to `~/.claude/skills/agent-created/<name>/SKILL.md`
+- New MCP tools: `propose_skill`, `save_skill`, `list_agent_skills`
+- New tables: `agent_created_skills` (v24), `aux_llm_invocations` (v25)
+- New modules: `utils/skill-distiller.ts`, `utils/aux-llm-client.ts`, `utils/skill-approval.ts`
+- New env: `HELYX_AUX_LLM_PROVIDER`, `HELYX_AUX_LLM_MODEL`, `DEEPSEEK_API_KEY`
+
+#### Phase B — Skill Curator (v1.35.0)
+- Weekly cron (`HELYX_CURATOR_CRON`, default Sundays 03:00 UTC) reviews `agent_created_skills`
+- Auto-pins frequently-used (use_count > 10 in 14 days), auto-archives stale (> 90 days idle)
+- Queues consolidate/patch proposals for human approval (`[Approve] / [Skip]`, 24 h expiry)
+- New tables: `curator_runs` (v26), `curator_pending_actions` (v27)
+- New module: `utils/curator.ts`; new prompt: `prompts/skill-curation.md`
+- New env: `HELYX_CURATOR_CRON`, `HELYX_CURATOR_PAUSED`, `HELYX_CURATOR_ARCHIVE_DAYS`, `HELYX_CURATOR_PIN_USE_COUNT`
+
+### v1.32.6
+
+#### TTS Chain Simplification — Remove kesha-voice-kit
+- kesha-voice-kit removed; Docker image drops ~1 GB (990 MB models + 24 MB binary + espeak-ng)
+- **TTS chain (auto):** Russian: Yandex → Piper → Groq; English: Piper → Kokoro → Groq
+- **ASR chain:** Groq → local Whisper HTTP fallback
+- Kokoro-82M (local ONNX, English) added as second-tier English TTS
+- Setup wizard updated: Piper voice catalog with 6 voices (EN/RU/DE/ES/FR), multi-select checkboxes, optional download during setup; Kokoro precision/voice selection
+
+### v1.28.0 – v1.31.0 — Supervisor + Admin Daemon
+
+#### Supervisor (`scripts/supervisor.ts`) — v1.28.0
+- 5 independent monitoring loops (all with in-flight guards to prevent overlap):
+  - **Session watchdog**: stale heartbeat (> 2 min) triggers `proj_start` auto-recovery
+  - **Queue watchdog**: stuck messages (> 5 min) → inline alert (🔄 Restart / ✅ Ignore)
+  - **Voice cleanup**: stale `voice_status_messages` (> 3 min) edited to "bot restarted" notice
+  - **Status broadcast**: 5-minute status summary to `SUPERVISOR_TOPIC_ID`
+  - **Idle auto-compact**: sessions idle > `IDLE_COMPACT_MIN` min with ≥10 messages trigger `forceSummarize` (v1.30.0)
+- LLM diagnosis via Ollama for each incident (best-effort, 10 s timeout) — v1.29.0
+- Recovery verification: polls `active_status_messages` 60 s after `proj_start`, sends ✅ or ⛔ result
+- Any message in supervisor topic returns live status + LLM assessment — v1.29.0
+
+#### Security + Concurrency Review — v1.31.0
+- `handleMonitorCallback`: `TELEGRAM_CHAT_ID` guard before queuing Docker/daemon restarts
+- `scan_project_knowledge` MCP tool: path traversal prevention (validates target within `HOST_PROJECTS_DIR`)
+- `helyx add/remove`: allowlist regex + LIKE wildcard escaping
+- `admin-daemon` startup: resets `processing` rows stuck from a crash
+- `tgPost` 429-retry: fresh `AbortSignal.timeout` per retry (was reusing elapsed signal)
+- `writeProcessHealth`: in-flight guard + `timeout 10 docker ps` to prevent pool starvation
+
+### v1.24.0 – v1.27.0 — Infrastructure Foundations
+
+- **Tmux watchdog** (`scripts/tmux-watchdog.ts`) — monitors Claude Code panes every 5 s; auto-confirms `--dangerously-load-development-channels` prompts in all windows (not just active sessions); detects stalls, credential prompts, editor locks
+- **Google AI provider** — Gemma 4 models (e.g. `gemma-4-31b-it`); `GOOGLE_AI_API_KEY` + `GOOGLE_AI_MODEL`
+- **`/interrupt` command** — sends Escape to Claude Code session bound to current topic (forum) or active session (DM); no session picker, no switch
+- **Voice status DB tracking** (`v1.27.7`) — `voice_status_messages` table; stale "downloading…" messages recovered on bot restart
+- **TTS audio format tags** — each provider tags output (`mp3`/`wav`); Telegram receives correct MIME type and filename
+- **message_queue deduplication** (`v1.27.6`) — partial unique index `(chat_id, message_id)` + `ON CONFLICT DO NOTHING` prevents double delivery after Docker restart
+- **Heartbeat failure counter** — `channel.ts` exits after 2 consecutive DB errors (was silently retrying forever)
+- **E2E test scaffolding** — Playwright config + API and dashboard test projects in `tests/`
+
+### v1.23.0
 
 #### Voice Replies (TTS) — Yandex SpeechKit + Smart Triggers
 
@@ -376,18 +469,13 @@ Core features established in foundational releases:
 
 ## 🚧 In Progress
 
-None currently. Latest merged work completed in v1.22.0.
+None currently. Latest merged work completed in v1.47.0.
 
 ---
 
 ## 📋 Planned
 
 These items have PRDs written and are ready to implement.
-
-### Project Rename: helyx → Helyx (temporary name, pending final decision)
-- Full rename: CLI, MCP servers, Docker, DB, Telegram bot, domain, GitHub repo
-- **PRD:** `docs/requirements/rename-to-helyx-2026-04-10/en/rename-to-helyx.md`
-- **Blocked on:** final name decision
 
 ### GitHub Actions E2E CI — Activate Secrets
 - Workflow `.github/workflows/e2e.yml` is committed and ready
@@ -450,7 +538,7 @@ Features identified as valuable but without PRDs yet.
 ### Conversation Threading
 - ~~Group messages by session/project in Telegram topic threads~~
 - ~~Telegram topic per project~~
-- Moved to 📋 Planned — PRD written: `docs/requirements/forum-topics-2026-04-09/en/forum-topics.md`
+- ✅ Implemented in v1.20.0 — Forum Supergroup mode with per-topic routing
 
 ---
 
@@ -495,4 +583,4 @@ Features identified as valuable but without PRDs yet.
 
 ---
 
-**Last updated:** 2026-04-09 (v1.20.0)
+**Last updated:** 2026-05-02 (v1.47.0)
