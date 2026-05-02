@@ -416,7 +416,7 @@ export class StatusManager {
 
     // Wake the poller immediately — a deferred user message for this chat may
     // be waiting in message_queue, and we want zero perceived gap between the
-    // ✅ closing of this status and the new "+ Догнал" status of the next turn.
+    // ✅ closing of this status and the catchup status of the next turn.
     const sessionId = this.ctx.sessionId();
     if (sessionId !== null) {
       this.ctx.sql`SELECT pg_notify(${`message_queue_${sessionId}`}, '')`.catch(() => {});

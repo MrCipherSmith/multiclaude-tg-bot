@@ -56,7 +56,7 @@
 - **Voice to disconnected topic** (`bot/media.ts`): early exit before Whisper transcription with user-facing error + `/standalone` hint
 - **Improved "session not active" message** (`bot/text-handler.ts`): shows project path, explains auto-reconnect, actionable `/standalone` and `/sessions` links; HTML-safe via `escapeHtml()`
 - **Typing indicator refresh** (`bot/streaming.ts`): `startTyping()` every 4s with correct `message_thread_id` for forum topics; replaces raw `setInterval`
-- **Queue depth feedback** (`bot/topic-queue.ts` + `bot/text-handler.ts`): "⏳ В очереди (#N)..." shown when a message is queued behind another; `onQueued` callback with `.catch()`
+- **Queue depth feedback** (`bot/topic-queue.ts` + `bot/text-handler.ts`): queue position indicator shown when a message is queued behind another; `onQueued` callback with `.catch()`
 - **`/quickstart` command** (`bot/commands/quickstart.ts`): 5-step onboarding guide for new users (forum setup → project add → launch Claude Code)
 - **Session crash notifications** (`sessions/manager.ts` + `mcp/server.ts`): forum topic receives a message when a session terminates unexpectedly via `setTerminationCallback()`
 - **`escapeHtml()` shared utility** (`bot/format.ts`): prevents HTML injection in all Telegram `parse_mode: "HTML"` messages

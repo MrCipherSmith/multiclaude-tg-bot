@@ -485,7 +485,7 @@ const migrations: Migration[] = [
     up: async (tx) => {
       // Tracks in-flight voice download/transcription status messages.
       // Inserted when handleVoice starts; deleted when done.
-      // On startup, recoverStaleVoiceStatusMessages edits orphans to "⚠️ Бот перезапущен".
+      // On startup, recoverStaleVoiceStatusMessages edits orphans to a "bot restarted" notice.
       await tx`
         CREATE TABLE IF NOT EXISTS voice_status_messages (
           id          BIGSERIAL PRIMARY KEY,

@@ -439,7 +439,7 @@ message was never updated, leaving it visually stuck forever. Fix:
 - New `voice_status_messages` table: each in-flight voice download registers its
   Telegram status message ID.
 - On bot startup, `recoverStaleVoiceStatusMessages` edits any rows older than 5 min to
-  "⚠️ Бот перезапущен — голосовое не обработано. Отправь повторно."
+  "⚠️ Bot restarted — voice message was not processed. Please resend."
 - DB row is deleted via `finally {}` after the queue task completes (success or error).
 
 ### fix(voice): explicit file_path null check + error reason in status message
@@ -676,8 +676,7 @@ won't retry (the message may be lost), but it won't send duplicates.
 
 ### fix(status): less alarmist response guard message
 
-The 5-minute "no reply" guard message was reworded from "сессия могла упасть
-или зависнуть" to "возможно думает над задачей или сессия зависла" — Claude
+The 5-minute "no reply" guard message was reworded to be less alarmist — Claude
 might simply be running extended thinking, not crashed.
 
 ---

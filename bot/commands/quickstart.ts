@@ -1,34 +1,34 @@
 import type { Context } from "grammy";
 import { replyInThread } from "../format.ts";
 
-const QUICKSTART_TEXT = `🚀 <b>Быстрый старт</b>
+const QUICKSTART_TEXT = `🚀 <b>Quick Start</b>
 
-<b>Шаг 1 — Создай форум-группу</b>
-Создай Telegram Supergroup → включи Topics (настройки группы → Topics) → добавь бота администратором.
+<b>Step 1 — Create a forum supergroup</b>
+Create a Telegram Supergroup → enable Topics (group settings → Topics) → add the bot as administrator.
 
-<b>Шаг 2 — Настрой форум</b>
-В группе: /forum_setup
+<b>Step 2 — Set up the forum</b>
+In the group: /forum_setup
 
-<b>Шаг 3 — Добавь проекты</b>
-В личных сообщениях с ботом: /project_add
-(бот создаст топик для каждого проекта в форуме)
+<b>Step 3 — Add your projects</b>
+In a private chat with the bot: /project_add
+(the bot will create a topic for each project in the forum)
 
-<b>Шаг 4 — Синхронизируй топики</b>
-В группе: /forum_sync
+<b>Step 4 — Sync topics</b>
+In the group: /forum_sync
 
-<b>Шаг 5 — Запусти Claude Code в проекте</b>
-<code>claude</code> — в директории проекта.
-Бот автоматически подключит сессию к нужному топику.
+<b>Step 5 — Start Claude Code in your project</b>
+<code>claude</code> — inside the project directory.
+The bot will automatically connect the session to the correct topic.
 
-<b>Шаг 6 — Настрой супервизор (опционально)</b>
-Создай отдельный топик "Supervisor" в форуме → скопируй его ID → добавь в <code>.env</code>:
-<code>SUPERVISOR_TOPIC_ID=&lt;id топика&gt;</code>
-Супервизор будет слать туда алерты и отвечать на вопросы о состоянии системы.
-Запусти: <code>bun scripts/admin-daemon.ts</code>
+<b>Step 6 — Set up the supervisor (optional)</b>
+Create a separate "Supervisor" topic in the forum → copy its ID → add to <code>.env</code>:
+<code>SUPERVISOR_TOPIC_ID=&lt;topic id&gt;</code>
+The supervisor will send alerts there and answer questions about system state.
+Start it with: <code>bun scripts/admin-daemon.ts</code>
 
-✅ <b>Готово.</b> В каждом топике — своя сессия Claude Code.
+✅ <b>Done.</b> Each topic has its own Claude Code session.
 
-<i>Используй /help для полного списка команд.</i>`;
+<i>Use /help for the full command list.</i>`;
 
 export async function handleQuickstart(ctx: Context): Promise<void> {
   await replyInThread(ctx, QUICKSTART_TEXT, { parse_mode: "HTML" });
