@@ -14,7 +14,13 @@
 
 ## ✅ Implemented
 
-### v1.47.0 (Latest) — Public Release
+### v1.48.0 (Latest) — Status Intelligence + Photo Tool
+
+- **`send_photo` MCP tool** — new tool on both stdio and HTTP transports; supports public URL and local file via multipart upload; forum topic routing in stdio transport
+- **Smart response guard** — 3-state Claude activity detection: silent re-arm (< 90s), soft note (long thinking), alert + delete status (stuck); replaces single generic "no reply" message
+- **Status heartbeat (15s)** — single 15s interval replaces separate 1s spinner and 10s pane timers; each new user request starts with a clean status message (delete → send instead of edit-in-place)
+
+### v1.47.0 — Public Release
 
 - **Public release** — repository open-sourced; personal references scrubbed from code, changelog, and UI strings; `/quickstart` translated to English
 - **`recall()` graceful Ollama degradation** — `embedSafe()` returns null instead of throwing; recall falls back to recency sort when Ollama is unreachable; `remember()` proceeds without embedding (no data loss)
