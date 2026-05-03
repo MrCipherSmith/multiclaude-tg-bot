@@ -144,6 +144,10 @@ export function registerHandlers(b: Bot): void {
   // System control
   b.command("system", handleSystem);
   b.command("menu", handleMenu);
+  b.command("supervisor", async (ctx) => {
+    const { handleSupervisorCommand } = await import("./commands/supervisor-actions.ts");
+    return handleSupervisorCommand(ctx);
+  });
 
   // Remote control & project management
   b.command("interrupt", handleInterrupt);

@@ -42,6 +42,23 @@ const ESCALATE_MS       = 30 * 60 * 1000;  // 30 min — escalation threshold
 const alertedAt = new Map<string, number>();
 const DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 min dedup window
 
+// Acknowledged alerts: key → silenced until ms (refreshed from DB each loop iteration)
+const ackedUntil = new Map<string, number>();
+
+async function refreshAcks(sql: postgres.Sql): Promise<void> {
+  const rows = await sql`
+    SELECT payload FROM admin_commands
+    WHERE command = 'supervisor_ack'
+      AND created_at > NOW() - INTERVAL '24 hours'
+  `.catch(() => [] as any[]);
+  ackedUntil.clear();
+  for (const row of rows as any[]) {
+    const key   = row.payload?.key;
+    const until = row.payload?.until_ms;
+    if (key && until && until > Date.now()) ackedUntil.set(key, Number(until));
+  }
+}
+
 // Incident recovery attempt tracking: sessionId → { attempts, firstDetected }
 const recoveryAttempts = new Map<string, { attempts: number; firstDetected: number }>();
 
@@ -157,6 +174,8 @@ async function getLlmExplanation(
 // --- Dedup check ---
 
 function shouldAlert(key: string): boolean {
+  const ackUntil = ackedUntil.get(key);
+  if (ackUntil && ackUntil > Date.now()) return false;
   const last = alertedAt.get(key) ?? 0;
   if (Date.now() - last < DEDUP_WINDOW_MS) return false;
   alertedAt.set(key, Date.now());
@@ -258,8 +277,10 @@ async function logIncident(
 
 // --- Loop 1: Session heartbeat monitor ---
 
-async function checkHungSessions(sql: postgres.Sql): Promise<void> {
+async function checkHungSessions(sql: postgres.Sql, runShell?: RunShell): Promise<void> {
   try {
+    await refreshAcks(sql);
+
     const rows = await sql`
       SELECT
         s.id         AS session_id,
@@ -301,32 +322,40 @@ async function checkHungSessions(sql: postgres.Sql): Promise<void> {
           `Проект: <code>${project}</code>`,
           `Зависание: ${Math.round(elapsedSec / 60)}m ${elapsedSec % 60}s`,
           `⏳ <i>Перезапускаю...</i>`,
-          isEscalation ? "\n🔧 <i>Требует ручного вмешательства</i>" : "",
+          isEscalation ? "\n🔧 <i>Убиваю зависшие каналы и повторяю...</i>" : "",
         ].filter(Boolean).join("\n");
         await sendAlert(initMsg);
       }
 
-      // 2. Trigger restart
+      // 2. Escalation: kill hung channel processes before proj_start
+      if (isEscalation && runShell) {
+        console.log(`[supervisor] escalation: killing hung channel processes for ${project}`);
+        await runShell(`pkill -f "bun.*channel.ts" || true`).catch(() => {});
+        await new Promise(r => setTimeout(r, 2000));
+      }
+
+      // 3. Trigger restart
       let actionResult = "no path configured";
+      const actionLabel = isEscalation ? "channel_kill + proj_start" : "proj_start";
       if (projectPath) {
         const res = await triggerProjStart(sql, projectPath);
         actionResult = res.result;
         console.log(`[supervisor] proj_start result for ${project}: ${actionResult}`);
       }
 
-      // 3. Verify recovery (poll 60s)
+      // 4. Verify recovery (poll 60s)
       const recovered = projectPath ? await verifyRecovery(sql, sessionId) : false;
 
       const llm = await getLlmExplanation(
         "hung_session", project, elapsedSec,
-        projectPath ? `proj_start: ${projectPath}` : "no action (no project path)",
+        projectPath ? `${actionLabel}: ${projectPath}` : "no action (no project path)",
         recovered ? "recovered" : actionResult,
       );
 
-      await logIncident(sql, "hung_session", project, sessionId, "proj_start",
+      await logIncident(sql, "hung_session", project, sessionId, actionLabel,
         recovered ? "recovered" : actionResult, llm);
 
-      // 4. Send recovery result
+      // 5. Send recovery result
       if (recovered) {
         await sendAlert(`✅ <b>Сессия восстановлена</b>\nПроект: <code>${project}</code>${llm ? `\n\n💬 ${llm}` : ""}`);
         recoveryAttempts.delete(dedupKey);
@@ -338,9 +367,13 @@ async function checkHungSessions(sql: postgres.Sql): Promise<void> {
           llm ? `\n💬 ${llm}` : "",
           `\n🔧 <i>Требуется ручное вмешательство</i>`,
         ].filter(Boolean).join("\n");
-        await sendAlertWithButtons(failMsg, [[
-          { text: "🔄 Повторить", callback_data: `sup:restart_session:${sessionId}` },
-        ]]);
+        await sendAlertWithButtons(failMsg, [
+          [
+            { text: "🔄 Повторить", callback_data: `sup:restart_session:${sessionId}` },
+            { text: "🚀 Bounce бот", callback_data: `sup:bounce:${sessionId}` },
+          ],
+          [{ text: "🔕 Тишина 30м", callback_data: `sup:ack:${dedupKey}` }],
+        ]);
       }
     }
   } catch (err: any) {
@@ -352,6 +385,8 @@ async function checkHungSessions(sql: postgres.Sql): Promise<void> {
 
 async function checkStuckQueue(sql: postgres.Sql): Promise<void> {
   try {
+    await refreshAcks(sql);
+
     const rows = await sql`
       SELECT
         mq.session_id,
@@ -377,19 +412,39 @@ async function checkStuckQueue(sql: postgres.Sql): Promise<void> {
 
       if (!shouldAlert(dedupKey)) continue;
 
-      await logIncident(sql, "stuck_queue", project, sessionId, "alert_sent", "pending_user_action", "");
+      // Auto-trigger proj_start (same strategy as hung session recovery)
+      let actionResult = "no path configured";
+      if (projectPath) {
+        const res = await triggerProjStart(sql, projectPath);
+        actionResult = res.result;
+        console.log(`[supervisor] stuck_queue proj_start for ${project}: ${actionResult}`);
+      }
 
+      const recovered = projectPath ? await verifyRecovery(sql, sessionId) : false;
+
+      await logIncident(sql, "stuck_queue", project, sessionId, "proj_start",
+        recovered ? "recovered" : actionResult, "");
+
+      if (recovered) {
+        await sendAlert(`✅ <b>Очередь восстановлена</b>\nПроект: <code>${project}</code>`);
+        continue;
+      }
+
+      // Auto-recovery failed — alert user with manual options
       const msg = [
         `⚠️ <b>Supervisor: очередь зависла</b>`,
         `Проект: <code>${project}</code>`,
         `Старейшее сообщение: ${Math.round(oldestSec / 60)}m ${oldestSec % 60}s`,
-        `В очереди необработанных сообщений — требуется перезапуск сессии.`,
+        `Авто-рестарт: ${actionResult} — требуется ручное действие.`,
       ].join("\n");
 
-      await sendAlertWithButtons(msg, [[
-        { text: "🔄 Перезапустить", callback_data: `sup:restart_session:${sessionId}` },
-        { text: "✅ Игнорировать",  callback_data: `sup:ignore:${dedupKey}` },
-      ]]);
+      await sendAlertWithButtons(msg, [
+        [
+          { text: "🔄 Перезапустить", callback_data: `sup:restart_session:${sessionId}` },
+          { text: "✅ Игнорировать",  callback_data: `sup:ignore:${dedupKey}` },
+        ],
+        [{ text: "🔕 Тишина 30м", callback_data: `sup:ack:${dedupKey}` }],
+      ]);
     }
   } catch (err: any) {
     console.error(`[supervisor] checkStuckQueue error: ${err?.message}`);
@@ -542,7 +597,25 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
       return;
     }
 
-    // Delete previous status message so new one triggers a notification
+    const hasProblems = stuckTotal > 0 || dockerLines.some(l => l.startsWith("🔴"));
+
+    if (statusMessageId && !hasProblems) {
+      // Healthy — edit in-place (silent, no notification)
+      const edited = await tgPost("editMessageText", {
+        chat_id: SUPERVISOR_CHAT_ID,
+        message_id: statusMessageId,
+        text,
+        parse_mode: "HTML",
+      }).catch(() => null);
+      if (edited) {
+        console.log("[supervisor] status broadcast edited silently (healthy)");
+        return;
+      }
+      // Fall through to send fresh if edit failed (message may have been deleted)
+      statusMessageId = null;
+    }
+
+    // Problems detected or no existing message — delete old + send new (triggers notification)
     if (statusMessageId) {
       await tgPost("deleteMessage", {
         chat_id: SUPERVISOR_CHAT_ID,
@@ -551,7 +624,6 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
       statusMessageId = null;
     }
 
-    // Send new status message (always — edits are silent, users miss updates)
     const sendBody: Record<string, unknown> = {
       chat_id: SUPERVISOR_CHAT_ID,
       text,
@@ -561,7 +633,7 @@ async function sendStatusBroadcast(sql: postgres.Sql, runShell: RunShell): Promi
     const sendResult = await tgPost("sendMessage", sendBody);
     if (sendResult?.result?.message_id) {
       statusMessageId = sendResult.result.message_id;
-      console.log("[supervisor] status broadcast sent (msg_id:", statusMessageId, ")");
+      console.log("[supervisor] status broadcast sent (msg_id:", statusMessageId, hasProblems ? "— problems detected" : "— fresh start", ")");
     }
   } catch (err: any) {
     console.error(`[supervisor] sendStatusBroadcast error: ${err?.message}`);
@@ -669,7 +741,7 @@ export function startSupervisor(sql: postgres.Sql, runShell: RunShell): void {
   const sessionTimer = setInterval(() => {
     if (sessionCheckRunning) return;
     sessionCheckRunning = true;
-    checkHungSessions(sql).catch(() => {}).finally(() => { sessionCheckRunning = false; });
+    checkHungSessions(sql, runShell).catch(() => {}).finally(() => { sessionCheckRunning = false; });
   }, 60_000);
   sessionTimer.unref?.();
 
@@ -717,7 +789,7 @@ export function startSupervisor(sql: postgres.Sql, runShell: RunShell): void {
 
   // Run initial checks after a short delay (let admin-daemon settle first)
   setTimeout(() => {
-    checkHungSessions(sql).catch(() => {});
+    checkHungSessions(sql, runShell).catch(() => {});
     cleanVoiceStatuses(sql).catch(() => {});
     updateProcessHealth(sql).catch(() => {});
     // First status broadcast after 30s settle time

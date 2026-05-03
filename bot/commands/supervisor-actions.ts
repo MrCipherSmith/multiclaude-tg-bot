@@ -56,12 +56,40 @@ export async function handleSupervisorCallback(ctx: Context): Promise<void> {
     return;
   }
 
+  if (action === "ack") {
+    const key = parts.slice(2).join(":");
+    const durationMin = 30;
+    await sql`
+      INSERT INTO admin_commands (command, payload)
+      VALUES ('supervisor_ack', ${sql.json({ key, until_ms: Date.now() + durationMin * 60_000 })})
+    `.catch(() => {});
+    await ctx.answerCallbackQuery({ text: `🔕 Тишина на ${durationMin} мин` });
+    await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
+    return;
+  }
+
+  if (action === "bounce") {
+    await sql`
+      INSERT INTO admin_commands (command, payload)
+      VALUES ('bounce', ${sql.json({})})
+    `.catch(() => {});
+    await ctx.answerCallbackQuery({ text: "🚀 Bounce запущен" });
+    await ctx.editMessageReplyMarkup({
+      reply_markup: new InlineKeyboard().text("🚀 Bouncing...", "sup:noop"),
+    }).catch(() => {});
+    return;
+  }
+
   if (action === "noop") {
     await ctx.answerCallbackQuery();
     return;
   }
 
   await ctx.answerCallbackQuery({ text: "Неизвестное действие" });
+}
+
+export async function handleSupervisorCommand(ctx: Context): Promise<void> {
+  return handleSupervisorMessage(ctx);
 }
 
 export async function handleSupervisorMessage(ctx: Context): Promise<void> {
