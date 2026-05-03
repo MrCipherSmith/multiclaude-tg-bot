@@ -348,6 +348,60 @@ async function processCommand(row: { id: bigint; command: string; payload: any }
           await Bun.sleep(200);
           await runShell(`tmux send-keys -t "${target}" ':q!' Enter`);
           result = { ok: true, output: `Sent :q! to ${target}` };
+        } else if (action === "btw") {
+          // Send /btw side question to Claude Code — does not interrupt the main task.
+          // Uses Bun.spawn with args array (not runShell) to safely pass arbitrary question text.
+          const question = String(payload.question || "Что сейчас делаешь? Кратко опиши прогресс.");
+
+          const tmuxCapture = async (): Promise<string> => {
+            const p = Bun.spawn(["tmux", "capture-pane", "-t", target, "-p"], { stdout: "pipe", stderr: "pipe" });
+            const out = await new Response(p.stdout).text();
+            await p.exited;
+            return out;
+          };
+          const tmuxSend = async (...keys: string[]): Promise<void> => {
+            const p = Bun.spawn(["tmux", "send-keys", "-t", target, ...keys], { stdout: "pipe", stderr: "pipe" });
+            await p.exited;
+          };
+
+          // 1. Baseline — lines currently visible
+          const baseline = await tmuxCapture();
+          const baseSet = new Set(baseline.split("\n").map(l => l.trim()).filter(Boolean));
+
+          // 2. Open /btw overlay, then submit the question
+          await tmuxSend("/btw", "Enter");
+          await Bun.sleep(400);
+          await tmuxSend(question, "Enter");
+
+          // 3. Poll until response stabilises (same content for 2 consecutive 1.5s polls)
+          let response = "";
+          let prev = "";
+          let stableCount = 0;
+          const deadline = Date.now() + 25_000;
+
+          while (Date.now() < deadline) {
+            await Bun.sleep(1500);
+            const current = await tmuxCapture();
+            const newLines = current.split("\n")
+              .map(l => l.trim())
+              .filter(l => l && !baseSet.has(l))
+              .filter(l => !/^[─┌┐└┘│╭╮╰╯\s]+$/.test(l))
+              .filter(l => !/esc to dismiss|press esc|side question|by the way|\? for shortcuts/i.test(l));
+
+            const content = newLines.join("\n").trim();
+            if (content && content === prev) {
+              stableCount++;
+              if (stableCount >= 2) { response = content; break; }
+            } else {
+              prev = content;
+              stableCount = 0;
+            }
+          }
+
+          // 4. Dismiss the overlay
+          await tmuxSend("Escape");
+
+          result = { ok: true, output: response || "No response captured — overlay may not have appeared" };
         } else {
           result = { ok: false, output: `unknown action: ${action}` };
         }

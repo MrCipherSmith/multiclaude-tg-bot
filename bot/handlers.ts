@@ -70,6 +70,7 @@ import { handleAdd } from "./commands/add.ts";
 import { handleModel } from "./commands/model.ts";
 import { handleRemoteControl } from "./commands/remote-control.ts";
 import { handleInterrupt } from "./commands/interrupt.ts";
+import { handleBtw } from "./commands/btw.ts";
 import { handleMonitor } from "./commands/monitor.ts";
 import { handleProjects } from "./commands/projects.ts";
 import { handleProjectAdd } from "./commands/project-add.ts";
@@ -146,6 +147,7 @@ export function registerHandlers(b: Bot): void {
 
   // Remote control & project management
   b.command("interrupt", handleInterrupt);
+  b.command("btw", handleBtw);
   b.command("remote_control", handleRemoteControl);
   b.command("monitor", handleMonitor);
   b.command("projects", handleProjects);
