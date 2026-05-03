@@ -134,6 +134,19 @@ export const TOOL_DEFINITIONS = [
       required: ["chat_id", "message_id", "text"],
     },
   },
+  {
+    name: "send_photo",
+    description: "Send a photo to a Telegram chat. Pass a public image URL (http/https) — Telegram will download it directly. Or pass an absolute local file path (starting with /) for locally downloaded images.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        chat_id: { type: "string", description: "Telegram chat ID" },
+        url: { type: "string", description: "Public image URL (https://...) or absolute local file path (/tmp/image.jpg)" },
+        caption: { type: "string", description: "Optional caption text" },
+      },
+      required: ["chat_id", "url"],
+    },
+  },
   // Session tools
   {
     name: "list_sessions",
@@ -410,6 +423,23 @@ export async function executeTool(
         { parse_mode: args.parse_mode as any },
       );
       return text(`Edited message ${args.message_id}`);
+    }
+
+    case "send_photo": {
+      if (!bot) return text("Telegram bot not available");
+      const photoUrl = String(args.url);
+      const caption = args.caption ? String(args.caption) : undefined;
+      const chatId = Number(args.chat_id);
+      if (photoUrl.startsWith("/")) {
+        const { InputFile } = await import("grammy");
+        const file = Bun.file(photoUrl);
+        if (!(await file.exists())) return text(`File not found: ${photoUrl}`);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const msg = await bot.api.sendPhoto(chatId, new InputFile(bytes, photoUrl.split("/").pop()), { caption });
+        return text(`Photo sent (message_id=${msg.message_id})`);
+      }
+      const msg = await bot.api.sendPhoto(chatId, photoUrl, { caption });
+      return text(`Photo sent (message_id=${msg.message_id})`);
     }
 
     // Session tools

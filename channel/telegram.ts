@@ -132,6 +132,54 @@ export async function sendTelegramPoll(
   return { ok: true, messageId: result?.message_id ?? null, pollId: result?.poll?.id ?? null };
 }
 
+export async function sendTelegramPhoto(
+  token: string,
+  chatId: string,
+  photo: string, // public URL or absolute local file path
+  caption?: string,
+  extra?: Record<string, unknown>,
+): Promise<{ ok: boolean; messageId: number | null; errorBody?: string }> {
+  // Local file — upload via multipart form data
+  if (photo.startsWith("/")) {
+    const file = Bun.file(photo);
+    if (!(await file.exists())) return { ok: false, messageId: null, errorBody: `File not found: ${photo}` };
+    const bytes = await file.arrayBuffer();
+    const mime = file.type || "image/jpeg";
+    const form = new FormData();
+    form.append("chat_id", String(Number(chatId)));
+    form.append("photo", new Blob([bytes], { type: mime }), "photo");
+    if (caption) form.append("caption", caption);
+    if (extra?.message_thread_id) form.append("message_thread_id", String(extra.message_thread_id));
+    let res: Response;
+    try {
+      res = await fetch(`${TELEGRAM_API}/bot${token}/sendPhoto`, {
+        method: "POST",
+        body: form,
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (err) {
+      return { ok: false, messageId: null, errorBody: String(err) };
+    }
+    if (!res.ok) {
+      const errorBody = await res.text().catch(() => String(res.status));
+      return { ok: false, messageId: null, errorBody };
+    }
+    const data = (await res.json()) as { ok: boolean; result?: { message_id?: number } };
+    return { ok: true, messageId: data.result?.message_id ?? null };
+  }
+
+  // Remote URL — pass directly to Telegram
+  const res = await telegramRequest(token, "sendPhoto", {
+    chat_id: Number(chatId),
+    photo,
+    ...(caption ? { caption } : {}),
+    ...extra,
+  });
+  if (!res.ok) return { ok: false, messageId: null, errorBody: res.errorBody };
+  const result = res.result as { message_id?: number } | undefined;
+  return { ok: true, messageId: result?.message_id ?? null };
+}
+
 export async function setTelegramReaction(
   token: string,
   chatId: string,

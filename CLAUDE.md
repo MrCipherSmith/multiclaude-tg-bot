@@ -94,6 +94,16 @@ If that fails → do the review yourself using `git diff` + code-review skill.
 
 ---
 
+## Implementation Rules
+
+**NEVER write or modify code based on a discussion or question.** Exploratory messages ("хочу рассмотреть возможность", "можно ли сделать", "давай начнем с", "как бы ты это сделал") are discussions — respond with a plan or options, then **wait for explicit confirmation** before touching any files.
+
+Explicit go-ahead phrases: "реализуй", "сделай", "пиши", "внедри", "давай", "go ahead", "implement it", "do it".
+
+If unsure — ask: "Реализовать?" before proceeding.
+
+---
+
 ## Deployment Rules
 
 **NEVER restart Docker containers or run any of these without explicit user confirmation:**

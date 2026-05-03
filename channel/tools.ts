@@ -8,7 +8,7 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { markdownToTelegramHtml } from "../bot/format.ts";
 import type { StatusManager } from "./status.ts";
-import { sendTelegramMessage, setTelegramReaction, editTelegramMessage, sendTelegramPoll, deleteTelegramMessage } from "./telegram.ts";
+import { sendTelegramMessage, setTelegramReaction, editTelegramMessage, sendTelegramPoll, deleteTelegramMessage, sendTelegramPhoto } from "./telegram.ts";
 import { maybeAttachVoiceRaw, shouldSendVoice } from "../utils/tts.ts";
 import { channelLogger } from "../logger.ts";
 import { scanProjectKnowledge } from "../memory/project-scanner.ts";
@@ -177,6 +177,19 @@ export function registerTools(
             text: { type: "string", description: "New message text" },
           },
           required: ["chat_id", "message_id", "text"],
+        },
+      },
+      {
+        name: "send_photo",
+        description: "Send a photo to a Telegram chat. Pass a public image URL (http/https) — Telegram will download it directly. Or pass an absolute local file path (starting with /) for locally downloaded images.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            chat_id: { type: "string", description: "Telegram chat ID" },
+            url: { type: "string", description: "Public image URL (https://...) or absolute local file path (/tmp/image.jpg)" },
+            caption: { type: "string", description: "Optional caption text (supports markdown)" },
+          },
+          required: ["chat_id", "url"],
         },
       },
       {
@@ -371,6 +384,29 @@ export function registerTools(
         }
         touchIdleTimer();
         return text(`Sent to chat ${args!.chat_id}`);
+      }
+
+      case "send_photo": {
+        const token = ctx.token();
+        if (!token) return text("TELEGRAM_BOT_TOKEN not set");
+        const chatId = String(args!.chat_id);
+        const photoUrl = String(args!.url);
+        const caption = args!.caption ? String(args!.caption) : undefined;
+
+        const forumChatId = ctx.forumChatId?.();
+        let forumTopicId: number | null = null;
+        if (forumChatId && chatId === forumChatId) {
+          const rows = await ctx.sql`SELECT forum_topic_id FROM projects WHERE path = ${ctx.projectPath}`;
+          forumTopicId = rows[0]?.forum_topic_id ?? null;
+        }
+        const forumExtra = forumTopicId ? { message_thread_id: forumTopicId } : {};
+
+        const photoRes = await sendTelegramPhoto(token, chatId, photoUrl, caption, forumExtra);
+        if (!photoRes.ok) {
+          channelLogger.warn({ error: photoRes.errorBody }, "send_photo: Telegram API error");
+          return text(`send_photo failed: ${photoRes.errorBody}`);
+        }
+        return text(`Photo sent (message_id=${photoRes.messageId})`);
       }
 
       case "react": {
