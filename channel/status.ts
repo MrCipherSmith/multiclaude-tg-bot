@@ -139,9 +139,13 @@ export class StatusManager {
   }
 
   /**
-   * Arm a response guard for a chat. If Claude doesn't call `reply` within
-   * RESPONSE_GUARD_MS, sends a fallback "no response" message to the user.
-   * Automatically disarmed when deleteStatusMessage is called.
+   * Arm a response guard for a chat. Fires after RESPONSE_GUARD_MS of silence
+   * (no reply MCP call). On fire, checks actual tmux activity state and sends
+   * one of three messages instead of a generic fallback:
+   *
+   *  - active recently  → re-arm silently (Claude is working, just slow)
+   *  - long thinking    → soft note + re-arm (visible activity was seen but stopped)
+   *  - stuck / silent   → alert + delete status (no observable activity at all)
    */
   armResponseGuard(chatId: string): void {
     const key = this.stateKey(chatId);
@@ -153,18 +157,46 @@ export class StatusManager {
       const state = this.activeStatus.get(key);
       if (!state) return; // already responded
 
-      channelLogger.warn({ chatId }, "response guard: no reply from Claude, sending fallback");
-      await this.deleteStatusMessage(chatId);
-
       const token = this.ctx.token();
       if (!token) return;
       const forum = this.getForumTarget();
       const effectiveChatId = forum?.chatId ?? chatId;
       const extra = forum?.extra ?? {};
+
+      const silentMs = Date.now() - state.lastUpdateAt;
+      const silentStr = formatElapsed(silentMs);
+      const stageText = state.stage ?? "";
+      const looksActive = /[·●⏳🔄⎿]/.test(stageText) || /Brewing|Thinking|Running|agents?/i.test(stageText);
+
+      // Case 1: tmux was active very recently — Claude is alive, just working slowly.
+      // Re-arm silently so the guard keeps watching without alarming the user.
+      if (silentMs < 90_000) {
+        channelLogger.info({ chatId, silentMs }, "response guard: recent activity, re-arming silently");
+        this.armResponseGuard(chatId);
+        return;
+      }
+
+      // Case 2: last known tmux state looked active but went quiet.
+      // Claude is probably in a long thinking or tool phase — not stuck yet.
+      if (looksActive) {
+        channelLogger.warn({ chatId, silentMs, stage: stageText }, "response guard: long thinking, re-arming");
+        await sendTelegramMessage(
+          token,
+          effectiveChatId,
+          `⏳ Claude думает уже 5+ мин. Последняя активность: ${silentStr} назад.\n/session — статус сессии`,
+          extra,
+        );
+        this.armResponseGuard(chatId);
+        return;
+      }
+
+      // Case 3: no recent activity and no active-looking stage — likely stuck.
+      channelLogger.warn({ chatId, silentMs, stage: stageText }, "response guard: no activity, likely stuck");
+      await this.deleteStatusMessage(chatId);
       await sendTelegramMessage(
         token,
         effectiveChatId,
-        "⏳ Claude ещё не ответил (5+ мин) — возможно думает над задачей или сессия зависла.\n/session — статус сессии",
+        `🔴 Claude не отвечает и tmux молчит уже ${silentStr} — сессия возможно зависла.\n/session — статус сессии`,
         extra,
       );
     }, this.RESPONSE_GUARD_MS);
