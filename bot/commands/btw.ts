@@ -13,7 +13,7 @@ import { sql } from "../../memory/db.ts";
 import { sessionManager } from "../../sessions/manager.ts";
 import { getForumChatId } from "../forum-cache.ts";
 
-const QUESTION = "Что сейчас делаешь? Кратко опиши прогресс.";
+const DEFAULT_QUESTION = "Что сейчас делаешь? Кратко опиши прогресс.";
 const POLL_INTERVAL_MS = 2_000;
 const POLL_TIMEOUT_MS = 40_000;
 
@@ -45,9 +45,11 @@ export async function handleBtw(ctx: Context): Promise<void> {
     }
   }
 
+  const question = (ctx.match as string | undefined)?.trim() || DEFAULT_QUESTION;
+
   const [row] = await sql`
     INSERT INTO admin_commands (command, payload)
-    VALUES ('tmux_send_keys', ${sql.json({ project, action: "btw", question: QUESTION })})
+    VALUES ('tmux_send_keys', ${sql.json({ project, action: "btw", question })})
     RETURNING id
   `;
   const cmdId = row.id as bigint;
