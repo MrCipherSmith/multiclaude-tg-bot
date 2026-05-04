@@ -12,6 +12,7 @@ import { distillSkill, listAgentSkills, approveSkill, rejectSkill, validateSkill
 import { sendSkillApprovalMessage } from "../utils/skill-approval.ts";
 import { runCurator, getCuratorRuns } from "../utils/curator.ts";
 import { validateReplyGate } from "../orchestrator/gate.ts";
+import { enqueueCorrection } from "../orchestrator/store.ts";
 
 // Tool definitions for MCP registration
 export const TOOL_DEFINITIONS = [
@@ -412,7 +413,9 @@ export async function executeTool(
         return text("State Matrix validation failed after max correction attempts. Reply was not sent.");
       }
       if (replyGate.kind === "blocked") {
-        return text(replyGate.correction);
+        // C3: correction was already enqueued in gate.ts via message_queue — return neutral
+        // result so Claude doesn't misinterpret the correction prompt as the reply tool output
+        return text(`Reply blocked by State Matrix (attempt ${replyGate.attempt}/${replyGate.maxAttempts}). Correction queued.`);
       }
 
       const extra: Record<string, unknown> = { parse_mode: args.parse_mode as any };

@@ -1,6 +1,6 @@
 import type postgres from "postgres";
 import { buildCorrectionPrompt, loadStateMatrix, validateMatrixArtifact } from "./matrix.ts";
-import { getOrCreateRun, markRunStatus, recordValidationFailure } from "./store.ts";
+import { enqueueCorrection, getOrCreateRun, markRunStatus, recordValidationFailure } from "./store.ts";
 
 export type ReplyGateResult =
   | { kind: "allow"; mode: "disabled" | "valid" | "warn" }
@@ -46,7 +46,14 @@ export async function validateReplyGate(params: {
     matrix,
   });
 
+  // H3: DB unavailable (sessionId present but run is null) — fail open to avoid infinite block
+  if (run === null && params.sessionId !== null) {
+    return { kind: "allow", mode: "valid" };
+  }
+
   if (!validation.isValid && matrix.mode === "warn") {
+    // H4: log warn violations unconditionally regardless of DB availability
+    console.warn("[state-matrix] reply warn-mode violations:", JSON.stringify(validation.violations));
     await markRunStatus({ sql: params.sql, run, status: "valid", phase: "warn" });
     return { kind: "allow", mode: "warn" };
   }
@@ -60,21 +67,28 @@ export async function validateReplyGate(params: {
   const attempt = failedRun?.attempt ?? 1;
   const maxAttempts = failedRun?.maxAttempts ?? matrix.maxCorrectionAttempts;
 
-  if (attempt >= maxAttempts) {
+  // C2: use > not >= so maxCorrectionAttempts=N means N correction attempts before exhaustion
+  if (attempt > maxAttempts) {
     await markRunStatus({ sql: params.sql, run: failedRun, status: "failed", phase: "exhausted" });
     return { kind: "exhausted", attempt, maxAttempts };
   }
 
-  return {
-    kind: "blocked",
+  const correction = buildCorrectionPrompt({
+    validation,
     attempt,
     maxAttempts,
-    correction: buildCorrectionPrompt({
-      validation,
-      attempt,
-      maxAttempts,
-      artifactType: "reply",
-    }),
-  };
+    artifactType: "reply",
+  });
+
+  // C3: enqueue correction as a system message so Claude receives it in proper turn order
+  await enqueueCorrection({
+    sql: params.sql,
+    sessionId: params.sessionId,
+    chatId: params.chatId,
+    content: correction,
+    run: failedRun,
+  });
+
+  return { kind: "blocked", attempt, maxAttempts, correction };
 }
 

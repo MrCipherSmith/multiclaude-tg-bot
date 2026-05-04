@@ -168,8 +168,16 @@ function globToRegExp(pattern: string): RegExp {
     const ch = pattern[i];
     const next = pattern[i + 1];
     if (ch === "*" && next === "*") {
-      out += ".*";
+      // `**` matches any depth including zero — if preceded by `/`, make the slash optional
+      // so `src/**` matches both `src` (the directory itself) and `src/foo/bar`
+      if (out.endsWith("/")) {
+        out = out.slice(0, -1) + "(/.*)?";
+      } else {
+        out += ".*";
+      }
       i++;
+      // consume a trailing slash after `**` (e.g. `**/foo`)
+      if (pattern[i + 1] === "/") i++;
     } else if (ch === "*") {
       out += "[^/]*";
     } else if ("\\^$+?.()|{}[]".includes(ch)) {
@@ -185,7 +193,8 @@ function matchesPattern(value: string, patterns: string[]): string | null {
   const normalized = value.replace(/\\/g, "/");
   for (const pattern of patterns) {
     const p = pattern.replace(/\\/g, "/");
-    if (normalized === p || normalized.includes(p) || globToRegExp(p).test(normalized)) {
+    // exact equality or glob — no substring matching (prevents .env matching .envoy/config)
+    if (normalized === p || globToRegExp(p).test(normalized)) {
       return pattern;
     }
   }
@@ -197,7 +206,9 @@ function commandMatches(command: string, patterns: string[]): string | null {
   for (const pattern of patterns) {
     const p = pattern.trim().replace(/\s+/g, " ").toLowerCase();
     if (!p) continue;
-    if (normalized === p || normalized.includes(p)) return pattern;
+    // exact equality or prefix match with word boundary (space after pattern)
+    // prevents "rm" matching "prometheus" or "npm run"
+    if (normalized === p || normalized.startsWith(p + " ")) return pattern;
   }
   return null;
 }
@@ -310,7 +321,9 @@ function validateReply(artifact: Extract<MatrixArtifact, { type: "reply" }>, mat
   }
 
   if (matrix.replies.requireVerificationForCodeTasks) {
-    const claimsCodeWork = /\b(implemented|fixed|added|changed|updated|created|refactored)\b/i.test(text);
+    // Narrow set of unambiguous code-work verbs — avoids false positives for conversational
+    // phrases like "I added a note" or "the config was updated"
+    const claimsCodeWork = /\b(implemented|refactored|deployed)\b/i.test(text);
     const mentionsVerification = /\b(test|tests|verified|verification|lint|type-check|провер|тест)\b/i.test(text);
     if (claimsCodeWork && !mentionsVerification) {
       violations.push({

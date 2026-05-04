@@ -14,7 +14,7 @@ import { sendTelegramMessage, deleteTelegramMessage, editTelegramMessage } from 
 import { channelLogger } from "../logger.ts";
 import { escapeHtml } from "../utils/html.ts";
 import { buildCorrectionPrompt, loadStateMatrix, validateMatrixArtifact, type StateMatrix } from "../orchestrator/matrix.ts";
-import { getOrCreateRun, markRunStatus, recordValidationFailure } from "../orchestrator/store.ts";
+import { enqueueCorrection, getOrCreateRun, markRunStatus, recordValidationFailure } from "../orchestrator/store.ts";
 
 export interface PermissionContext {
   sql: postgres.Sql;
@@ -170,7 +170,8 @@ export class PermissionHandler {
         const maxAttempts = failedRun?.maxAttempts ?? matrix.maxCorrectionAttempts;
         await this.status.updateStatus(chatId, `State Matrix blocked action, correcting attempt ${attempt}/${maxAttempts}`);
 
-        if (attempt >= maxAttempts) {
+        // C2: use > not >= so maxCorrectionAttempts=N means N correction attempts before exhaustion
+        if (attempt > maxAttempts) {
           await markRunStatus({ sql: this.ctx.sql, run: failedRun, status: "failed", phase: "exhausted" });
           if (token) {
             await sendTelegramMessage(
@@ -187,17 +188,13 @@ export class PermissionHandler {
             maxAttempts,
             artifactType: "tool_request",
           });
-          await this.ctx.mcp.notification({
-            method: "notifications/claude/channel",
-            params: {
-              content: correction,
-              meta: {
-                chat_id: chatId,
-                user: "helyx-orchestrator",
-                message_id: failedRun ? `matrix:${failedRun.id}:${attempt}` : `matrix:${Date.now()}`,
-                ts: new Date().toISOString(),
-              },
-            },
+          // C1: enqueue via message_queue (reliable, ordered) — MCP notification is secondary
+          await enqueueCorrection({
+            sql: this.ctx.sql,
+            sessionId,
+            chatId,
+            content: correction,
+            run: failedRun,
           });
         }
 
