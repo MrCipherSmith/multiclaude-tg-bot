@@ -41,8 +41,9 @@ export class SkillEvaluator {
   private registry: RulesEntry[] | null = null;
 
   /** Load rules.json from goodai-base. Call once at startup. */
-  async load(homeDir: string): Promise<void> {
+  async load(homeDir: string, goodaiBasePath?: string): Promise<void> {
     const candidates = [
+      ...(goodaiBasePath ? [`${goodaiBasePath}/rules.json`] : []),
       `${homeDir}/goodai-base/rules.json`,
     ];
 

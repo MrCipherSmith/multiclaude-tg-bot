@@ -726,6 +726,52 @@ const migrations: Migration[] = [
       await tx`DROP TABLE IF EXISTS curator_pending_actions`;
     },
   },
+  {
+    version: 44,
+    name: "state matrix orchestration runs",
+    up: async (tx) => {
+      await tx`
+        CREATE TABLE IF NOT EXISTS orchestration_runs (
+          id BIGSERIAL PRIMARY KEY,
+          session_id BIGINT,
+          chat_id TEXT NOT NULL,
+          thread_id INTEGER,
+          project_path TEXT NOT NULL,
+          artifact_type TEXT NOT NULL,
+          matrix_hash TEXT NOT NULL,
+          status TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          attempt INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 5,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          completed_at TIMESTAMPTZ
+        )
+      `;
+      await tx`
+        CREATE INDEX IF NOT EXISTS orchestration_runs_active_idx
+        ON orchestration_runs (session_id, chat_id, project_path, artifact_type, updated_at DESC)
+        WHERE status IN ('validating', 'correcting', 'waiting_permission')
+      `;
+      await tx`
+        CREATE TABLE IF NOT EXISTS matrix_violations (
+          id BIGSERIAL PRIMARY KEY,
+          run_id BIGINT NOT NULL REFERENCES orchestration_runs(id) ON DELETE CASCADE,
+          attempt INTEGER NOT NULL,
+          code TEXT NOT NULL,
+          message TEXT NOT NULL,
+          severity TEXT NOT NULL,
+          rule TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+      `;
+      await tx`CREATE INDEX IF NOT EXISTS matrix_violations_run_idx ON matrix_violations (run_id, attempt)`;
+    },
+    down: async (tx) => {
+      await tx`DROP TABLE IF EXISTS matrix_violations`;
+      await tx`DROP TABLE IF EXISTS orchestration_runs`;
+    },
+  },
 ];
 
 // --- Public API ---

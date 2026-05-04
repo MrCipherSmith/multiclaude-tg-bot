@@ -29,6 +29,7 @@ const ChannelEnvSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   CHANNEL_SOURCE: z.enum(["remote", "local"]).optional(),
   IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(900_000),
+  GOODAI_BASE_PATH: z.string().optional(),
   HOME: z.string().default("/root"),
 });
 
@@ -148,7 +149,7 @@ registerTools(
 // --- Skill Evaluator ---
 const skillEval = new SkillEvaluator();
 // Load asynchronously — if registry not found, hints are simply skipped
-skillEval.load(ENV.HOME).catch(() => {});
+skillEval.load(ENV.HOME, ENV.GOODAI_BASE_PATH).catch(() => {});
 
 // --- Poller ---
 const poller = new MessageQueuePoller(

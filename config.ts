@@ -95,6 +95,7 @@ const EnvSchema = z.object({
   HOST_PROJECTS_DIR: z.string().optional(),
   KNOWLEDGE_BASE: z.string().optional(),
   KNOWLEDGE_BASE_PATH: z.string().optional(),
+  GOODAI_BASE_PATH: z.string().optional(),
 
   // Access control (for security-defaults PRD)
   ALLOW_ALL_USERS: z
@@ -204,6 +205,7 @@ export const CONFIG = {
   HOST_PROJECTS_DIR: env.HOST_PROJECTS_DIR,
   KNOWLEDGE_BASE: env.KNOWLEDGE_BASE,
   KNOWLEDGE_BASE_PATH: env.KNOWLEDGE_BASE_PATH,
+  GOODAI_BASE_PATH: env.GOODAI_BASE_PATH,
 
   // GitHub
   GITHUB_TOKEN: env.GITHUB_TOKEN,

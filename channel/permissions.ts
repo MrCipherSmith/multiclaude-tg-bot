@@ -13,6 +13,8 @@ import type { StatusManager } from "./status.ts";
 import { sendTelegramMessage, deleteTelegramMessage, editTelegramMessage } from "./telegram.ts";
 import { channelLogger } from "../logger.ts";
 import { escapeHtml } from "../utils/html.ts";
+import { buildCorrectionPrompt, loadStateMatrix, validateMatrixArtifact, type StateMatrix } from "../orchestrator/matrix.ts";
+import { enqueueCorrection, getOrCreateRun, markRunStatus, recordValidationFailure } from "../orchestrator/store.ts";
 
 export interface PermissionContext {
   sql: postgres.Sql;
@@ -80,16 +82,8 @@ export class PermissionHandler {
 
   async handle(params: any): Promise<void> {
     const { request_id, tool_name, description } = params;
+    const toolName = String(tool_name ?? "unknown");
     const input = this.parseInput(params);
-
-    if (this.isAutoApproved(tool_name)) {
-      channelLogger.info({ tool: tool_name }, "auto-approved");
-      await this.ctx.mcp.notification({
-        method: "notifications/claude/channel/permission",
-        params: { request_id, behavior: "allow" },
-      });
-      return;
-    }
 
     // Dedup: if this request is already being handled (Claude Code may retry), skip sending new messages.
     const dupCheck = await this.ctx.sql`
@@ -104,7 +98,6 @@ export class PermissionHandler {
     if (!sessionId) return;
 
     const token = this.ctx.token();
-    if (!token) return;
 
     // Resolve where to send the permission request
     const forum = this.getForumTarget();
@@ -126,19 +119,112 @@ export class PermissionHandler {
 
     const forumExtra: Record<string, unknown> = forum?.extra ?? {};
 
-    const { desc, descMain, descDiff } = this.buildDetail(tool_name, input, description);
-    const previewContent = this.buildPreview(tool_name, input, params.input_preview ?? params.input ?? "");
+    let matrix: StateMatrix | null = null;
+    try {
+      matrix = await loadStateMatrix(this.ctx.projectPath);
+    } catch (err) {
+      channelLogger.warn({ err, projectPath: this.ctx.projectPath }, "state matrix load failed");
+      await this.status.updateStatus(chatId, "State Matrix configuration error");
+      if (token) {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          "⚠️ State Matrix configuration is invalid. Fix <code>.matrix.json</code> before this action can continue.",
+          { parse_mode: "HTML", ...forumExtra },
+        );
+      }
+      await this.ctx.mcp.notification({
+        method: "notifications/claude/channel/permission",
+        params: { request_id, behavior: "deny" },
+      });
+      return;
+    }
+    let requiresMatrixConfirmation = false;
 
-    const shortDesc = tool_name === "Bash" ? `Running: ${String(input?.command ?? "").slice(0, 60)}`
-      : tool_name === "Read" ? `Reading: ${String(input?.file_path ?? "").split("/").pop()}`
-      : tool_name === "Edit" || tool_name === "Write" ? `Editing: ${String(input?.file_path ?? "").split("/").pop()}`
-      : tool_name === "Grep" ? `Searching: ${String(input?.pattern ?? "").slice(0, 40)}`
-      : `${tool_name}`;
+    if (matrix && matrix.mode !== "disabled") {
+      const validation = validateMatrixArtifact({
+        type: "tool_request",
+        tool: toolName,
+        input,
+        sessionId,
+        chatId,
+        projectPath: this.ctx.projectPath,
+      }, matrix);
+      requiresMatrixConfirmation = validation.requiresConfirmation;
+
+      const run = await getOrCreateRun({
+        sql: this.ctx.sql,
+        sessionId,
+        chatId,
+        projectPath: this.ctx.projectPath,
+        artifactType: "tool_request",
+        matrix,
+      });
+
+      if (!validation.isValid && matrix.mode === "warn") {
+        channelLogger.warn({ tool: toolName, violations: validation.violations, matrix: matrix.path }, "state matrix permission warning");
+        await markRunStatus({ sql: this.ctx.sql, run, status: "valid", phase: "warn" });
+      } else if (!validation.isValid) {
+        const failedRun = await recordValidationFailure({ sql: this.ctx.sql, run, validation });
+        const attempt = failedRun?.attempt ?? 1;
+        const maxAttempts = failedRun?.maxAttempts ?? matrix.maxCorrectionAttempts;
+        await this.status.updateStatus(chatId, `State Matrix blocked action, correcting attempt ${attempt}/${maxAttempts}`);
+
+        if (attempt >= maxAttempts) {
+          await markRunStatus({ sql: this.ctx.sql, run: failedRun, status: "failed", phase: "exhausted" });
+          if (token) {
+            await sendTelegramMessage(
+              token,
+              chatId,
+              "⚠️ State Matrix заблокировала действие после нескольких попыток. Нужна корректировка задачи или матрицы.",
+              { parse_mode: "HTML", ...forumExtra },
+            );
+          }
+        } else {
+          const correction = buildCorrectionPrompt({
+            validation,
+            attempt,
+            maxAttempts,
+            artifactType: "tool_request",
+          });
+          await enqueueCorrection({ sql: this.ctx.sql, sessionId, chatId, content: correction, run: failedRun });
+        }
+
+        await this.ctx.mcp.notification({
+          method: "notifications/claude/channel/permission",
+          params: { request_id, behavior: "deny" },
+        });
+        return;
+      } else {
+        const phase = validation.requiresConfirmation ? "waiting_permission" : "permission_valid";
+        await markRunStatus({ sql: this.ctx.sql, run, status: validation.requiresConfirmation ? "waiting_permission" : "valid", phase });
+      }
+    }
+
+    if (this.isAutoApproved(toolName) && !requiresMatrixConfirmation) {
+      channelLogger.info({ tool: toolName }, "auto-approved");
+      await this.ctx.mcp.notification({
+        method: "notifications/claude/channel/permission",
+        params: { request_id, behavior: "allow" },
+      });
+      return;
+    }
+
+    if (!token) return;
+
+    const { desc, descMain, descDiff } = this.buildDetail(toolName, input, description);
+    const previewContent = this.buildPreview(toolName, input, params.input_preview ?? params.input ?? "");
+
+    const shortDesc = toolName === "Bash" ? `Running: ${String(input?.command ?? "").slice(0, 60)}`
+      : toolName === "Read" ? `Reading: ${String(input?.file_path ?? "").split("/").pop()}`
+      : toolName === "Edit" || toolName === "Write" ? `Editing: ${String(input?.file_path ?? "").split("/").pop()}`
+      : toolName === "Grep" ? `Searching: ${String(input?.pattern ?? "").slice(0, 40)}`
+      : `${toolName}`;
     await this.status.updateStatus(chatId, shortDesc);
 
     let previewMsgId: number | null = null;
     if (previewContent) {
-      const lang = tool_name === "Edit" ? "diff" : "";
+      const lang = toolName === "Edit" ? "diff" : "";
       const filePath = String(input?.file_path ?? input?.command ?? "").split("/").slice(-2).join("/");
       const header = filePath ? `${filePath}:\n` : "";
       const result = await sendTelegramMessage(token, chatId,
@@ -178,7 +264,7 @@ export class PermissionHandler {
     if (sendResult.messageId) {
       await this.ctx.sql`
         INSERT INTO permission_requests (id, session_id, chat_id, tool_name, description, message_id)
-        VALUES (${request_id}, ${sessionId}, ${chatId}, ${tool_name ?? "unknown"}, ${desc}, ${sendResult.messageId})
+        VALUES (${request_id}, ${sessionId}, ${chatId}, ${toolName}, ${desc}, ${sendResult.messageId})
         ON CONFLICT (id) DO NOTHING
       `;
     }
@@ -293,6 +379,18 @@ export class PermissionHandler {
         channelLogger.info({ requestId: request_id, behavior }, "permission resolved via telegram");
         if (previewMsgId) deleteTelegramMessage(token, chatId, previewMsgId);
         await this.status.updateStatus(chatId, "Processing...");
+        const sessionId = this.ctx.sessionId();
+        if (sessionId) {
+          this.ctx.sql`
+            UPDATE orchestration_runs
+            SET status = 'valid', phase = 'permission_resolved', completed_at = now(), updated_at = now()
+            WHERE session_id = ${sessionId}
+              AND chat_id = ${chatId}
+              AND project_path = ${this.ctx.projectPath}
+              AND artifact_type = 'tool_request'
+              AND status = 'waiting_permission'
+          `.catch(() => {});
+        }
         this.loadAutoApproveRules().catch(() => {});
         resolved = true;
         break;
@@ -332,6 +430,18 @@ export class PermissionHandler {
       if (previewMsgId) deleteTelegramMessage(token, chatId, previewMsgId);
       if (telegramMsgId) {
         await editTelegramMessage(token, chatId, telegramMsgId, `⏰ Timeout\n\n${escapeHtml(desc)}`, { parse_mode: "HTML" });
+      }
+      const sessionId = this.ctx.sessionId();
+      if (sessionId) {
+        this.ctx.sql`
+          UPDATE orchestration_runs
+          SET status = 'failed', phase = 'permission_timeout', completed_at = now(), updated_at = now()
+          WHERE session_id = ${sessionId}
+            AND chat_id = ${chatId}
+            AND project_path = ${this.ctx.projectPath}
+            AND artifact_type = 'tool_request'
+            AND status = 'waiting_permission'
+        `.catch(() => {});
       }
     }
 
